@@ -249,6 +249,18 @@ Model versions are **never hardcoded** — they change weekly. Set them via `cla
 - **Pydantic v2** — data contracts and config validation
 - **Agent SDKs** — anthropic, openai, google-genai, xai (OpenAI-compatible)
 
+## Origin
+
+CLAW wasn't built from scratch. It was built from proof.
+
+The core subsystems — the verification gate, the memory stores, the health monitors, the circuit breakers, the error KB, the embedding engine, the security policy, the complexity scorer, the prompt evolver — were harvested from **ralfed** ("The Associate"), a production autonomous SWE agent orchestrator with 72 source files, 1,176 tests, and 94% coverage. Ralfed ran real engagements: phi-vault achieved 100% first-attempt success across 627 tests at 99% coverage, fully autonomously.
+
+42 battle-tested components were transferred and adapted: sync to async, PostgreSQL to SQLite, single-agent to multi-agent. 19 new files were written for what ralfed never had — multi-model fleet orchestration, Bayesian routing across 4 agents, prompt evolution with A/B testing, cross-project semantic memory, and the NanoClaw recursive architecture where the same 6-step cycle operates at four nested scales.
+
+The NanoClaw architecture concept — fractal cycles from fleet level down to self-improvement — came from the `clawpre.md` blueprint authored by Wayne with Claude Opus 4.6 as technical scribe. The implementation sprint turned that blueprint into 17,935 lines of working Python.
+
+CLAW stands on the shoulders of a system that already worked. Then it added the parts that make multiple agents work together.
+
 ## Project
 
 58 source files. 17,935 lines. 1,123 tests. 18 evaluation prompts. 7 memory systems. 4 agent integrations. 30+ database tables. One `pip install`.
