@@ -1,0 +1,115 @@
+[database]
+db_path = "data/claw.db"
+
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+timeout = 120
+max_retries = 3
+backoff_base = 2.0
+backoff_cap = 60.0
+model_failure_threshold = 2
+model_cooldown_seconds = 90
+
+[embeddings]
+model = "all-MiniLM-L6-v2"
+dimension = 384
+
+[memory]
+mmr_enabled = true
+mmr_lambda = 0.7
+vector_weight = 0.6
+text_weight = 0.4
+
+[orchestrator]
+max_retries = 5
+council_trigger = 2
+max_council = 3
+max_tokens_per_task = 100000
+exploration_rate = 0.10
+loop_guard_max_repeats = 2
+
+[sentinel]
+llm_deep_check = true
+drift_threshold = 0.15
+quality_score_threshold = 0.60
+
+[security]
+autonomy_level = "SUPERVISED"
+rate_limit_per_hour = 200
+allowed_commands = [
+    "git", "pytest", "python3", "pip", "npm", "npx",
+    "cargo", "rustc", "go", "make", "ls", "find", "grep",
+    "cat", "head", "tail", "wc", "diff", "ruff", "mypy",
+]
+forbidden_paths = [
+    "/etc", "/root", "/var", "/tmp",
+    "/System", "/Library", "/Applications",
+    "/usr/bin", "/usr/sbin",
+]
+safe_env_vars = [
+    "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL",
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+    "GOOGLE_API_KEY", "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+]
+
+[token_tracking]
+enabled = true
+jsonl_path = "data/token_costs.jsonl"
+cost_per_1k_input = 0.003
+cost_per_1k_output = 0.015
+
+[routing]
+exploration_rate = 0.10
+score_decay_factor = 0.95
+min_samples_for_routing = 5
+
+[routing.static_priors]
+analysis = "claude"
+documentation = "claude"
+refactoring = "codex"
+bulk_tests = "codex"
+dependency_analysis = "gemini"
+full_repo_comprehension = "gemini"
+quick_fixes = "grok"
+web_lookup = "grok"
+
+[evolution]
+ab_test_sample_size = 20
+mutation_rate = 0.1
+promotion_threshold = 0.6
+
+[fleet]
+max_concurrent_repos = 4
+enhancement_branch_prefix = "claw/enhancement"
+max_cost_per_repo_usd = 5.0
+max_cost_per_day_usd = 50.0
+
+[agents.claude]
+enabled = true
+mode = "cli"
+api_key_env = "ANTHROPIC_API_KEY"
+max_concurrent = 2
+timeout = 600
+max_budget_usd = 5.0
+
+[agents.codex]
+enabled = false
+mode = "cli"
+api_key_env = "OPENAI_API_KEY"
+max_concurrent = 4
+timeout = 300
+
+[agents.gemini]
+enabled = false
+mode = "api"
+api_key_env = "GOOGLE_API_KEY"
+max_concurrent = 2
+timeout = 600
+
+[agents.grok]
+enabled = false
+mode = "api"
+api_key_env = "XAI_API_KEY"
+max_concurrent = 2
+timeout = 300

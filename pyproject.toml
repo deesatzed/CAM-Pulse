@@ -1,0 +1,62 @@
+[project]
+name = "claw"
+version = "0.1.0"
+description = "Codebase Learning & Autonomous Workforce — multi-model autonomous codebase enhancement"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+dependencies = [
+    "aiosqlite>=0.19.0",
+    "sqlite-vec>=0.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.25.0",
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "anthropic>=0.40.0",
+    "openai>=1.0.0",
+    "google-genai>=1.0.0",
+    "gitpython>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "toml>=0.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+]
+xai = [
+    "xai-sdk>=1.0.0",
+]
+mcp = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+claw = "claw.cli:app_main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"claw" = "src/claw"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["claw*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
