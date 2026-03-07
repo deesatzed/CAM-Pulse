@@ -40,6 +40,10 @@ class ClawContext:
     budget_enforcer: Any = None
     degradation_manager: Any = None
     health_monitor: Any = None
+    error_kb: Any = None
+    semantic_memory: Any = None
+    prompt_evolver: Any = None
+    pattern_learner: Any = None
 
     async def close(self) -> None:
         """Cleanly shut down all components."""
@@ -150,6 +154,38 @@ class ClawFactory:
             all_agent_ids=list(agents.keys()) if agents else None,
         )
 
+        # Error KB
+        from claw.memory.error_kb import ErrorKB
+        error_kb = ErrorKB(repository=repository)
+
+        # Semantic Memory
+        from claw.memory.semantic import SemanticMemory
+        from claw.memory.hybrid_search import HybridSearch
+        hybrid_search = HybridSearch(
+            repository=repository,
+            embedding_engine=embeddings,
+        )
+        semantic_memory = SemanticMemory(
+            repository=repository,
+            embedding_engine=embeddings,
+            hybrid_search=hybrid_search,
+        )
+
+        # Prompt Evolver
+        from claw.evolution.prompt_evolver import PromptEvolver
+        prompt_evolver = PromptEvolver(
+            repository=repository,
+            semantic_memory=semantic_memory,
+            error_kb=error_kb,
+        )
+
+        # Pattern Learner
+        from claw.evolution.pattern_learner import PatternLearner
+        pattern_learner = PatternLearner(
+            repository=repository,
+            semantic_memory=semantic_memory,
+        )
+
         ctx = ClawContext(
             config=config,
             engine=engine,
@@ -164,11 +200,15 @@ class ClawFactory:
             budget_enforcer=budget_enforcer,
             degradation_manager=degradation_manager,
             health_monitor=health_monitor,
+            error_kb=error_kb,
+            semantic_memory=semantic_memory,
+            prompt_evolver=prompt_evolver,
+            pattern_learner=pattern_learner,
         )
 
         agent_names = list(agents.keys()) if agents else ["none"]
         logger.info(
-            "ClawContext created: db=%s, agents=[%s]",
+            "ClawContext created: db=%s, agents=[%s], evolution=[error_kb, semantic_memory, prompt_evolver, pattern_learner]",
             config.database.db_path,
             ", ".join(agent_names),
         )

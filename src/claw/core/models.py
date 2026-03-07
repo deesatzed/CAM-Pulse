@@ -296,6 +296,7 @@ class TaskContext(BaseModel):
     """Enriched task context for the pipeline."""
     task: Task
     forbidden_approaches: list[str] = Field(default_factory=list)
+    hints: list[str] = Field(default_factory=list)
     checkpoint_ref: Optional[str] = None
     previous_escalation_diagnosis: Optional[str] = None
 
