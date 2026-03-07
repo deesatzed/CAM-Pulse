@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS methodologies (
     generation INTEGER NOT NULL DEFAULT 0,
     fitness_vector TEXT NOT NULL DEFAULT '{}',      -- JSON string
     parent_ids TEXT NOT NULL DEFAULT '[]',          -- JSON array string
-    superseded_by TEXT
+    superseded_by TEXT,
+    prism_data TEXT                                  -- JSON: PrismEmbedding (nullable)
 );
 CREATE INDEX IF NOT EXISTS idx_meth_scope ON methodologies(scope);
 CREATE INDEX IF NOT EXISTS idx_meth_lifecycle ON methodologies(lifecycle_state);

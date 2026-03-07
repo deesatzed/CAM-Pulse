@@ -35,6 +35,7 @@ class ClawContext:
     token_tracker: TokenTracker
     security: SecurityPolicy
     agents: dict[str, AgentInterface] = field(default_factory=dict)
+    prism_engine: Any = None
     dispatcher: Any = None
     verifier: Any = None
     budget_enforcer: Any = None
@@ -73,10 +74,15 @@ class ClawFactory:
         engine = DatabaseEngine(config.database)
         await engine.connect()
         await engine.initialize_schema()
+        await engine.apply_migrations()
         repository = Repository(engine)
 
         # Embeddings
         embeddings = EmbeddingEngine(config.embeddings)
+
+        # PRISM multi-scale embeddings
+        from claw.embeddings.prism import PrismEngine
+        prism_engine = PrismEngine(embedding_engine=embeddings)
 
         # LLM client
         llm_client = LLMClient(config.llm)
@@ -165,11 +171,13 @@ class ClawFactory:
         hybrid_search = HybridSearch(
             repository=repository,
             embedding_engine=embeddings,
+            prism_engine=prism_engine,
         )
         semantic_memory = SemanticMemory(
             repository=repository,
             embedding_engine=embeddings,
             hybrid_search=hybrid_search,
+            prism_engine=prism_engine,
         )
 
         # Prompt Evolver
@@ -205,6 +213,7 @@ class ClawFactory:
             token_tracker=token_tracker,
             security=security,
             agents=agents,
+            prism_engine=prism_engine,
             dispatcher=dispatcher,
             verifier=verifier,
             budget_enforcer=budget_enforcer,

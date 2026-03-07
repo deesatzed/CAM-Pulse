@@ -1829,6 +1829,170 @@ def setup(
     console.print(f"  claw fleet-enhance <dir> — process a fleet of repos")
 
 
+@app.command(name="prism-demo")
+def prism_demo(
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show detailed diagnostics"),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to claw.toml"),
+):
+    """Demonstrate PRISM multi-scale embeddings with non-base-10 math."""
+    _setup_logging(verbose)
+    asyncio.run(_prism_demo_async(verbose))
+
+
+async def _prism_demo_async(verbose: bool) -> None:
+    """Run the PRISM demonstration."""
+    import numpy as np
+    from rich.panel import Panel
+    from claw.embeddings.prism import PrismEngine, PrismEmbedding
+    import hashlib
+
+    console.print(Panel.fit(
+        "[bold cyan]PRISM[/bold cyan] — P-adic Residue Informed Stochastic Multi-scale Embeddings\n"
+        "[dim]Non-base-10 embedding methodology for hierarchical, fault-tolerant, uncertainty-aware similarity[/dim]",
+        border_style="cyan",
+    ))
+
+    # Use deterministic embedding engine (SHA-384 hash → 384-dim)
+    class DemoEmbeddingEngine:
+        DIMENSION = 384
+        def encode(self, text: str) -> list[float]:
+            h = hashlib.sha384(text.encode()).digest()
+            raw = [b / 255.0 for b in h] * 8
+            return raw[:self.DIMENSION]
+
+    embedding_engine = DemoEmbeddingEngine()
+    engine = PrismEngine(embedding_engine=embedding_engine)
+
+    # Sample methodology descriptions with lifecycle states
+    samples = [
+        ("Refactoring database queries for performance", "thriving"),
+        ("Optimizing SQL query execution plans", "thriving"),
+        ("Adding JWT authentication to REST API", "viable"),
+        ("Implementing OAuth2 flow for user login", "viable"),
+        ("Experimental neural code search prototype", "embryonic"),
+        ("Legacy XML parser migration to JSON", "declining"),
+        ("Deprecated SOAP endpoint removal", "dormant"),
+    ]
+
+    # 1. Encode all samples with PRISM
+    console.print("\n[bold]1. Encoding samples with PRISM[/bold]")
+    embeddings = []
+    for text, lifecycle in samples:
+        emb = engine.encode_and_enhance(text, {"lifecycle_state": lifecycle})
+        embeddings.append((text, lifecycle, emb))
+        if verbose:
+            console.print(f"  [dim]{lifecycle:10s}[/dim] κ={emb.vmf_kappa:5.1f}  tree={emb.padic_tree}  {text[:50]}")
+
+    # 2. Pairwise comparison table
+    console.print("\n[bold]2. PRISM vs Cosine Similarity Matrix[/bold]")
+    table = Table(title="Pairwise Similarity (PRISM combined / cosine)")
+    table.add_column("", style="dim", width=6)
+    for i in range(len(samples)):
+        table.add_column(f"S{i}", justify="center", width=12)
+
+    for i, (text_i, _, emb_i) in enumerate(embeddings):
+        row = [f"S{i}"]
+        for j, (text_j, _, emb_j) in enumerate(embeddings):
+            if i == j:
+                row.append("[bold]1.00/1.00[/bold]")
+            else:
+                score = engine.similarity(emb_i, emb_j)
+                cos = score.cosine
+                prism = score.combined
+                # Highlight divergence
+                diff = abs(prism - max(0, cos))
+                style = "green" if diff > 0.1 else ""
+                row.append(f"[{style}]{prism:.2f}/{cos:.2f}[/{style}]" if style else f"{prism:.2f}/{cos:.2f}")
+        table.add_row(*row)
+
+    console.print(table)
+    console.print("[dim]Format: PRISM/cosine. [green]Green[/green] = divergence > 0.1[/dim]")
+
+    # Legend
+    legend = Table(title="Sample Legend", show_header=False)
+    legend.add_column("ID", width=4)
+    legend.add_column("Lifecycle", width=12)
+    legend.add_column("Description")
+    for i, (text, lifecycle, _) in enumerate(embeddings):
+        legend.add_row(f"S{i}", lifecycle, text)
+    console.print(legend)
+
+    # 3. Hierarchy demonstration
+    console.print("\n[bold]3. Hierarchical Similarity (P-adic)[/bold]")
+    # Same-domain pair vs cross-domain pair
+    score_same = engine.similarity(embeddings[0][2], embeddings[1][2])
+    score_cross = engine.similarity(embeddings[0][2], embeddings[2][2])
+    console.print(f"  Same domain (DB query + SQL optimization):  p-adic={score_same.padic:.3f}  cosine={score_same.cosine:.3f}")
+    console.print(f"  Cross domain (DB query + JWT auth):         p-adic={score_cross.padic:.3f}  cosine={score_cross.cosine:.3f}")
+
+    # 4. Fault detection demonstration
+    console.print("\n[bold]4. Fault Detection (RNS Channel Voting)[/bold]")
+    clean_emb = embeddings[0][2]
+    # Create corrupted version
+    corrupted_channels = [ch[:] for ch in clean_emb.rns_channels]
+    # Corrupt channel 2: shift all values
+    corrupted_channels[2] = [(v + 5) % engine.PRIMES[2] for v in corrupted_channels[2]]
+    corrupted = PrismEmbedding(
+        base_vector=clean_emb.base_vector,
+        padic_tree=clean_emb.padic_tree,
+        rns_channels=corrupted_channels,
+        vmf_kappa=clean_emb.vmf_kappa,
+    )
+    score_clean = engine.similarity(clean_emb, clean_emb)
+    score_corrupt = engine.similarity(clean_emb, corrupted)
+    console.print(f"  Clean vs clean:     agreement={score_clean.channel_agreement:.3f}  drift={score_clean.drift_detected}")
+    console.print(f"  Clean vs corrupted: agreement={score_corrupt.channel_agreement:.3f}  drift={score_corrupt.drift_detected}")
+
+    # 5. Uncertainty demonstration (vMF)
+    console.print("\n[bold]5. Uncertainty Weighting (von Mises-Fisher)[/bold]")
+    # Same text, different lifecycle states
+    text = "Implementing caching layer for API responses"
+    emb_thriving = engine.encode_and_enhance(text, {"lifecycle_state": "thriving"})
+    emb_embryonic = engine.encode_and_enhance(text, {"lifecycle_state": "embryonic"})
+    emb_viable = engine.encode_and_enhance(text, {"lifecycle_state": "viable"})
+
+    score_tt = engine.similarity(emb_thriving, emb_thriving)
+    score_te = engine.similarity(emb_thriving, emb_embryonic)
+    score_tv = engine.similarity(emb_thriving, emb_viable)
+
+    console.print(f"  thriving↔thriving (κ=20↔20):   vMF overlap={score_tt.vmf_overlap:.3f}  combined={score_tt.combined:.3f}")
+    console.print(f"  thriving↔viable   (κ=20↔5):    vMF overlap={score_tv.vmf_overlap:.3f}  combined={score_tv.combined:.3f}")
+    console.print(f"  thriving↔embryonic (κ=20↔2):   vMF overlap={score_te.vmf_overlap:.3f}  combined={score_te.combined:.3f}")
+
+    # 6. Diagnostic breakdown
+    if verbose:
+        console.print("\n[bold]6. Detailed Diagnostic (S0 vs S1)[/bold]")
+        diag = engine.diagnose(embeddings[0][2], embeddings[1][2])
+        diag_table = Table(title="Diagnostic Breakdown")
+        diag_table.add_column("Component", width=16)
+        diag_table.add_column("Raw", justify="right", width=8)
+        diag_table.add_column("Weighted", justify="right", width=8)
+        diag_table.add_column("Detail")
+
+        diag_table.add_row(
+            "Cosine", str(diag["cosine_detail"]["raw"]), str(diag["cosine_detail"]["weighted"]),
+            ""
+        )
+        diag_table.add_row(
+            "P-adic", str(diag["padic_detail"]["raw"]), str(diag["padic_detail"]["weighted"]),
+            f"shared_depth={diag['padic_detail']['shared_depth']}"
+        )
+        diag_table.add_row(
+            "RNS", str(diag["rns_detail"]["consensus"]), "",
+            f"channels={diag['rns_detail']['channel_sims']} agreement={diag['rns_detail']['agreement']}"
+        )
+        diag_table.add_row(
+            "vMF", str(diag["vmf_detail"]["overlap"]), str(diag["vmf_detail"]["weighted"]),
+            f"κ_a={diag['vmf_detail']['kappa_a']} κ_b={diag['vmf_detail']['kappa_b']}"
+        )
+        console.print(diag_table)
+        console.print(f"  Dominant: [bold]{diag['dominant_component']}[/bold]")
+        console.print(f"  Interpretation: {diag['interpretation']}")
+
+    console.print(f"\n[bold green]PRISM demonstration complete.[/bold green]")
+    console.print("[dim]PRISM adds hierarchical (p-adic), fault-tolerant (RNS), and uncertainty-aware (vMF) signals to standard cosine similarity.[/dim]")
+
+
 def app_main() -> None:
     """Entry point for the installed CLI."""
     app()

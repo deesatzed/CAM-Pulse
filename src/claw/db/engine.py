@@ -93,6 +93,23 @@ class DatabaseEngine:
         except Exception as e:
             raise SchemaInitError(f"Failed to initialize schema: {e}") from e
 
+    async def apply_migrations(self) -> None:
+        """Apply incremental schema migrations idempotently.
+
+        Each migration checks whether the target change already exists before
+        applying it, so this method is safe to call on every startup.
+        """
+        # Migration 1: add prism_data column to methodologies
+        row = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM pragma_table_info('methodologies') WHERE name = 'prism_data'"
+        )
+        if row and row["cnt"] == 0:
+            await self.conn.execute(
+                "ALTER TABLE methodologies ADD COLUMN prism_data TEXT"
+            )
+            await self.conn.commit()
+            logger.info("Migration applied: methodologies.prism_data column added")
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:

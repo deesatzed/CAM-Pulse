@@ -77,6 +77,7 @@ class HybridSearch:
         max_conflict_score: float = 0.85,
         mmr_enabled: bool = True,
         mmr_lambda: float = 0.7,
+        prism_engine: Any = None,
     ):
         self.repository = repository
         self.embedding_engine = embedding_engine
@@ -86,6 +87,7 @@ class HybridSearch:
         self.max_conflict_score = max_conflict_score
         self._mmr_enabled = mmr_enabled
         self._mmr_lambda = mmr_lambda
+        self.prism_engine = prism_engine
 
     async def search(
         self,
@@ -119,7 +121,7 @@ class HybridSearch:
         text_results = await self._text_search(query, fetch_limit)
 
         # 3. Merge and deduplicate (sync -- operates on in-memory data)
-        merged = self._merge_results(vector_results, text_results)
+        merged = self._merge_results(vector_results, text_results, query=query)
 
         # 4. Apply scope filter (Item 2)
         if scope:
@@ -198,6 +200,7 @@ class HybridSearch:
         self,
         vector_results: list[HybridSearchResult],
         text_results: list[HybridSearchResult],
+        query: str = "",
     ) -> list[HybridSearchResult]:
         """Merge and deduplicate results from both search backends.
 
@@ -235,12 +238,65 @@ class HybridSearch:
                     source="text",
                 )
 
+        # Compute query-side PRISM embedding once for the entire merge pass
+        query_prism_emb = None
+        if self.prism_engine and query:
+            try:
+                query_emb = self.embedding_engine.encode(query)
+                query_prism_emb = self.prism_engine.enhance(
+                    query_emb, {"lifecycle_state": "query"}
+                )
+            except Exception:
+                query_prism_emb = None
+
         # Calculate combined scores with fitness-weighted tournament boost
         for result in merged.values():
             similarity_score = (
                 self.vector_weight * result.vector_score
                 + self.text_weight * result.text_score
             )
+
+            # PRISM enhancement: use stored PRISM data when available
+            if query_prism_emb and result.vector_score > 0:
+                try:
+                    stored_prism = getattr(result.methodology, "prism_data", None)
+                    if stored_prism is not None:
+                        # Fast path: deserialize stored PRISM data — no recomputation
+                        from claw.embeddings.prism import PrismEmbedding
+                        prism_b = PrismEmbedding.from_dict(stored_prism)
+                        prism_score = self.prism_engine.similarity(
+                            query_prism_emb, prism_b
+                        )
+                        similarity_score = (
+                            self.vector_weight * prism_score.combined
+                            + self.text_weight * result.text_score
+                        )
+                    else:
+                        # Slow fallback for old methodologies without stored PRISM data
+                        problem_emb = getattr(
+                            result.methodology, "problem_embedding", None
+                        )
+                        if problem_emb:
+                            result_meta = {
+                                "lifecycle_state": result.methodology.lifecycle_state
+                                or "viable"
+                            }
+                            prism_b = self.prism_engine.enhance(
+                                problem_emb, result_meta
+                            )
+                            prism_score = self.prism_engine.similarity(
+                                query_prism_emb, prism_b
+                            )
+                            similarity_score = (
+                                self.vector_weight * prism_score.combined
+                                + self.text_weight * result.text_score
+                            )
+                except Exception:
+                    logger.debug(
+                        "PRISM enhancement skipped for %s",
+                        result.methodology.id,
+                    )
+
             # MEE: fitness-weighted tournament selection
             # Blend similarity (60%) with fitness (40%) for final ranking
             fitness = get_fitness_score(result.methodology)

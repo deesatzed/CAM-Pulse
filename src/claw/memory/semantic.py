@@ -40,10 +40,12 @@ class SemanticMemory:
         repository: Repository,
         embedding_engine: EmbeddingEngine,
         hybrid_search: HybridSearch,
+        prism_engine: Any = None,
     ):
         self.repository = repository
         self.embedding_engine = embedding_engine
         self.hybrid_search = hybrid_search
+        self.prism_engine = prism_engine
 
     # Quality filter thresholds (Item 5)
     MIN_SOLUTION_LENGTH = 50
@@ -88,6 +90,19 @@ class SemanticMemory:
             logger.warning("Embedding generation failed -- saving without vector: %s", e)
             embedding = None
 
+        # Compute PRISM multi-scale representation if engine is available
+        prism_data = None
+        if self.prism_engine and embedding is not None:
+            try:
+                prism_emb = self.prism_engine.enhance(
+                    embedding,
+                    metadata={"lifecycle_state": "embryonic"},
+                )
+                prism_data = prism_emb.to_dict()
+                logger.debug("PRISM embedding computed for new methodology")
+            except Exception as e:
+                logger.warning("PRISM computation failed -- saving without PRISM data: %s", e)
+
         methodology = Methodology(
             problem_description=problem_description,
             problem_embedding=embedding,
@@ -100,6 +115,7 @@ class SemanticMemory:
             methodology_type=methodology_type,
             files_affected=files_affected or [],
             lifecycle_state="embryonic",
+            prism_data=prism_data,
         )
 
         saved = await self.repository.save_methodology(methodology)
@@ -366,6 +382,41 @@ class SemanticMemory:
                 "Updated %d co-retrieval links (success=%s, delta=%.2f)",
                 pairs_updated, success, delta,
             )
+
+    async def backfill_prism_embeddings(self) -> dict[str, int]:
+        """Compute and store PRISM data for all methodologies that lack it.
+
+        Returns:
+            Dict with counts: processed, skipped, errors.
+        """
+        if self.prism_engine is None:
+            return {"processed": 0, "skipped": 0, "errors": 0}
+
+        stats: dict[str, int] = {"processed": 0, "skipped": 0, "errors": 0}
+        for state in ("embryonic", "viable", "thriving", "declining", "dormant"):
+            batch = await self.repository.get_methodologies_by_state(state, limit=500)
+            for m in batch:
+                if m.prism_data is not None:
+                    stats["skipped"] += 1
+                    continue
+                if m.problem_embedding is None:
+                    stats["skipped"] += 1
+                    continue
+                try:
+                    prism_emb = self.prism_engine.enhance(
+                        m.problem_embedding,
+                        {"lifecycle_state": m.lifecycle_state},
+                    )
+                    await self.repository.update_methodology_prism_data(
+                        m.id, prism_emb.to_dict()
+                    )
+                    stats["processed"] += 1
+                except Exception as e:
+                    logger.warning("PRISM backfill failed for %s: %s", m.id, e)
+                    stats["errors"] += 1
+
+        logger.info("PRISM backfill complete: %s", stats)
+        return stats
 
     async def _get_max_retrieval_count(self) -> int:
         """Get the maximum retrieval_count across active methodologies."""

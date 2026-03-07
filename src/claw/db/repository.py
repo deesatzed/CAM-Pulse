@@ -327,8 +327,9 @@ class Repository:
             """INSERT INTO methodologies
                (id, problem_description, solution_code, methodology_notes,
                 source_task_id, tags, language, scope, methodology_type, files_affected,
-                lifecycle_state, generation, fitness_vector, parent_ids, superseded_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                lifecycle_state, generation, fitness_vector, parent_ids, superseded_by,
+                prism_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 methodology.id,
                 methodology.problem_description,
@@ -345,6 +346,7 @@ class Repository:
                 json.dumps(methodology.fitness_vector),
                 json.dumps(methodology.parent_ids),
                 methodology.superseded_by,
+                json.dumps(methodology.prism_data) if methodology.prism_data else None,
             ],
         )
 
@@ -455,6 +457,29 @@ class Repository:
         await self.engine.execute(
             "UPDATE methodologies SET lifecycle_state = ? WHERE id = ?",
             [new_state, methodology_id],
+        )
+
+        # Update vmf_kappa in stored PRISM data to match new lifecycle
+        row = await self.engine.fetch_one(
+            "SELECT prism_data FROM methodologies WHERE id = ?", [methodology_id]
+        )
+        if row and row.get("prism_data"):
+            try:
+                from claw.embeddings.prism import _DEFAULT_KAPPA, _LIFECYCLE_KAPPA
+                prism_dict = json.loads(row["prism_data"])
+                prism_dict["vmf_kappa"] = _LIFECYCLE_KAPPA.get(new_state, _DEFAULT_KAPPA)
+                await self.engine.execute(
+                    "UPDATE methodologies SET prism_data = ? WHERE id = ?",
+                    [json.dumps(prism_dict), methodology_id],
+                )
+            except (json.JSONDecodeError, KeyError):
+                pass  # Corrupt prism_data — leave as-is
+
+    async def update_methodology_prism_data(self, methodology_id: str, prism_data: dict) -> None:
+        """Store or replace the PRISM embedding for an existing methodology."""
+        await self.engine.execute(
+            "UPDATE methodologies SET prism_data = ? WHERE id = ?",
+            [json.dumps(prism_data), methodology_id],
         )
 
     async def count_methodologies(self) -> int:
@@ -798,6 +823,9 @@ def _row_to_methodology(row: dict[str, Any]) -> Methodology:
     if isinstance(parents, str):
         parents = json.loads(parents)
 
+    raw_prism = row.get("prism_data")
+    prism_data = json.loads(raw_prism) if isinstance(raw_prism, str) else None
+
     return Methodology(
         id=row["id"],
         problem_description=row["problem_description"],
@@ -819,6 +847,7 @@ def _row_to_methodology(row: dict[str, Any]) -> Methodology:
         fitness_vector=fv,
         parent_ids=parents,
         superseded_by=row.get("superseded_by"),
+        prism_data=prism_data,
     )
 
 

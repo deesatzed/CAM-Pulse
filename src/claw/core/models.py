@@ -152,6 +152,7 @@ class Methodology(BaseModel):
     fitness_vector: dict[str, float] = Field(default_factory=dict)
     parent_ids: list[str] = Field(default_factory=list)
     superseded_by: Optional[str] = None
+    prism_data: Optional[dict] = None
 
 
 class PeerReview(BaseModel):
