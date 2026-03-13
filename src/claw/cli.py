@@ -1,25 +1,37 @@
-"""CLAW CLI — Typer-based command line interface.
+"""CAM CLI — Typer-based command line interface for Clawamorphosis.
 
 Commands:
   evaluate <repo>        — structural analysis + 18-prompt evaluation battery
   enhance <repo>         — full pipeline: evaluate -> plan -> dispatch -> verify -> learn
   fleet-enhance <dir>    — multi-repo fleet processing with ranking and budget allocation
   mine <dir>             — mine repos for patterns (--scan-only, --depth, --dedup)
+  ideate <dir>           — generate novel app concepts from CAM memory + candidate repos
+  create <repo>          — create or augment a repo from a requested outcome using CAM memory
+  forge-export           — export CAM memory into a standalone Forge knowledge pack
+  validate               — validate a created repo against its saved spec and checks
+  benchmark              — benchmark Forge output
+  forge-benchmark        — run the standalone Forge regression benchmark with time limits
+  quickstart <repo>      — guided goal setup + runbook preview (+ optional execution)
+  runbook <task-id>      — show task execution/acceptance runbook
   add-goal <repo>        — manually add a task/goal for a repository
   results                — show past task results from the database
   status                 — show system status
   setup                  — interactive API key, model, and agent configuration
   govern [action]        — memory governance: stats, sweep, gc, quota, prune
   synergies              — capability synergy graph summary and exploration stats
+  kb <subcommand>        — knowledge browser: insights, search, capability, domains, synergies
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import time as _time
 
@@ -30,11 +42,14 @@ from rich.table import Table
 from rich.text import Text
 
 app = typer.Typer(
-    name="claw",
-    help="CLAW — Codebase Learning & Autonomous Workforce",
+    name="cam",
+    help="CAM — Clawamorphosis Knowledge System",
     no_args_is_help=True,
 )
 console = Console()
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+_IDEA_DIR = ROOT_DIR / "data" / "ideation"
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -44,6 +59,468 @@ def _setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _run_python_script_with_timeout(script_path: Path, args: list[str], max_minutes: int) -> subprocess.CompletedProcess[str]:
+    if max_minutes <= 0:
+        raise typer.BadParameter("max-minutes must be greater than 0")
+
+    cmd = [sys.executable, str(script_path), *args]
+    timeout_seconds = max_minutes * 60
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        console.print(
+            f"[red]Timed out after {max_minutes} minute(s) while running {script_path.name}[/red]"
+        )
+        if exc.stdout:
+            console.print("[dim]Partial stdout:[/dim]")
+            console.print(exc.stdout.strip())
+        raise typer.Exit(124)
+
+
+def _build_create_spec(
+    repo_path: Path,
+    request: str,
+    repo_mode: str,
+    title: str,
+    task_type: str,
+    execution_steps: list[str],
+    acceptance_checks: list[str],
+    spec_items: list[str],
+) -> dict[str, Any]:
+    baseline_snapshot = _snapshot_repo_state(repo_path)
+    return {
+        "version": 1,
+        "title": title,
+        "request": request,
+        "repo_mode": repo_mode,
+        "target_repo": str(repo_path),
+        "task_type": task_type,
+        "spec_items": spec_items,
+        "baseline_snapshot": baseline_snapshot,
+        "execution_steps": execution_steps,
+        "acceptance_checks": acceptance_checks,
+        "validation": {
+            "require_repo_exists": True,
+            "require_nonempty_repo": True,
+        },
+        "benchmark": {
+            "catastrophic_floor_pct": -35.0,
+            "require_non_negative_lift": False,
+        },
+        "created_at_epoch": int(_time.time()),
+    }
+
+
+def _write_create_spec(spec: dict[str, Any]) -> Path:
+    spec_dir = ROOT_DIR / "data" / "create_specs"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = _time.strftime("%Y%m%d-%H%M%S", _time.localtime(spec["created_at_epoch"]))
+    repo_slug = Path(spec["target_repo"]).name or "repo"
+    filename = f"{timestamp}-{repo_slug}-create-spec.json"
+    out_path = spec_dir / filename
+    out_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+    return out_path
+
+
+def _build_create_description(request: str, repo_mode: str, spec_path: Path, spec_items: list[str]) -> str:
+    lines = [
+        f"Creation mode: {repo_mode}",
+        "",
+        "Requested outcome:",
+        request.strip(),
+        "",
+        f"Spec file: {spec_path}",
+    ]
+    if spec_items:
+        lines.extend(["", "Initial specs:"])
+        lines.extend([f"- {item}" for item in spec_items])
+    lines.extend(
+        [
+            "",
+            "Requirement: use prior mined/assimilated CAM knowledge where relevant.",
+            "Outcome target: produce the requested repo state, not just analysis.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _select_ideation_model(config: Any, preferred_agent: Optional[str] = None) -> str:
+    agent_order = [preferred_agent] if preferred_agent else ["claude", "gemini", "codex", "grok"]
+    if not preferred_agent:
+        agent_order = ["claude", "gemini", "codex", "grok"]
+
+    for agent_name in agent_order:
+        if not agent_name:
+            continue
+        agent_cfg = config.agents.get(agent_name)
+        if agent_cfg and agent_cfg.enabled and agent_cfg.model:
+            return agent_cfg.model
+    raise typer.BadParameter("No enabled agent with a configured model is available for ideation")
+
+
+def _summarize_repo_tree(repo_path: Path, max_files: int = 10) -> dict[str, Any]:
+    from claw.miner import _CODE_EXTENSIONS, _SKIP_DIRS
+
+    marker_names = {
+        "README.md", "README.rst", "README.txt",
+        "pyproject.toml", "package.json", "Cargo.toml", "go.mod",
+        "requirements.txt", "setup.py", "Makefile", "Dockerfile",
+    }
+
+    sample_files: list[str] = []
+    marker_files: list[str] = []
+    top_dirs: list[str] = []
+
+    try:
+        for entry in sorted(repo_path.iterdir(), key=lambda p: p.name):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir() and entry.name not in _SKIP_DIRS and len(top_dirs) < 8:
+                top_dirs.append(entry.name)
+            elif entry.is_file() and entry.name in marker_names and len(marker_files) < 8:
+                marker_files.append(entry.name)
+    except OSError:
+        pass
+
+    try:
+        for path in sorted(repo_path.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(repo_path)
+            if any(part in _SKIP_DIRS for part in rel.parts):
+                continue
+            if path.name in marker_names or path.suffix.lower() in _CODE_EXTENSIONS:
+                sample_files.append(str(rel))
+            if len(sample_files) >= max_files:
+                break
+    except OSError:
+        pass
+
+    return {
+        "name": repo_path.name,
+        "path": str(repo_path),
+        "marker_files": marker_files,
+        "top_dirs": top_dirs,
+        "sample_files": sample_files,
+    }
+
+
+def _summarize_methodology(meth: Any) -> dict[str, Any]:
+    return {
+        "id": getattr(meth, "id", ""),
+        "problem": getattr(meth, "problem_description", "")[:240],
+        "notes": (getattr(meth, "methodology_notes", "") or "")[:240],
+        "tags": list(getattr(meth, "tags", []) or [])[:8],
+        "novelty_score": getattr(meth, "novelty_score", None),
+        "potential_score": getattr(meth, "potential_score", None),
+    }
+
+
+def _build_ideation_prompt(
+    focus: str,
+    repo_contexts: list[dict[str, Any]],
+    repo_findings: dict[str, list[dict[str, Any]]],
+    cam_memory: dict[str, list[dict[str, Any]]],
+    idea_count: int,
+) -> str:
+    goal = focus.strip() or (
+        "Propose novel standalone applications that combine CAM's strongest existing knowledge "
+        "with the most useful mechanisms visible in the candidate repos."
+    )
+
+    return (
+        "You are CAM's product ideation engine.\n"
+        "Use the candidate repo context plus CAM's existing knowledge to propose novel, useful, "
+        "non-demo application ideas.\n\n"
+        "Rules:\n"
+        "- Prefer ideas that build, troubleshoot, create, validate, or automate real work.\n"
+        "- Do not propose generic chat apps or vague agents.\n"
+        "- Each idea must clearly combine CAM knowledge with one or more candidate repos.\n"
+        "- Favor standalone apps, not modifications to CAM itself.\n"
+        "- Return strict JSON only.\n\n"
+        f"User focus:\n{goal}\n\n"
+        "Candidate repo summaries:\n"
+        f"{json.dumps(repo_contexts, indent=2)}\n\n"
+        "Existing mined findings by repo:\n"
+        f"{json.dumps(repo_findings, indent=2)}\n\n"
+        "CAM memory highlights:\n"
+        f"{json.dumps(cam_memory, indent=2)}\n\n"
+        f"Return a JSON object with key 'ideas' containing exactly {idea_count} items.\n"
+        "Each idea must contain:\n"
+        "- title\n"
+        "- tagline\n"
+        "- problem\n"
+        "- why_valuable\n"
+        "- novelty\n"
+        "- repos_used (array)\n"
+        "- cam_knowledge_used (array)\n"
+        "- app_request\n"
+        "- spec_items (array)\n"
+        "- execution_steps (array)\n"
+        "- acceptance_checks (array)\n"
+        "- repo_mode\n"
+        "- build_confidence (0.0 to 1.0)\n"
+    )
+
+
+def _normalize_ideation_payload(payload: dict[str, Any], idea_count: int) -> list[dict[str, Any]]:
+    raw_ideas = payload.get("ideas", [])
+    if not isinstance(raw_ideas, list):
+        return []
+
+    ideas: list[dict[str, Any]] = []
+    for idx, idea in enumerate(raw_ideas[:idea_count], start=1):
+        if not isinstance(idea, dict):
+            continue
+        title = str(idea.get("title", "")).strip() or f"Idea {idx}"
+        try:
+            build_confidence = float(idea.get("build_confidence", 0.5) or 0.5)
+        except (TypeError, ValueError):
+            build_confidence = 0.5
+        normalized = {
+            "title": title,
+            "tagline": str(idea.get("tagline", "")).strip(),
+            "problem": str(idea.get("problem", "")).strip(),
+            "why_valuable": str(idea.get("why_valuable", "")).strip(),
+            "novelty": str(idea.get("novelty", "")).strip(),
+            "repos_used": [str(x).strip() for x in idea.get("repos_used", []) if str(x).strip()],
+            "cam_knowledge_used": [str(x).strip() for x in idea.get("cam_knowledge_used", []) if str(x).strip()],
+            "app_request": str(idea.get("app_request", "")).strip() or title,
+            "spec_items": [str(x).strip() for x in idea.get("spec_items", []) if str(x).strip()],
+            "execution_steps": [str(x).strip() for x in idea.get("execution_steps", []) if str(x).strip()],
+            "acceptance_checks": [str(x).strip() for x in idea.get("acceptance_checks", []) if str(x).strip()],
+            "repo_mode": str(idea.get("repo_mode", "new")).strip() or "new",
+            "build_confidence": build_confidence,
+        }
+        ideas.append(normalized)
+    return ideas
+
+
+def _render_ideation_markdown(
+    focus: str,
+    source_dir: Path,
+    ideas: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "# CAM Ideation Report",
+        "",
+        f"- Source directory: `{source_dir}`",
+        f"- Focus: {focus or 'general'}",
+        f"- Ideas generated: {len(ideas)}",
+        "",
+    ]
+    for idx, idea in enumerate(ideas, start=1):
+        lines.extend(
+            [
+                f"## {idx}. {idea['title']}",
+                "",
+                idea["tagline"] or "_No tagline provided._",
+                "",
+                f"Problem: {idea['problem']}",
+                "",
+                f"Why valuable: {idea['why_valuable']}",
+                "",
+                f"Novelty: {idea['novelty']}",
+                "",
+                f"Repos used: {', '.join(idea['repos_used']) or 'n/a'}",
+                "",
+                f"CAM knowledge used: {', '.join(idea['cam_knowledge_used']) or 'n/a'}",
+                "",
+                f"Build confidence: {idea['build_confidence']:.2f}",
+                "",
+                "Spec items:",
+            ]
+        )
+        if idea["spec_items"]:
+            lines.extend([f"- {item}" for item in idea["spec_items"]])
+        else:
+            lines.append("- n/a")
+        lines.extend(["", "Acceptance checks:"])
+        if idea["acceptance_checks"]:
+            lines.extend([f"- {item}" for item in idea["acceptance_checks"]])
+        else:
+            lines.append("- n/a")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _write_ideation_artifacts(
+    source_dir: Path,
+    focus: str,
+    ideas: list[dict[str, Any]],
+    raw_payload: dict[str, Any],
+) -> tuple[Path, Path]:
+    _IDEA_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = _time.strftime("%Y%m%d-%H%M%S", _time.localtime())
+    slug = source_dir.name or "ideas"
+    json_path = _IDEA_DIR / f"{timestamp}-{slug}-ideas.json"
+    md_path = _IDEA_DIR / f"{timestamp}-{slug}-ideas.md"
+
+    json_path.write_text(
+        json.dumps(
+            {
+                "focus": focus,
+                "source_dir": str(source_dir),
+                "ideas": ideas,
+                "raw_payload": raw_payload,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    md_path.write_text(_render_ideation_markdown(focus, source_dir, ideas), encoding="utf-8")
+    return json_path, md_path
+
+
+def _run_validation_check(command: str, cwd: Path, timeout_seconds: float) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, timeout_seconds),
+            check=False,
+        )
+        return {
+            "command": command,
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "command": command,
+            "ok": False,
+            "returncode": 124,
+            "stdout": (exc.stdout or "").strip() if exc.stdout else "",
+            "stderr": (exc.stderr or "").strip() if exc.stderr else "",
+            "timeout": True,
+        }
+
+
+def _snapshot_repo_state(repo_path: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not repo_path.exists():
+        return snapshot
+
+    for path in sorted(repo_path.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo_path)
+        if ".git" in rel.parts:
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        snapshot[str(rel)] = json.dumps(
+            {
+                "size": len(data),
+                "sha1": hashlib.sha1(data).hexdigest(),
+            },
+            sort_keys=True,
+        )
+    return snapshot
+
+
+def _looks_like_shell_command(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    shell_markers = ("&&", "||", "|", ">", "<", ";", "./", "../")
+    if any(marker in text for marker in shell_markers):
+        return True
+    first = text.split()[0].lower()
+    known_commands = {
+        "python", "python3", "pytest", "uv", "npm", "npx", "node",
+        "cargo", "go", "make", "ruff", "mypy", "bash", "sh", "git",
+        "ls", "cat", "echo",
+    }
+    return first in known_commands
+
+
+def _validate_create_spec(spec: dict[str, Any], max_minutes: int) -> tuple[bool, dict[str, Any]]:
+    start = _time.monotonic()
+    findings: list[str] = []
+    checks: list[dict[str, Any]] = []
+    manual_checks: list[str] = []
+
+    repo_path = Path(str(spec.get("target_repo", ""))).resolve()
+    validation_cfg = spec.get("validation", {}) if isinstance(spec.get("validation"), dict) else {}
+    acceptance_checks = spec.get("acceptance_checks", []) if isinstance(spec.get("acceptance_checks"), list) else []
+
+    require_repo_exists = bool(validation_cfg.get("require_repo_exists", True))
+    require_nonempty_repo = bool(validation_cfg.get("require_nonempty_repo", True))
+
+    if require_repo_exists and not repo_path.exists():
+        findings.append(f"target repo does not exist: {repo_path}")
+    elif repo_path.exists() and require_nonempty_repo:
+        has_files = any(p.is_file() for p in repo_path.rglob("*"))
+        if not has_files:
+            findings.append(f"target repo has no files: {repo_path}")
+
+    baseline_snapshot = spec.get("baseline_snapshot", {}) if isinstance(spec.get("baseline_snapshot"), dict) else {}
+    if repo_path.exists() and baseline_snapshot:
+        current_snapshot = _snapshot_repo_state(repo_path)
+        if current_snapshot == baseline_snapshot:
+            findings.append("target repo is unchanged since create spec was written")
+
+    deadline = start + (max_minutes * 60)
+    for command in acceptance_checks:
+        if not _looks_like_shell_command(str(command)):
+            manual_checks.append(str(command))
+            continue
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            findings.append("validation timed out before all acceptance checks completed")
+            break
+        check_result = _run_validation_check(str(command), cwd=repo_path, timeout_seconds=remaining)
+        checks.append(check_result)
+        if not check_result["ok"]:
+            findings.append(f"acceptance check failed: {command}")
+
+    summary = {
+        "repo": str(repo_path),
+        "title": spec.get("title", ""),
+        "request": spec.get("request", ""),
+        "repo_mode": spec.get("repo_mode", ""),
+        "checks_run": len(checks),
+        "checks": checks,
+        "manual_checks": manual_checks,
+        "findings": findings,
+    }
+    return len(findings) == 0, summary
+
+
+def _validate_benchmark_against_spec(summary: dict[str, Any], spec: dict[str, Any]) -> tuple[bool, list[str]]:
+    benchmark = spec.get("benchmark", {}) if isinstance(spec, dict) else {}
+    best = summary.get("best", {}) if isinstance(summary, dict) else {}
+    findings: list[str] = []
+
+    catastrophic_floor = float(benchmark.get("catastrophic_floor_pct", -35.0))
+    lift_pct = float(best.get("hit_rate_lift_pct", 0.0))
+    if lift_pct < catastrophic_floor:
+        findings.append(
+            f"lift {lift_pct:.2f}% is below catastrophic floor {catastrophic_floor:.2f}%"
+        )
+
+    require_non_negative = bool(benchmark.get("require_non_negative_lift", False))
+    if require_non_negative and lift_pct < 0:
+        findings.append(f"lift {lift_pct:.2f}% is negative but spec requires non-negative lift")
+
+    return len(findings) == 0, findings
 
 
 @app.command()
@@ -394,6 +871,7 @@ def enhance(
     mode: str = typer.Option("attended", "--mode", "-m", help="Mode: attended, supervised, autonomous"),
     max_tasks: int = typer.Option(10, "--max-tasks", help="Maximum number of tasks to process"),
     battery: bool = typer.Option(False, "--battery", "-b", help="Use full evaluation battery (MesoClaw) instead of structural analysis"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview planned tasks without writing tasks or executing agents"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -414,9 +892,9 @@ def enhance(
         raise typer.Exit(1)
 
     if battery:
-        asyncio.run(_enhance_battery_async(repo_path, config, mode, max_tasks))
+        asyncio.run(_enhance_battery_async(repo_path, config, mode, max_tasks, dry_run))
     else:
-        asyncio.run(_enhance_async(repo_path, config, mode, max_tasks))
+        asyncio.run(_enhance_async(repo_path, config, mode, max_tasks, dry_run))
 
 
 async def _enhance_async(
@@ -424,6 +902,7 @@ async def _enhance_async(
     config_path: Optional[str],
     mode: str,
     max_tasks: int,
+    dry_run: bool = False,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -444,6 +923,7 @@ async def _enhance_async(
         console.print(f"\n[bold]CLAW Enhancement: {repo_path.name}[/bold]")
         console.print(f"  Repository: {repo_path}")
         console.print(f"  Mode: {mode}")
+        console.print(f"  Dry run: {'yes' if dry_run else 'no'}")
         console.print(f"  Agents: {', '.join(ctx.agents.keys()) or 'none'}")
 
         if not ctx.agents:
@@ -468,6 +948,11 @@ async def _enhance_async(
 
         tasks = tasks[:max_tasks]
         console.print(f"  Generated {len(tasks)} enhancement tasks")
+
+        if dry_run:
+            _display_planned_tasks(tasks, title=f"Planned Tasks (dry-run): {repo_path.name}")
+            console.print("\n[yellow]Dry run enabled: no tasks written, no agents executed.[/yellow]")
+            return
 
         # Store tasks in DB
         for task in tasks:
@@ -553,6 +1038,7 @@ async def _enhance_battery_async(
     config_path: Optional[str],
     mode: str,
     max_tasks: int,
+    dry_run: bool = False,
 ) -> None:
     """Run enhance using the full MesoClaw pipeline with evaluation battery."""
     from claw.core.factory import ClawFactory
@@ -572,10 +1058,25 @@ async def _enhance_battery_async(
         console.print(f"\n[bold]CLAW Enhancement (Battery Mode): {repo_path.name}[/bold]")
         console.print(f"  Repository: {repo_path}")
         console.print(f"  Mode: {mode}")
+        console.print(f"  Dry run: {'yes' if dry_run else 'no'}")
         console.print(f"  Agents: {', '.join(ctx.agents.keys()) or 'none'}")
 
         if not ctx.agents:
             console.print("[red]No agents available. Enable at least one agent in claw.toml.[/red]")
+            return
+
+        if dry_run:
+            meso_preview = MesoClaw(
+                ctx=ctx,
+                project_id=project.id,
+                repo_path=str(repo_path),
+            )
+            console.print("\n[cyan]Dry-run: evaluating and planning only (no task execution)...[/cyan]")
+            evaluation = await meso_preview.evaluate(str(repo_path))
+            tasks = await meso_preview.decide(evaluation)
+            tasks = tasks[:max_tasks]
+            _display_planned_tasks(tasks, title=f"Planned Tasks (battery dry-run): {repo_path.name}")
+            console.print("\n[yellow]Dry run enabled: no tasks written, no agents executed.[/yellow]")
             return
 
         # Run MesoClaw which handles: evaluate -> plan -> dispatch -> verify -> learn
@@ -739,6 +1240,40 @@ def _display_task_result(cycle_result) -> None:
         if outcome.failure_detail:
             detail = outcome.failure_detail[:150]
             console.print(f"    [dim]{detail}[/dim]")
+
+
+def _display_planned_tasks(tasks: list, title: str = "Planned Tasks") -> None:
+    """Show a concise preview of planned tasks for dry-run workflows."""
+    if not tasks:
+        console.print("\n[yellow]No tasks were planned.[/yellow]")
+        return
+
+    table = Table(title=title, show_lines=True)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Priority", justify="right", style="green", width=8)
+    table.add_column("Agent", style="yellow", width=10)
+    table.add_column("Type", style="cyan", width=18)
+    table.add_column("Title", style="white", max_width=46)
+    table.add_column("Runbook", style="magenta", width=12)
+
+    for i, task in enumerate(tasks, 1):
+        steps = len(getattr(task, "execution_steps", []) or [])
+        checks = len(getattr(task, "acceptance_checks", []) or [])
+        runbook_label = f"{steps} step/{checks} check"
+        if steps != 1:
+            runbook_label = f"{steps} steps/{checks} checks"
+
+        table.add_row(
+            str(i),
+            str(getattr(task, "priority", 0)),
+            getattr(task, "recommended_agent", None) or "-",
+            (getattr(task, "task_type", None) or "general")[:18],
+            (getattr(task, "title", "") or "")[:46],
+            runbook_label,
+        )
+
+    console.print()
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------
@@ -1387,6 +1922,384 @@ async def _status_async(config_path: Optional[str]) -> None:
         await ctx.close()
 
 
+def _display_runbook_details(task, project_name: str, action_template=None) -> None:
+    """Render runbook sections for a task with optional template fallback."""
+    execution_steps = list(task.execution_steps)
+    acceptance_checks = list(task.acceptance_checks)
+    preconditions: list[str] = []
+    rollback_steps: list[str] = []
+
+    if action_template is not None:
+        if not execution_steps:
+            execution_steps = list(action_template.execution_steps)
+        if not acceptance_checks:
+            acceptance_checks = list(action_template.acceptance_checks)
+        preconditions = list(action_template.preconditions)
+        rollback_steps = list(action_template.rollback_steps)
+
+    console.print(f"\n[bold]Task Runbook[/bold]")
+    console.print(f"  Task: {task.title}")
+    console.print(f"  Task ID: {task.id}")
+    console.print(f"  Project: {project_name}")
+    console.print(f"  Status: {task.status.value}")
+    console.print(f"  Agent: {task.recommended_agent or task.assigned_agent or '-'}")
+    if action_template is not None:
+        console.print(
+            f"  Template: {action_template.title} "
+            f"(confidence={action_template.confidence:.2f}, "
+            f"S/F={action_template.success_count}/{action_template.failure_count})"
+        )
+
+    if preconditions:
+        console.print("\n[cyan]Preconditions[/cyan]")
+        for item in preconditions:
+            console.print(f"  - {item}")
+
+    if execution_steps:
+        console.print("\n[cyan]Execution Steps[/cyan]")
+        for i, step in enumerate(execution_steps, 1):
+            console.print(f"  {i}. {step}")
+    else:
+        console.print("\n[yellow]No execution steps defined yet.[/yellow]")
+
+    if acceptance_checks:
+        console.print("\n[cyan]Acceptance Checks[/cyan]")
+        for i, check in enumerate(acceptance_checks, 1):
+            console.print(f"  {i}. {check}")
+    else:
+        console.print("\n[yellow]No acceptance checks defined yet.[/yellow]")
+
+    if rollback_steps:
+        console.print("\n[cyan]Rollback Steps[/cyan]")
+        for i, step in enumerate(rollback_steps, 1):
+            console.print(f"  {i}. {step}")
+
+
+@app.command()
+def runbook(
+    task_id: str = typer.Argument(..., help="Task ID to inspect"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Display execution steps and acceptance checks for a task."""
+    _setup_logging(False)
+    asyncio.run(_runbook_async(task_id, config))
+
+
+async def _runbook_async(task_id: str, config_path: Optional[str]) -> None:
+    from claw.core.factory import ClawFactory
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        task = await ctx.repository.get_task(task_id)
+        if task is None:
+            console.print(f"[red]Task not found: {task_id}[/red]")
+            raise typer.Exit(1)
+
+        project = await ctx.repository.get_project(task.project_id)
+        action_template = None
+        if task.action_template_id:
+            action_template = await ctx.repository.get_action_template(task.action_template_id)
+        _display_runbook_details(
+            task=task,
+            project_name=project.name if project else task.project_id,
+            action_template=action_template,
+        )
+
+        console.print("\n[dim]Use `cam enhance <repo> --dry-run` to preview execution without running agents.[/dim]")
+
+    finally:
+        await ctx.close()
+
+
+@app.command()
+def quickstart(
+    repo: str = typer.Argument(..., help="Path to the repository this goal is for"),
+    title: str = typer.Option(..., "--title", "-t", prompt="Goal title", help="Short title for the goal"),
+    description: str = typer.Option(
+        ..., "--description", "-d", prompt="Goal description (what should be done?)",
+        help="Detailed goal description",
+    ),
+    priority: str = typer.Option("high", "--priority", "-p", help="Priority: critical, high, medium, low"),
+    task_type: str = typer.Option(
+        "bug_fix",
+        "--type",
+        help="Task type: analysis, testing, documentation, security, refactoring, bug_fix, architecture, dependency_analysis",
+    ),
+    agent: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Preferred agent: claude, codex, gemini, grok (or leave blank for auto-routing)",
+    ),
+    step: list[str] = typer.Option(
+        [],
+        "--step",
+        help="Execution command to run for this goal (repeat --step for multiple commands)",
+    ),
+    check: list[str] = typer.Option(
+        [],
+        "--check",
+        help="Acceptance check command for this goal (repeat --check for multiple commands)",
+    ),
+    preview: bool = typer.Option(
+        True,
+        "--preview/--no-preview",
+        help="Show runbook and dry-run preview after creating the goal",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="Immediately execute this exact task after setup",
+    ),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Guided one-command setup: add goal + preview runbook (+ optional execution)."""
+    _setup_logging(False)
+
+    repo_path = Path(repo).resolve()
+    if not repo_path.exists():
+        console.print(f"[red]Repository path does not exist: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    asyncio.run(_quickstart_async(
+        repo_path=repo_path,
+        title=title,
+        description=description,
+        priority=priority.lower(),
+        task_type=task_type,
+        agent=agent,
+        execution_steps=step,
+        acceptance_checks=check,
+        preview=preview,
+        execute=execute,
+        config_path=config,
+    ))
+
+
+async def _quickstart_async(
+    repo_path: Path,
+    title: str,
+    description: str,
+    priority: str,
+    task_type: str,
+    agent: Optional[str],
+    execution_steps: list[str],
+    acceptance_checks: list[str],
+    preview: bool,
+    execute: bool,
+    config_path: Optional[str],
+) -> None:
+    from claw.core.factory import ClawFactory
+    from claw.core.models import CycleResult, Project, Task, TaskStatus
+    from claw.cycle import MicroClaw
+    from claw.dispatcher import DEFAULT_AGENT, STATIC_ROUTING
+
+    valid_priorities = {"critical": 10, "high": 8, "medium": 5, "low": 2}
+    if priority not in valid_priorities:
+        console.print(f"[red]Invalid priority '{priority}'. Use: critical, high, medium, low[/red]")
+        raise typer.Exit(1)
+
+    valid_types = [
+        "analysis", "testing", "documentation", "security", "refactoring",
+        "bug_fix", "architecture", "dependency_analysis",
+    ]
+    if task_type not in valid_types:
+        console.print(f"[red]Invalid task type '{task_type}'. Use: {', '.join(valid_types)}[/red]")
+        raise typer.Exit(1)
+
+    if agent and agent not in ("claude", "codex", "gemini", "grok"):
+        console.print(f"[red]Invalid agent '{agent}'. Use: claude, codex, gemini, grok[/red]")
+        raise typer.Exit(1)
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
+
+    try:
+        project = await ctx.repository.get_project_by_name(repo_path.name)
+        if project is None:
+            project = Project(name=repo_path.name, repo_path=str(repo_path))
+            await ctx.repository.create_project(project)
+
+        recommended = agent or STATIC_ROUTING.get(task_type, DEFAULT_AGENT)
+        task = Task(
+            project_id=project.id,
+            title=title,
+            description=description,
+            status=TaskStatus.PENDING,
+            priority=valid_priorities[priority],
+            task_type=task_type,
+            recommended_agent=recommended,
+            execution_steps=[s.strip() for s in execution_steps if s.strip()],
+            acceptance_checks=[s.strip() for s in acceptance_checks if s.strip()],
+        )
+        await ctx.repository.create_task(task)
+
+        console.print("\n[green]Quickstart goal created.[/green]")
+        console.print(f"  Task ID: {task.id}")
+        console.print(f"  Project: {project.name}")
+        console.print(f"  Agent: {recommended}")
+        console.print(f"  Priority: {priority} ({valid_priorities[priority]})")
+
+        if preview:
+            _display_runbook_details(task=task, project_name=project.name, action_template=None)
+            _display_planned_tasks([task], title="Quickstart Preview")
+            console.print("\n[yellow]Preview mode: no execution yet.[/yellow]")
+
+        if execute:
+            if not ctx.agents:
+                console.print("\n[red]No agents available to execute. Enable at least one agent in claw.toml.[/red]")
+                return
+
+            console.print("\n[cyan]Executing quickstart task...[/cyan]")
+            micro = MicroClaw(ctx=ctx, project_id=project.id)
+            start = _time.monotonic()
+            task_ctx = await micro.evaluate(task)
+            decision = await micro.decide(task_ctx)
+            acted = await micro.act(decision)
+            verified = await micro.verify(acted)
+            await micro.learn(verified)
+            duration = _time.monotonic() - start
+
+            agent_id, _, outcome, verification = verified
+            cycle_result = CycleResult(
+                cycle_level="micro",
+                task_id=task.id,
+                project_id=project.id,
+                agent_id=agent_id,
+                outcome=outcome,
+                verification=verification,
+                success=verification.approved,
+                tokens_used=outcome.tokens_used,
+                cost_usd=outcome.cost_usd,
+                duration_seconds=duration,
+            )
+            _display_task_result(cycle_result)
+        else:
+            console.print("\n[dim]Run `cam quickstart ... --execute` when you're ready to run it.[/dim]")
+
+    finally:
+        await ctx.close()
+
+
+@app.command()
+def create(
+    repo: str = typer.Argument(..., help="Target repository path to fix, augment, or create"),
+    request: str = typer.Option(..., "--request", "-r", prompt="What should CAM create?", help="Plain-language outcome request"),
+    repo_mode: str = typer.Option("augment", "--repo-mode", help="Repo mode: fixed, augment, new"),
+    title: Optional[str] = typer.Option(None, "--title", "-t", help="Optional short task title"),
+    priority: str = typer.Option("high", "--priority", "-p", help="Priority: critical, high, medium, low"),
+    task_type: str = typer.Option("architecture", "--type", help="Task type for routing and execution"),
+    agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Preferred agent override"),
+    spec: list[str] = typer.Option([], "--spec", help="Initial requirement/spec line (repeatable)"),
+    step: list[str] = typer.Option([], "--step", help="Suggested execution step (repeatable)"),
+    check: list[str] = typer.Option([], "--check", help="Acceptance check / validation rule (repeatable)"),
+    preview: bool = typer.Option(True, "--preview/--no-preview", help="Preview runbook after creating the task"),
+    execute: bool = typer.Option(False, "--execute", help="Immediately execute the created task"),
+    max_minutes: int = typer.Option(20, "--max-minutes", help="Wall-clock time guardrail for creation/execution"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Create a fixed repo, augmented repo, or new repo from a requested outcome."""
+    _setup_logging(False)
+
+    repo_path = Path(repo).resolve()
+    if repo_mode not in ("fixed", "augment", "new"):
+        console.print("[red]--repo-mode must be one of: fixed, augment, new[/red]")
+        raise typer.Exit(1)
+
+    if repo_mode == "new":
+        repo_path.mkdir(parents=True, exist_ok=True)
+    elif not repo_path.exists():
+        console.print(f"[red]Repository path does not exist: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    if max_minutes < 1:
+        console.print("[red]--max-minutes must be at least 1[/red]")
+        raise typer.Exit(1)
+
+    task_title = title or request.strip().split("\n")[0][:80]
+
+    try:
+        asyncio.run(asyncio.wait_for(
+            _create_async(
+                repo_path=repo_path,
+                request=request,
+                repo_mode=repo_mode,
+                title=task_title,
+                priority=priority.lower(),
+                task_type=task_type,
+                agent=agent,
+                spec_items=spec,
+                execution_steps=step,
+                acceptance_checks=check,
+                preview=preview,
+                execute=execute,
+                config_path=config,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Create timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
+
+
+async def _create_async(
+    repo_path: Path,
+    request: str,
+    repo_mode: str,
+    title: str,
+    priority: str,
+    task_type: str,
+    agent: Optional[str],
+    spec_items: list[str],
+    execution_steps: list[str],
+    acceptance_checks: list[str],
+    preview: bool,
+    execute: bool,
+    config_path: Optional[str],
+) -> None:
+    spec_payload = _build_create_spec(
+        repo_path=repo_path,
+        request=request,
+        repo_mode=repo_mode,
+        title=title,
+        task_type=task_type,
+        execution_steps=[s.strip() for s in execution_steps if s.strip()],
+        acceptance_checks=[c.strip() for c in acceptance_checks if c.strip()],
+        spec_items=[s.strip() for s in spec_items if s.strip()],
+    )
+    spec_path = _write_create_spec(spec_payload)
+    description = _build_create_description(
+        request=request,
+        repo_mode=repo_mode,
+        spec_path=spec_path,
+        spec_items=spec_payload["spec_items"],
+    )
+
+    console.print("\n[bold]CAM Create[/bold]")
+    console.print(f"  Repo: {repo_path}")
+    console.print(f"  Mode: {repo_mode}")
+    console.print(f"  Spec file: {spec_path}")
+    console.print("  Purpose: convert CAM memory + your request into an executable creation task")
+
+    await _quickstart_async(
+        repo_path=repo_path,
+        title=title,
+        description=description,
+        priority=priority,
+        task_type=task_type,
+        agent=agent,
+        execution_steps=spec_payload["execution_steps"],
+        acceptance_checks=spec_payload["acceptance_checks"],
+        preview=preview,
+        execute=execute,
+        config_path=config_path,
+    )
+    console.print("\n[dim]Next: run `cam validate --spec-file "
+                  f"{spec_path}` then `cam benchmark`.[/dim]")
+
+
 @app.command(name="add-goal")
 def add_goal(
     repo: str = typer.Argument(..., help="Path to the repository this goal is for"),
@@ -1406,6 +2319,16 @@ def add_goal(
     agent: Optional[str] = typer.Option(
         None, "--agent", "-a",
         help="Preferred agent: claude, codex, gemini, grok (or leave blank for auto-routing)",
+    ),
+    step: list[str] = typer.Option(
+        [],
+        "--step",
+        help="Execution command to run for this goal (repeat --step for multiple commands)",
+    ),
+    check: list[str] = typer.Option(
+        [],
+        "--check",
+        help="Acceptance check command for this goal (repeat --check for multiple commands)",
     ),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -1438,7 +2361,15 @@ def add_goal(
         raise typer.Exit(1)
 
     asyncio.run(_add_goal_async(
-        repo_path, title, description, priority.lower(), task_type, agent, config,
+        repo_path,
+        title,
+        description,
+        priority.lower(),
+        task_type,
+        agent,
+        step,
+        check,
+        config,
     ))
 
 
@@ -1449,6 +2380,8 @@ async def _add_goal_async(
     priority: str,
     task_type: str,
     agent: Optional[str],
+    execution_steps: list[str],
+    acceptance_checks: list[str],
     config_path: Optional[str],
 ) -> None:
     from claw.core.factory import ClawFactory
@@ -1479,6 +2412,8 @@ async def _add_goal_async(
             priority=priority_map[priority],
             task_type=task_type,
             recommended_agent=recommended,
+            execution_steps=[s.strip() for s in execution_steps if s.strip()],
+            acceptance_checks=[s.strip() for s in acceptance_checks if s.strip()],
         )
         await ctx.repository.create_task(task)
 
@@ -1488,8 +2423,238 @@ async def _add_goal_async(
         console.print(f"  Priority: {priority} ({priority_map[priority]})")
         console.print(f"  Type: {task_type}")
         console.print(f"  Agent: {recommended}")
+        if task.execution_steps:
+            console.print(f"  Steps: {len(task.execution_steps)}")
+        if task.acceptance_checks:
+            console.print(f"  Checks: {len(task.acceptance_checks)}")
         console.print(f"  Task ID: {task.id}")
-        console.print(f"\nRun [bold]claw enhance {repo_path}[/bold] to execute this goal.")
+        console.print(f"\nRun [bold]cam enhance {repo_path}[/bold] to execute this goal.")
+
+    finally:
+        await ctx.close()
+
+
+@app.command()
+def ideate(
+    directory: str = typer.Argument(..., help="Path to directory containing candidate repos"),
+    focus: str = typer.Option("", "--focus", "-f", help="What kind of app should CAM invent?"),
+    ideas: int = typer.Option(3, "--ideas", min=1, max=8, help="How many app concepts to generate"),
+    max_repos: int = typer.Option(4, "--max-repos", help="Maximum repos to use as ideation inputs"),
+    depth: int = typer.Option(3, "--depth", "-d", help="Max directory depth for repo discovery"),
+    agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Preferred ideation agent: claude, codex, gemini, grok"),
+    promote: int = typer.Option(0, "--promote", help="Promote idea N into a real cam create task/spec"),
+    target_repo: Optional[str] = typer.Option(None, "--target-repo", help="Target repo path for promoted idea"),
+    repo_mode: str = typer.Option("new", "--repo-mode", help="Repo mode for promoted idea: fixed, augment, new"),
+    max_minutes: int = typer.Option(10, "--max-minutes", help="Wall-clock time guardrail for ideation"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Generate novel app concepts from CAM memory plus candidate repos."""
+    _setup_logging(False)
+
+    dir_path = Path(directory).resolve()
+    if not dir_path.exists():
+        console.print(f"[red]Directory does not exist: {dir_path}[/red]")
+        raise typer.Exit(1)
+
+    if agent and agent not in ("claude", "codex", "gemini", "grok"):
+        console.print(f"[red]Invalid agent '{agent}'. Use: claude, codex, gemini, grok[/red]")
+        raise typer.Exit(1)
+
+    if repo_mode not in ("fixed", "augment", "new"):
+        console.print("[red]--repo-mode must be one of: fixed, augment, new[/red]")
+        raise typer.Exit(1)
+
+    if promote < 0:
+        console.print("[red]--promote must be 0 or a 1-based idea index[/red]")
+        raise typer.Exit(1)
+
+    if max_minutes < 1:
+        console.print("[red]--max-minutes must be at least 1[/red]")
+        raise typer.Exit(1)
+
+    try:
+        asyncio.run(asyncio.wait_for(
+            _ideate_async(
+                dir_path=dir_path,
+                focus=focus.strip(),
+                idea_count=ideas,
+                max_repos=max_repos,
+                depth=depth,
+                preferred_agent=agent,
+                promote_index=promote,
+                target_repo=Path(target_repo).resolve() if target_repo else None,
+                repo_mode=repo_mode,
+                config_path=config,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Ideation timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
+
+
+async def _ideate_async(
+    dir_path: Path,
+    focus: str,
+    idea_count: int,
+    max_repos: int,
+    depth: int,
+    preferred_agent: Optional[str],
+    promote_index: int,
+    target_repo: Optional[Path],
+    repo_mode: str,
+    config_path: Optional[str],
+) -> None:
+    from claw.core.factory import ClawFactory
+    from claw.core.models import Project, Task, TaskStatus
+    from claw.dispatcher import DEFAULT_AGENT, STATIC_ROUTING
+    from claw.llm.client import LLMMessage
+    from claw.miner import _dedup_iterations, _discover_repos
+
+    candidates = _discover_repos(dir_path, max_depth=depth)
+    if not candidates:
+        console.print("[yellow]No repositories or source trees found for ideation.[/yellow]")
+        return
+
+    candidates, _ = _dedup_iterations(candidates)
+    selected = candidates[:max_repos]
+
+    workspace_dir = target_repo if target_repo else ROOT_DIR
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p, workspace_dir=workspace_dir)
+
+    try:
+        model = _select_ideation_model(ctx.config, preferred_agent)
+
+        repo_contexts = [_summarize_repo_tree(candidate.path) for candidate in selected]
+        repo_findings: dict[str, list[dict[str, Any]]] = {}
+        for candidate in selected:
+            existing = await ctx.repository.get_methodologies_by_tag(f"source:{candidate.name}", limit=6)
+            repo_findings[candidate.name] = [_summarize_methodology(m) for m in existing[:6]]
+
+        high_potential = await ctx.repository.get_high_potential_methodologies(limit=8, min_potential=0.35)
+        most_novel = await ctx.repository.get_most_novel_methodologies(limit=8, min_novelty=0.35)
+        action_templates = await ctx.repository.list_action_templates(limit=8)
+        cam_memory = {
+            "high_potential": [_summarize_methodology(m) for m in high_potential],
+            "most_novel": [_summarize_methodology(m) for m in most_novel],
+            "action_templates": [
+                {
+                    "title": t.title,
+                    "pattern": t.problem_pattern[:220],
+                    "source_repo": t.source_repo,
+                    "confidence": t.confidence,
+                }
+                for t in action_templates
+            ],
+        }
+
+        prompt = _build_ideation_prompt(
+            focus=focus,
+            repo_contexts=repo_contexts,
+            repo_findings=repo_findings,
+            cam_memory=cam_memory,
+            idea_count=idea_count,
+        )
+
+        payload = await ctx.llm_client.complete_json(
+            messages=[LLMMessage(role="user", content=prompt)],
+            model=model,
+            temperature=0.4,
+        )
+        normalized_ideas = _normalize_ideation_payload(payload, idea_count)
+        if not normalized_ideas:
+            console.print("[red]Ideation returned no usable ideas.[/red]")
+            raise typer.Exit(1)
+
+        json_path, md_path = _write_ideation_artifacts(
+            source_dir=dir_path,
+            focus=focus,
+            ideas=normalized_ideas,
+            raw_payload=payload,
+        )
+
+        console.print("\n[bold]CAM Ideation[/bold]")
+        console.print(f"  Source directory: {dir_path}")
+        console.print(f"  Repos used: {len(selected)}")
+        console.print(f"  Model: {model}")
+        console.print(f"  JSON: {json_path}")
+        console.print(f"  Markdown: {md_path}")
+
+        table = Table(title="Novel App Concepts")
+        table.add_column("#", justify="right", width=3)
+        table.add_column("Title", style="cyan", max_width=28)
+        table.add_column("Tagline", style="green", max_width=34)
+        table.add_column("Repos", style="magenta", max_width=24)
+        table.add_column("Confidence", justify="right", style="yellow", width=10)
+        for idx, idea in enumerate(normalized_ideas, start=1):
+            table.add_row(
+                str(idx),
+                idea["title"],
+                idea["tagline"] or idea["problem"][:60],
+                ", ".join(idea["repos_used"][:3]),
+                f"{idea['build_confidence']:.2f}",
+            )
+        console.print(table)
+
+        if promote_index:
+            if promote_index < 1 or promote_index > len(normalized_ideas):
+                console.print(f"[red]--promote must be between 1 and {len(normalized_ideas)}[/red]")
+                raise typer.Exit(1)
+            if target_repo is None:
+                console.print("[red]--target-repo is required when using --promote[/red]")
+                raise typer.Exit(1)
+
+            chosen = normalized_ideas[promote_index - 1]
+            if repo_mode == "new":
+                target_repo.mkdir(parents=True, exist_ok=True)
+            elif not target_repo.exists():
+                console.print(f"[red]Target repo does not exist: {target_repo}[/red]")
+                raise typer.Exit(1)
+
+            spec_payload = _build_create_spec(
+                repo_path=target_repo,
+                request=chosen["app_request"],
+                repo_mode=repo_mode,
+                title=chosen["title"],
+                task_type="architecture",
+                execution_steps=chosen["execution_steps"],
+                acceptance_checks=chosen["acceptance_checks"],
+                spec_items=chosen["spec_items"],
+            )
+            spec_path = _write_create_spec(spec_payload)
+            description = _build_create_description(
+                request=chosen["app_request"],
+                repo_mode=repo_mode,
+                spec_path=spec_path,
+                spec_items=chosen["spec_items"],
+            )
+
+            project = await ctx.repository.get_project_by_name(target_repo.name)
+            if project is None:
+                project = Project(name=target_repo.name, repo_path=str(target_repo))
+                await ctx.repository.create_project(project)
+
+            recommended = STATIC_ROUTING.get("architecture", DEFAULT_AGENT)
+            task = Task(
+                project_id=project.id,
+                title=chosen["title"][:200],
+                description=description,
+                status=TaskStatus.PENDING,
+                priority=8,
+                task_type="architecture",
+                recommended_agent=recommended,
+                execution_steps=chosen["execution_steps"],
+                acceptance_checks=chosen["acceptance_checks"],
+            )
+            await ctx.repository.create_task(task)
+
+            console.print("\n[green]Promoted idea into a create task.[/green]")
+            console.print(f"  Idea: {chosen['title']}")
+            console.print(f"  Target repo: {target_repo}")
+            console.print(f"  Spec file: {spec_path}")
+            console.print(f"  Task ID: {task.id}")
+            console.print(f"\n[dim]Next: run `cam runbook {task.id}` or `cam enhance {target_repo}`.[/dim]")
 
     finally:
         await ctx.close()
@@ -1505,6 +2670,7 @@ def mine(
     depth: int = typer.Option(6, "--depth", "-d", help="Max directory depth for repo discovery"),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Dedup repo iterations by canonical name"),
     scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
+    max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -1539,14 +2705,25 @@ def mine(
         console.print("[red]--depth must be at least 1[/red]")
         raise typer.Exit(1)
 
+    if max_minutes < 1:
+        console.print("[red]--max-minutes must be at least 1[/red]")
+        raise typer.Exit(1)
+
     if scan_only:
         _mine_scan_only(dir_path, depth, dedup, max_repos)
         return
 
-    asyncio.run(_mine_async(
-        dir_path, target, max_repos, min_relevance, tasks, config,
-        depth, dedup,
-    ))
+    try:
+        asyncio.run(asyncio.wait_for(
+            _mine_async(
+                dir_path, target, max_repos, min_relevance, tasks, config,
+                depth, dedup,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Mining timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
 
 
 def _mine_scan_only(
@@ -1569,7 +2746,7 @@ def _mine_scan_only(
     candidates = _discover_repos(dir_path, max_depth=depth)
 
     if not candidates:
-        console.print("[yellow]No git repos found.[/yellow]")
+        console.print("[yellow]No repositories or source trees found.[/yellow]")
         return
 
     skipped: list = []
@@ -1586,6 +2763,7 @@ def _mine_scan_only(
     table.add_column("Size", justify="right", style="dim", width=8)
     table.add_column("Last Modified", style="dim", width=18)
     table.add_column("Depth", justify="right", style="dim", width=5)
+    table.add_column("Kind", style="magenta", width=11)
     table.add_column("Status", max_width=20)
 
     skipped_names = {id(s[0]) for s in skipped}
@@ -1611,7 +2789,7 @@ def _mine_scan_only(
 
         table.add_row(
             str(i), c.name, c.canonical_name, str(c.file_count),
-            size_str, ts_str, str(c.depth), status,
+            size_str, ts_str, str(c.depth), c.source_kind, status,
         )
 
     console.print(table)
@@ -1760,6 +2938,206 @@ async def _mine_async(
         await ctx.close()
 
 
+@app.command(name="forge-export")
+def forge_export(
+    out: str = typer.Option("data/cam_knowledge_pack.jsonl", "--out", help="Output JSONL knowledge pack path"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override CAM database path"),
+    max_methodologies: int = typer.Option(300, "--max-methodologies", help="Maximum methodologies to export"),
+    max_tasks: int = typer.Option(300, "--max-tasks", help="Maximum tasks to export"),
+    max_minutes: int = typer.Option(5, "--max-minutes", help="Wall-clock time guardrail for the export"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Export CAM memory into a standalone Forge knowledge pack."""
+    from claw.core.config import load_config
+
+    _setup_logging(verbose)
+    cfg = load_config(Path(config) if config else None)
+    db_path = db or cfg.database.db_path
+    script_path = ROOT_DIR / "scripts" / "export_cam_knowledge_pack.py"
+
+    console.print("\n[bold]CAM Forge Export[/bold]")
+    console.print(f"  Database: {db_path}")
+    console.print(f"  Out: {out}")
+    console.print(f"  Max methodologies: {max_methodologies}")
+    console.print(f"  Max tasks: {max_tasks}")
+    console.print(f"  Time guardrail: {max_minutes} minute(s)")
+
+    result = _run_python_script_with_timeout(
+        script_path=script_path,
+        args=[
+            "--db", db_path,
+            "--out", out,
+            "--max-methodologies", str(max_methodologies),
+            "--max-tasks", str(max_tasks),
+        ],
+        max_minutes=max_minutes,
+    )
+
+    if result.returncode != 0:
+        console.print(f"[red]Export failed with exit code {result.returncode}[/red]")
+        if result.stderr.strip():
+            console.print(result.stderr.strip())
+        raise typer.Exit(result.returncode)
+
+    payload = json.loads(result.stdout)
+    console.print("\n[green]Knowledge pack exported.[/green]")
+    console.print(f"  Total: {payload['total']}")
+    console.print(f"  Methodologies: {payload['methodologies']}")
+    console.print(f"  Tasks: {payload['tasks']}")
+    console.print(f"  File: {payload['out']}")
+
+
+@app.command(name="forge-benchmark")
+def forge_benchmark(
+    repo: str = typer.Option("tests/fixtures/embedding_forge/repo", "--repo", help="Fixture or target repo path"),
+    note: str = typer.Option("tests/fixtures/embedding_forge/note.md", "--note", help="Note path"),
+    knowledge_pack: str = typer.Option(
+        "tests/fixtures/embedding_forge/knowledge_pack.jsonl",
+        "--knowledge-pack",
+        help="Knowledge pack JSONL path",
+    ),
+    out: str = typer.Option("data/forge_benchmark_fixture", "--out", help="Output benchmark directory"),
+    max_minutes: int = typer.Option(5, "--max-minutes", help="Wall-clock time guardrail for the benchmark"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+) -> None:
+    """Run the standalone Forge regression benchmark with a wall-clock limit."""
+    _setup_logging(verbose)
+    script_path = ROOT_DIR / "apps" / "embedding_forge" / "benchmark_regression.py"
+
+    console.print("\n[bold]CAM Forge Benchmark[/bold]")
+    console.print(f"  Repo: {repo}")
+    console.print(f"  Note: {note}")
+    console.print(f"  Knowledge pack: {knowledge_pack}")
+    console.print(f"  Out: {out}")
+    console.print(f"  Time guardrail: {max_minutes} minute(s)")
+
+    result = _run_python_script_with_timeout(
+        script_path=script_path,
+        args=[
+            "--repo", repo,
+            "--note", note,
+            "--knowledge-pack", knowledge_pack,
+            "--out", out,
+        ],
+        max_minutes=max_minutes,
+    )
+
+    if result.returncode != 0:
+        console.print(f"[red]Benchmark failed with exit code {result.returncode}[/red]")
+        if result.stderr.strip():
+            console.print(result.stderr.strip())
+        raise typer.Exit(result.returncode)
+
+    payload = json.loads(result.stdout)
+    best = payload["best"]
+    console.print("\n[green]Benchmark complete.[/green]")
+    console.print(f"  Status: {payload['status']}")
+    console.print(f"  Docs: {payload['docs_total']}")
+    console.print(f"  Best lift: {best['hit_rate_lift_pct']:.2f}%")
+    console.print(
+        "  Best config: "
+        f"anchor_dim={best['anchor_dim']} residual_dim={best['residual_dim']} "
+        f"anchor_weight={best['anchor_weight']} residual_weight={best['residual_weight']}"
+    )
+    console.print(f"  Summary: {Path(out) / 'benchmark_summary.json'}")
+
+
+@app.command()
+def validate(
+    spec_file: str = typer.Option(..., "--spec-file", help="Creation spec JSON to validate against"),
+    max_minutes: int = typer.Option(5, "--max-minutes", help="Wall-clock time guardrail for validation"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+) -> None:
+    """Validate a created repo against its saved spec and acceptance checks."""
+    _setup_logging(verbose)
+
+    if max_minutes < 1:
+        console.print("[red]--max-minutes must be at least 1[/red]")
+        raise typer.Exit(1)
+
+    spec_path = Path(spec_file).resolve()
+    if not spec_path.exists():
+        console.print(f"[red]Spec file does not exist: {spec_path}[/red]")
+        raise typer.Exit(1)
+
+    spec_payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    passed, summary = _validate_create_spec(spec_payload, max_minutes=max_minutes)
+
+    console.print("\n[bold]CAM Validate[/bold]")
+    console.print(f"  Spec file: {spec_path}")
+    console.print(f"  Repo: {summary['repo']}")
+    console.print(f"  Checks run: {summary['checks_run']}")
+    if summary["manual_checks"]:
+        console.print(f"  Manual checks: {len(summary['manual_checks'])}")
+
+    if passed:
+        console.print("\n[green]Validation passed.[/green]")
+    else:
+        console.print("\n[red]Validation failed.[/red]")
+        for finding in summary["findings"]:
+            console.print(f"  - {finding}")
+
+    for check in summary["checks"]:
+        status = "[green]OK[/green]" if check["ok"] else "[red]FAIL[/red]"
+        console.print(f"  {status} {check['command']}")
+
+    for check in summary["manual_checks"]:
+        console.print(f"  [yellow]MANUAL[/yellow] {check}")
+
+    if not passed:
+        raise typer.Exit(2)
+
+
+@app.command()
+def benchmark(
+    repo: str = typer.Option("tests/fixtures/embedding_forge/repo", "--repo", help="Fixture or target repo path"),
+    note: str = typer.Option("tests/fixtures/embedding_forge/note.md", "--note", help="Note path"),
+    knowledge_pack: str = typer.Option(
+        "tests/fixtures/embedding_forge/knowledge_pack.jsonl",
+        "--knowledge-pack",
+        help="Knowledge pack JSONL path",
+    ),
+    out: str = typer.Option("data/forge_benchmark_fixture", "--out", help="Output benchmark directory"),
+    max_minutes: int = typer.Option(5, "--max-minutes", help="Wall-clock time guardrail for the benchmark"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+) -> None:
+    """Benchmark Forge output."""
+    _setup_logging(verbose)
+    script_path = ROOT_DIR / "apps" / "embedding_forge" / "benchmark_regression.py"
+
+    console.print("\n[bold]CAM Benchmark[/bold]")
+    console.print(f"  Repo: {repo}")
+    console.print(f"  Note: {note}")
+    console.print(f"  Knowledge pack: {knowledge_pack}")
+    console.print(f"  Out: {out}")
+    console.print(f"  Time guardrail: {max_minutes} minute(s)")
+
+    result = _run_python_script_with_timeout(
+        script_path=script_path,
+        args=[
+            "--repo", repo,
+            "--note", note,
+            "--knowledge-pack", knowledge_pack,
+            "--out", out,
+        ],
+        max_minutes=max_minutes,
+    )
+
+    if result.returncode != 0:
+        console.print(f"[red]Benchmark failed with exit code {result.returncode}[/red]")
+        if result.stderr.strip():
+            console.print(result.stderr.strip())
+        raise typer.Exit(result.returncode)
+
+    payload = json.loads(result.stdout)
+    best = payload["best"]
+    console.print("\n[green]Benchmark complete.[/green]")
+    console.print(f"  Status: {payload['status']}")
+    console.print(f"  Best lift: {best['hit_rate_lift_pct']:.2f}%")
+    console.print(f"  Summary: {Path(out) / 'benchmark_summary.json'}")
+
+
 @app.command()
 def govern(
     action: str = typer.Argument(
@@ -1802,14 +3180,15 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
     try:
         if action == "stats":
             stats = await governor.get_storage_stats()
+            active_methodologies = sum(v for k, v in stats.by_state.items() if k != "dead")
             console.print("\n[bold]Memory Governance Stats[/bold]")
             console.print(f"  Total methodologies:  {stats.total_methodologies}")
-            console.print(f"  Active (non-dead):    {stats.active_methodologies}")
+            console.print(f"  Active (non-dead):    {active_methodologies}")
 
             table = Table(title="Methodologies by State")
             table.add_column("State", style="bold")
             table.add_column("Count", justify="right")
-            for state, count in sorted(stats.state_counts.items()):
+            for state, count in sorted(stats.by_state.items()):
                 style = {
                     "thriving": "green",
                     "viable": "cyan",
@@ -1822,11 +3201,11 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
             console.print(table)
 
             quota = cfg.governance.max_methodologies
-            usage_pct = (stats.active_methodologies / quota * 100) if quota else 0
+            usage_pct = (active_methodologies / quota * 100) if quota else 0
             bar_style = "green" if usage_pct < 80 else ("yellow" if usage_pct < 100 else "red")
-            console.print(f"  Quota: {stats.active_methodologies}/{quota} ({usage_pct:.1f}%) [{bar_style}]")
+            console.print(f"  Quota: {active_methodologies}/{quota} ({usage_pct:.1f}%) [{bar_style}]")
             console.print(f"  DB size: {stats.db_size_bytes / 1024 / 1024:.2f} MB")
-            console.print(f"  Episodes: {stats.episode_count}")
+            console.print(f"  Episodes: {stats.total_episodes}")
 
         elif action == "sweep":
             console.print("[bold]Running full governance sweep...[/bold]")
@@ -2047,6 +3426,8 @@ def setup(
     console.print(f"  claw add-goal <repo>     — add a custom task")
     console.print(f"  claw enhance <repo>      — run the full pipeline")
     console.print(f"  claw fleet-enhance <dir> — process a fleet of repos")
+    console.print(f"  claw forge-export        — export CAM memory for standalone Forge")
+    console.print(f"  claw forge-benchmark     — benchmark Forge with time guardrails")
 
 
 @app.command()
@@ -2279,6 +3660,568 @@ async def _prism_demo_async(verbose: bool) -> None:
 
     console.print(f"\n[bold green]PRISM demonstration complete.[/bold green]")
     console.print("[dim]PRISM adds hierarchical (p-adic), fault-tolerant (RNS), and uncertainty-aware (vMF) signals to standard cosine similarity.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# kb — Knowledge Browser command group
+# ---------------------------------------------------------------------------
+
+kb_app = typer.Typer(
+    name="kb",
+    help="Knowledge browser — explore assimilated capabilities, synergies, and domains",
+    no_args_is_help=True,
+)
+app.add_typer(kb_app)
+
+
+async def _kb_engine():
+    """Shared async setup for kb commands — returns (engine, repository)."""
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.db.repository import Repository
+
+    config = load_config()
+    engine = DatabaseEngine(config.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+    repository = Repository(engine)
+    return engine, repository
+
+
+@kb_app.command()
+def insights(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """THE showpiece — top capabilities, domain map, synergy highlights, score distributions."""
+    asyncio.run(_kb_insights_async())
+
+
+async def _kb_insights_async() -> None:
+    from rich.panel import Panel
+
+    engine, repository = await _kb_engine()
+
+    try:
+        # Header: total count + source repos
+        total = await repository.count_methodologies()
+        if total == 0:
+            console.print("[yellow]No capabilities in knowledge base. Run 'cam mine <dir>' first.[/yellow]")
+            return
+
+        state_counts = await repository.count_methodologies_by_state()
+        active = sum(v for k, v in state_counts.items() if k != "dead")
+
+        # Count distinct source repos from tags (source:reponame)
+        import json as _json
+        _all_meths = await repository.engine.fetch_all(
+            "SELECT tags FROM methodologies WHERE tags IS NOT NULL"
+        )
+        _sources = set()
+        for _r in _all_meths:
+            _tags = _json.loads(_r["tags"]) if isinstance(_r["tags"], str) else (_r["tags"] or [])
+            for _t in _tags:
+                if isinstance(_t, str) and _t.startswith("source:"):
+                    _sources.add(_t[7:])
+        repo_count = len(_sources) if _sources else "?"
+
+        console.print(Panel.fit(
+            f"[bold cyan]CAM Knowledge Base[/bold cyan]\n"
+            f"[bold]{total:,}[/bold] capabilities from [bold]{repo_count}[/bold] repos  |  "
+            f"[bold]{active:,}[/bold] active",
+            border_style="cyan",
+        ))
+
+        # Score distributions
+        dist = await repository.get_novelty_potential_distribution()
+        if dist["total"] > 0:
+            score_table = Table(title="Score Distributions")
+            score_table.add_column("Metric", style="bold", width=18)
+            score_table.add_column("Avg", justify="right", width=8)
+            score_table.add_column("Min", justify="right", width=8)
+            score_table.add_column("Max", justify="right", width=8)
+            score_table.add_column("Scored", justify="right", width=8)
+            score_table.add_row(
+                "Novelty",
+                f"{dist['avg_novelty']:.3f}",
+                f"{dist['min_novelty']:.3f}",
+                f"{dist['max_novelty']:.3f}",
+                str(dist["total"]),
+            )
+            score_table.add_row(
+                "Potential",
+                f"{dist['avg_potential']:.3f}",
+                f"{dist['min_potential']:.3f}",
+                f"{dist['max_potential']:.3f}",
+                str(dist["total"]),
+            )
+            console.print(score_table)
+
+        # Lifecycle state table
+        if state_counts:
+            state_table = Table(title="Lifecycle States")
+            state_table.add_column("State", style="bold", width=14)
+            state_table.add_column("Count", justify="right", width=8)
+            state_table.add_column("", width=30)
+            state_colors = {
+                "thriving": "green", "viable": "cyan", "embryonic": "yellow",
+                "declining": "magenta", "dormant": "dim", "dead": "red",
+            }
+            for state in ["thriving", "viable", "embryonic", "declining", "dormant", "dead"]:
+                count = state_counts.get(state, 0)
+                if count == 0:
+                    continue
+                color = state_colors.get(state, "")
+                bar_len = min(int(count / max(state_counts.values()) * 25), 25)
+                bar = "█" * bar_len
+                state_table.add_row(
+                    f"[{color}]{state}[/{color}]" if color else state,
+                    str(count),
+                    f"[{color}]{bar}[/{color}]" if color else bar,
+                )
+            console.print(state_table)
+
+        # Top 5 Novel
+        top_novel = await repository.get_most_novel_methodologies(limit=5)
+        if top_novel:
+            novel_table = Table(title="Top 5 Novel Capabilities")
+            novel_table.add_column("ID", width=8)
+            novel_table.add_column("Description", max_width=50)
+            novel_table.add_column("Novelty", justify="right", width=8, style="bold yellow")
+            novel_table.add_column("Domains", max_width=25)
+            for m in top_novel:
+                domains = ", ".join((m.capability_data or {}).get("domain", [])[:3])
+                score = m.novelty_score or 0
+                score_style = "bold green" if score >= 0.7 else ("yellow" if score >= 0.4 else "dim")
+                novel_table.add_row(
+                    m.id[:8],
+                    m.problem_description[:50],
+                    f"[{score_style}]{score:.3f}[/{score_style}]",
+                    domains,
+                )
+            console.print(novel_table)
+
+        # Top 5 High-Potential
+        top_potential = await repository.get_high_potential_methodologies(limit=5)
+        if top_potential:
+            pot_table = Table(title="Top 5 High-Potential Capabilities")
+            pot_table.add_column("ID", width=8)
+            pot_table.add_column("Description", max_width=50)
+            pot_table.add_column("Potential", justify="right", width=8, style="bold cyan")
+            pot_table.add_column("Domains", max_width=25)
+            for m in top_potential:
+                domains = ", ".join((m.capability_data or {}).get("domain", [])[:3])
+                score = m.potential_score or 0
+                score_style = "bold green" if score >= 0.7 else ("cyan" if score >= 0.4 else "dim")
+                pot_table.add_row(
+                    m.id[:8],
+                    m.problem_description[:50],
+                    f"[{score_style}]{score:.3f}[/{score_style}]",
+                    domains,
+                )
+            console.print(pot_table)
+
+        # Domain Landscape — Top 15
+        domain_dist = await repository.get_domain_distribution()
+        if domain_dist:
+            sorted_domains = sorted(domain_dist.items(), key=lambda x: -x[1])[:15]
+            max_count = sorted_domains[0][1] if sorted_domains else 1
+            domain_table = Table(title="Domain Landscape (Top 15)")
+            domain_table.add_column("Domain", style="cyan", max_width=25)
+            domain_table.add_column("Count", justify="right", width=6)
+            domain_table.add_column("", width=30)
+            for domain, count in sorted_domains:
+                bar_len = min(int(count / max_count * 25), 25)
+                bar = "█" * bar_len
+                domain_table.add_row(domain, str(count), f"[cyan]{bar}[/cyan]")
+            console.print(domain_table)
+
+        # Synergy Highlights — Top 5
+        top_edges = await repository.get_top_synergy_edges(limit=5)
+        if top_edges:
+            syn_table = Table(title="Synergy Highlights (Top 5)")
+            syn_table.add_column("Score", justify="right", width=7, style="bold green")
+            syn_table.add_column("Type", width=14)
+            syn_table.add_column("Capability A", max_width=35)
+            syn_table.add_column("Capability B", max_width=35)
+            syn_table.add_column("Cross?", width=6)
+            for edge in top_edges:
+                is_cross = bool(
+                    set(edge["cap_a_domains"]) and set(edge["cap_b_domains"])
+                    and not set(edge["cap_a_domains"]) & set(edge["cap_b_domains"])
+                )
+                cross_str = "[bold yellow]YES[/bold yellow]" if is_cross else ""
+                syn_table.add_row(
+                    f"{edge['synergy_score']:.3f}",
+                    edge["synergy_type"][:14],
+                    edge["cap_a_summary"][:35],
+                    edge["cap_b_summary"][:35],
+                    cross_str,
+                )
+            console.print(syn_table)
+
+        # Capability Type Distribution
+        type_dist = await repository.get_type_distribution()
+        if type_dist:
+            sorted_types = sorted(type_dist.items(), key=lambda x: -x[1])[:10]
+            type_table = Table(title="Capability Types (Top 10)")
+            type_table.add_column("Type", style="yellow", max_width=25)
+            type_table.add_column("Count", justify="right", width=6)
+            for ctype, count in sorted_types:
+                type_table.add_row(ctype, str(count))
+            console.print(type_table)
+
+    finally:
+        await engine.close()
+
+
+@kb_app.command()
+def search(
+    query: str = typer.Argument(..., help="Natural language search query"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Search capabilities with natural language (hybrid vector + FTS5)."""
+    asyncio.run(_kb_search_async(query, limit))
+
+
+async def _kb_search_async(query: str, limit: int) -> None:
+    engine, repository = await _kb_engine()
+
+    try:
+        total = await repository.count_methodologies()
+        if total == 0:
+            console.print("[yellow]No capabilities in knowledge base. Run 'cam mine <dir>' first.[/yellow]")
+            return
+
+        # Try FTS5 text search (always works, no embedding engine required)
+        text_results = await repository.search_methodologies_text(query, limit=limit)
+
+        if not text_results:
+            console.print(f"[yellow]No results for '{query}'.[/yellow]")
+            return
+
+        console.print(f"\n[bold]Search results for:[/bold] [cyan]{query}[/cyan]  ({len(text_results)} matches)\n")
+
+        table = Table(show_lines=True)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("ID", width=8)
+        table.add_column("Description", max_width=50)
+        table.add_column("Domains", max_width=20)
+        table.add_column("Novelty", justify="right", width=8)
+        table.add_column("Potential", justify="right", width=8)
+        table.add_column("State", width=10)
+
+        state_colors = {
+            "thriving": "green", "viable": "cyan", "embryonic": "yellow",
+            "declining": "magenta", "dormant": "dim", "dead": "red",
+        }
+
+        for i, m in enumerate(text_results, 1):
+            domains = ", ".join((m.capability_data or {}).get("domain", [])[:3])
+            novelty_str = f"{m.novelty_score:.3f}" if m.novelty_score is not None else "-"
+            potential_str = f"{m.potential_score:.3f}" if m.potential_score is not None else "-"
+            color = state_colors.get(m.lifecycle_state, "")
+            state_str = f"[{color}]{m.lifecycle_state}[/{color}]" if color else m.lifecycle_state
+
+            table.add_row(
+                str(i),
+                m.id[:8],
+                m.problem_description[:50],
+                domains,
+                novelty_str,
+                potential_str,
+                state_str,
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Use 'cam kb capability <id>' for full details.[/dim]")
+
+    finally:
+        await engine.close()
+
+
+@kb_app.command()
+def capability(
+    cap_id: str = typer.Argument(..., help="Capability ID or ID prefix (6+ chars)"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Deep dive on a single capability — full data, synergies, and related."""
+    asyncio.run(_kb_capability_async(cap_id))
+
+
+async def _kb_capability_async(cap_id: str) -> None:
+    from rich.panel import Panel
+
+    engine, repository = await _kb_engine()
+
+    try:
+        # Try prefix match
+        m = await repository.get_methodology_by_prefix(cap_id)
+        if m is None:
+            console.print(f"[red]No capability found matching '{cap_id}'.[/red]")
+            console.print("[dim]Provide at least 6 characters of the ID.[/dim]")
+            return
+
+        # Header
+        state_colors = {
+            "thriving": "green", "viable": "cyan", "embryonic": "yellow",
+            "declining": "magenta", "dormant": "dim", "dead": "red",
+        }
+        color = state_colors.get(m.lifecycle_state, "")
+        state_str = f"[{color}]{m.lifecycle_state}[/{color}]" if color else m.lifecycle_state
+
+        console.print(Panel.fit(
+            f"[bold cyan]Capability Detail[/bold cyan]\n"
+            f"ID: [bold]{m.id}[/bold]\n"
+            f"State: {state_str}",
+            border_style="cyan",
+        ))
+
+        # Problem description
+        console.print(f"\n[bold]Problem Description[/bold]")
+        console.print(f"  {m.problem_description}")
+
+        # Methodology notes
+        if m.methodology_notes:
+            notes = m.methodology_notes[:500]
+            if len(m.methodology_notes) > 500:
+                notes += "..."
+            console.print(f"\n[bold]Notes[/bold]")
+            console.print(f"  {notes}")
+
+        # Scores
+        score_table = Table(title="Scores")
+        score_table.add_column("Metric", style="bold", width=16)
+        score_table.add_column("Value", justify="right", width=10)
+
+        fv = m.fitness_vector
+        if fv and "total" in fv:
+            score_table.add_row("Fitness (total)", f"{fv['total']:.3f}")
+        if m.novelty_score is not None:
+            score_table.add_row("Novelty", f"{m.novelty_score:.3f}")
+        if m.potential_score is not None:
+            score_table.add_row("Potential", f"{m.potential_score:.3f}")
+        score_table.add_row("Retrievals", str(m.retrieval_count))
+        score_table.add_row("Successes", str(m.success_count))
+        score_table.add_row("Failures", str(m.failure_count))
+        console.print(score_table)
+
+        # Capability data
+        cd = m.capability_data
+        if cd:
+            cap_table = Table(title="Capability Data")
+            cap_table.add_column("Field", style="bold", width=18)
+            cap_table.add_column("Value", max_width=50)
+            cap_table.add_row("Type", cd.get("capability_type", "-"))
+            cap_table.add_row("Domains", ", ".join(cd.get("domain", [])))
+            cap_table.add_row("IO Types In", ", ".join(str(t) for t in cd.get("io_types_in", [])))
+            cap_table.add_row("IO Types Out", ", ".join(str(t) for t in cd.get("io_types_out", [])))
+            cap_table.add_row("Composability", str(cd.get("composability_score", "-")))
+            cap_table.add_row("Standalone", str(cd.get("standalone_viable", "-")))
+            console.print(cap_table)
+
+        # Metadata
+        meta_parts = []
+        if m.tags:
+            meta_parts.append(f"Tags: {', '.join(m.tags)}")
+        if m.language:
+            meta_parts.append(f"Language: {m.language}")
+        if m.files_affected:
+            meta_parts.append(f"Files: {', '.join(m.files_affected[:5])}")
+        if m.methodology_type:
+            meta_parts.append(f"Type: {m.methodology_type}")
+        if m.scope:
+            meta_parts.append(f"Scope: {m.scope}")
+        if meta_parts:
+            console.print(f"\n[bold]Metadata[/bold]")
+            for part in meta_parts:
+                console.print(f"  {part}")
+
+        # Related synergies
+        links = await repository.get_methodology_links(m.id)
+        if links:
+            link_table = Table(title=f"Related Links ({len(links)})")
+            link_table.add_column("Type", width=14)
+            link_table.add_column("Linked To", width=10)
+            link_table.add_column("Strength", justify="right", width=8)
+            for link in links[:10]:
+                other_id = link["target_id"] if link["source_id"] == m.id else link["source_id"]
+                link_table.add_row(
+                    link["link_type"],
+                    other_id[:8] + "…",
+                    f"{link['strength']:.2f}",
+                )
+            console.print(link_table)
+            if len(links) > 10:
+                console.print(f"  [dim]... and {len(links) - 10} more links[/dim]")
+
+    finally:
+        await engine.close()
+
+
+@kb_app.command()
+def domains(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Domain landscape — which knowledge domains exist and bridge capabilities."""
+    asyncio.run(_kb_domains_async())
+
+
+async def _kb_domains_async() -> None:
+    from rich.panel import Panel
+
+    engine, repository = await _kb_engine()
+
+    try:
+        total = await repository.count_methodologies()
+        if total == 0:
+            console.print("[yellow]No capabilities in knowledge base. Run 'cam mine <dir>' first.[/yellow]")
+            return
+
+        domain_dist = await repository.get_domain_distribution()
+        if not domain_dist:
+            console.print("[yellow]No domain data. Capabilities may not have been enriched yet.[/yellow]")
+            return
+
+        sorted_domains = sorted(domain_dist.items(), key=lambda x: -x[1])
+        max_count = sorted_domains[0][1] if sorted_domains else 1
+        total_domains = len(sorted_domains)
+        total_tagged = sum(v for v in domain_dist.values())
+
+        console.print(Panel.fit(
+            f"[bold cyan]Domain Landscape[/bold cyan]\n"
+            f"[bold]{total_domains}[/bold] domains across [bold]{total:,}[/bold] capabilities\n"
+            f"[bold]{total_tagged:,}[/bold] total domain tags (capabilities can span multiple domains)",
+            border_style="cyan",
+        ))
+
+        # Full domain table
+        domain_table = Table(title=f"All Domains ({total_domains})")
+        domain_table.add_column("#", style="dim", width=3)
+        domain_table.add_column("Domain", style="cyan", max_width=30)
+        domain_table.add_column("Caps", justify="right", width=6)
+        domain_table.add_column("", width=30)
+
+        for i, (domain, count) in enumerate(sorted_domains, 1):
+            bar_len = min(int(count / max_count * 25), 25)
+            bar = "█" * bar_len
+            domain_table.add_row(str(i), domain, str(count), f"[cyan]{bar}[/cyan]")
+
+        console.print(domain_table)
+
+        # Bridge Capabilities — spanning 3+ domains
+        bridges = await repository.get_cross_domain_capabilities(min_domains=3, limit=15)
+        if bridges:
+            bridge_table = Table(title=f"Bridge Capabilities (3+ domains, showing {len(bridges)})")
+            bridge_table.add_column("ID", width=8)
+            bridge_table.add_column("Description", max_width=40)
+            bridge_table.add_column("Domains", max_width=40)
+            bridge_table.add_column("Novelty", justify="right", width=8)
+
+            for m in bridges:
+                domains = (m.capability_data or {}).get("domain", [])
+                novelty_str = f"{m.novelty_score:.3f}" if m.novelty_score is not None else "-"
+                bridge_table.add_row(
+                    m.id[:8],
+                    m.problem_description[:40],
+                    ", ".join(domains),
+                    novelty_str,
+                )
+            console.print(bridge_table)
+        else:
+            console.print("[dim]No bridge capabilities (spanning 3+ domains) found.[/dim]")
+
+    finally:
+        await engine.close()
+
+
+@kb_app.command(name="synergies")
+def kb_synergies(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of top synergy edges"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Cross-repo synthesis explorer — top synergy edges and connections."""
+    asyncio.run(_kb_synergies_async(limit))
+
+
+async def _kb_synergies_async(limit: int) -> None:
+    from rich.panel import Panel
+
+    engine, repository = await _kb_engine()
+
+    try:
+        stats = await repository.get_synergy_stats()
+        total_explored = stats["total_explored"]
+
+        if total_explored == 0:
+            console.print("[yellow]No synergy data. Run 'cam mine <dir>' to build the synergy graph.[/yellow]")
+            return
+
+        by_result = stats.get("by_result", {})
+        synergy_count = by_result.get("synergy", 0)
+
+        console.print(Panel.fit(
+            f"[bold cyan]Synergy Explorer[/bold cyan]\n"
+            f"[bold]{total_explored:,}[/bold] pairs explored  |  "
+            f"[bold]{synergy_count:,}[/bold] synergies found  |  "
+            f"[bold]{stats['synergy_edges']}[/bold] graph edges\n"
+            f"Avg synergy score: [bold]{stats['avg_synergy_score']:.4f}[/bold]",
+            border_style="cyan",
+        ))
+
+        # Exploration stats
+        stats_table = Table(title="Exploration Summary")
+        stats_table.add_column("Result", style="bold", width=18)
+        stats_table.add_column("Count", justify="right", width=10)
+        for result_type, count in sorted(by_result.items(), key=lambda x: -x[1]):
+            style = {"synergy": "green", "no_synergy": "dim", "stale": "yellow"}.get(result_type, "")
+            stats_table.add_row(
+                f"[{style}]{result_type}[/{style}]" if style else result_type,
+                str(count),
+            )
+        console.print(stats_table)
+
+        # Top synergy edges
+        top_edges = await repository.get_top_synergy_edges(limit=limit)
+        if top_edges:
+            edge_table = Table(title=f"Top {len(top_edges)} Synergy Edges")
+            edge_table.add_column("#", style="dim", width=3)
+            edge_table.add_column("Score", justify="right", width=7, style="bold green")
+            edge_table.add_column("Type", width=14)
+            edge_table.add_column("Capability A", max_width=35)
+            edge_table.add_column("Capability B", max_width=35)
+            edge_table.add_column("Cross?", width=6)
+
+            cross_count = 0
+            for i, edge in enumerate(top_edges, 1):
+                is_cross = bool(
+                    set(edge["cap_a_domains"]) and set(edge["cap_b_domains"])
+                    and not set(edge["cap_a_domains"]) & set(edge["cap_b_domains"])
+                )
+                if is_cross:
+                    cross_count += 1
+                cross_str = "[bold yellow]YES[/bold yellow]" if is_cross else ""
+                edge_table.add_row(
+                    str(i),
+                    f"{edge['synergy_score']:.3f}",
+                    edge["synergy_type"][:14],
+                    edge["cap_a_summary"][:35],
+                    edge["cap_b_summary"][:35],
+                    cross_str,
+                )
+            console.print(edge_table)
+
+            if cross_count > 0:
+                console.print(
+                    f"\n  [bold yellow]{cross_count}[/bold yellow] cross-domain synergies "
+                    f"(capabilities from different domains connected)"
+                )
+        else:
+            console.print("[dim]No synergy edges found.[/dim]")
+
+    finally:
+        await engine.close()
 
 
 def app_main() -> None:

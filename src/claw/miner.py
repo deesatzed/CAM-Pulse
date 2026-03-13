@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from claw.core.config import ClawConfig
-from claw.core.models import Methodology, Project, Task, TaskStatus
+from claw.core.models import ActionTemplate, Methodology, Project, Task, TaskStatus
 from claw.db.repository import Repository
 from claw.llm.client import LLMClient, LLMMessage, LLMResponse
 from claw.memory.semantic import SemanticMemory
@@ -69,6 +69,11 @@ class MiningFinding:
     augmentation_notes: str = ""
     relevance_score: float = 0.5
     language: str = "python"
+    execution_steps: list[str] = field(default_factory=list)
+    acceptance_checks: list[str] = field(default_factory=list)
+    rollback_steps: list[str] = field(default_factory=list)
+    preconditions: list[str] = field(default_factory=list)
+    action_template_id: Optional[str] = None
 
 
 @dataclass
@@ -99,11 +104,12 @@ class MiningReport:
 
 @dataclass
 class RepoCandidate:
-    """A discovered git repo with metadata for dedup decisions."""
+    """A discovered repo candidate with metadata for dedup decisions."""
     path: Path
     name: str                # directory name (e.g., "ace-forecaster-v3")
     canonical_name: str      # stripped name (e.g., "ace-forecaster")
     depth: int               # nesting depth from scan root
+    source_kind: str = "git" # "git" or "source_tree"
     file_count: int = 0      # number of source files (proxy for completeness)
     last_commit_ts: float = 0.0  # timestamp of last git activity
     total_bytes: int = 0     # approximate source size
@@ -237,6 +243,27 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             source_files = []
         source_files = [str(f) for f in source_files if f]
 
+        # Optional execution plan fields
+        execution_steps = item.get("execution_steps", [])
+        if not isinstance(execution_steps, list):
+            execution_steps = []
+        execution_steps = [str(s).strip() for s in execution_steps if str(s).strip()]
+
+        acceptance_checks = item.get("acceptance_checks", [])
+        if not isinstance(acceptance_checks, list):
+            acceptance_checks = []
+        acceptance_checks = [str(s).strip() for s in acceptance_checks if str(s).strip()]
+
+        rollback_steps = item.get("rollback_steps", [])
+        if not isinstance(rollback_steps, list):
+            rollback_steps = []
+        rollback_steps = [str(s).strip() for s in rollback_steps if str(s).strip()]
+
+        preconditions = item.get("preconditions", [])
+        if not isinstance(preconditions, list):
+            preconditions = []
+        preconditions = [str(s).strip() for s in preconditions if str(s).strip()]
+
         finding = MiningFinding(
             title=title[:200],
             description=description[:2000],
@@ -247,6 +274,10 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             augmentation_notes=str(item.get("augmentation_notes", ""))[:1000],
             relevance_score=relevance,
             language=str(item.get("language", "python"))[:20],
+            execution_steps=execution_steps[:10],
+            acceptance_checks=acceptance_checks[:10],
+            rollback_steps=rollback_steps[:10],
+            preconditions=preconditions[:10],
         )
         findings.append(finding)
 
@@ -545,6 +576,28 @@ class RepoMiner:
 
         logger.debug("Stored finding '%s' as methodology %s", finding.title, methodology.id)
 
+        # Build a reusable executable action template when the finding includes
+        # concrete runbook steps and checks.
+        if finding.execution_steps or finding.acceptance_checks:
+            action_template = ActionTemplate(
+                title=finding.title[:200],
+                problem_pattern=finding.description[:2000],
+                execution_steps=finding.execution_steps,
+                acceptance_checks=finding.acceptance_checks,
+                rollback_steps=finding.rollback_steps,
+                preconditions=finding.preconditions,
+                source_methodology_id=methodology.id,
+                source_repo=finding.source_repo,
+                confidence=finding.relevance_score,
+            )
+            await self.repository.create_action_template(action_template)
+            finding.action_template_id = action_template.id
+            logger.debug(
+                "Created action template %s for finding '%s'",
+                action_template.id,
+                finding.title,
+            )
+
         # Trigger capability assimilation
         if self.assimilation_engine is not None:
             try:
@@ -629,6 +682,30 @@ class RepoMiner:
 
         for finding in eligible:
             priority = _relevance_to_priority(finding.relevance_score)
+            execution_steps = [s.strip() for s in finding.execution_steps if s.strip()]
+            acceptance_checks = [s.strip() for s in finding.acceptance_checks if s.strip()]
+            rollback_steps = [s.strip() for s in finding.rollback_steps if s.strip()]
+            preconditions = [s.strip() for s in finding.preconditions if s.strip()]
+
+            runbook_sections: list[str] = []
+            if preconditions:
+                runbook_sections.append(
+                    "### Preconditions\n" + "\n".join(f"- {p}" for p in preconditions)
+                )
+            if execution_steps:
+                runbook_sections.append(
+                    "### Execution Steps\n" + "\n".join(f"- `{cmd}`" for cmd in execution_steps)
+                )
+            if acceptance_checks:
+                runbook_sections.append(
+                    "### Acceptance Checks\n" + "\n".join(f"- `{cmd}`" for cmd in acceptance_checks)
+                )
+            if rollback_steps:
+                runbook_sections.append(
+                    "### Rollback\n" + "\n".join(f"- `{cmd}`" for cmd in rollback_steps)
+                )
+
+            runbook_text = "\n\n".join(runbook_sections)
 
             task = Task(
                 project_id=target_project_id,
@@ -643,11 +720,15 @@ class RepoMiner:
                     f"### Why\n{finding.augmentation_notes}\n\n"
                     f"### Source Files\n"
                     + "\n".join(f"- `{f}`" for f in finding.source_files)
+                    + (f"\n\n{runbook_text}" if runbook_text else "")
                 ),
                 status=TaskStatus.PENDING,
                 priority=priority,
                 task_type=finding.category,
                 recommended_agent=_category_to_agent(finding.category),
+                action_template_id=finding.action_template_id,
+                execution_steps=execution_steps,
+                acceptance_checks=acceptance_checks,
             )
 
             try:
@@ -755,10 +836,10 @@ def _discover_repos(
     base: Path,
     max_depth: int = 6,
 ) -> list[RepoCandidate]:
-    """Find git repositories under a base directory using BFS.
+    """Find repositories or repo-like source trees under a base directory using BFS.
 
     Scans up to max_depth levels deep using os.scandir() for performance.
-    Stops descending into a directory once .git is found.
+    Stops descending into a directory once a repo candidate is found.
     Collects metadata for each repo to support iteration dedup.
 
     Args:
@@ -778,14 +859,18 @@ def _discover_repos(
         next_frontier: list[tuple[Path, int]] = []
 
         for dir_path, depth in frontier:
-            # Check if this directory is a git repo
+            # Check if this directory is a git repo or extracted source tree
             git_marker = dir_path / ".git"
             try:
                 is_repo = git_marker.exists()
             except (PermissionError, OSError):
                 is_repo = False
 
-            if is_repo:
+            is_source_tree = False
+            if not is_repo:
+                is_source_tree = _looks_like_source_tree(dir_path)
+
+            if is_repo or is_source_tree:
                 try:
                     resolved = str(dir_path.resolve())
                 except OSError:
@@ -800,11 +885,12 @@ def _discover_repos(
                         name=name,
                         canonical_name=_canonicalize_name(name),
                         depth=depth,
+                        source_kind="git" if is_repo else "source_tree",
                         file_count=file_count,
                         last_commit_ts=last_commit_ts,
                         total_bytes=total_bytes,
                     ))
-                # Don't descend into repos — they're leaf nodes
+                # Don't descend into candidate repos — they're leaf nodes
                 continue
 
             # Not a repo — descend if within depth limit
@@ -829,6 +915,58 @@ def _discover_repos(
     # Sort by canonical_name, then by name for deterministic ordering
     candidates.sort(key=lambda c: (c.canonical_name, c.name))
     return candidates
+
+
+def _looks_like_source_tree(dir_path: Path) -> bool:
+    """Heuristic for extracted source folders that are not git repos.
+
+    A directory is considered mineable if it has at least one common project
+    marker file and at least one code/config/document file near the root, or
+    if it contains multiple source files near the root.
+    """
+    marker_names = {
+        "README.md", "README.rst", "README.txt",
+        "pyproject.toml", "package.json", "Cargo.toml", "go.mod",
+        "requirements.txt", "setup.py", "Makefile", "Dockerfile",
+    }
+
+    root_code_hits = 0
+    nested_code_hits = 0
+    has_marker = False
+
+    try:
+        with os.scandir(dir_path) as entries:
+            for entry in entries:
+                name = entry.name
+                if name.startswith(".") and name != ".git":
+                    continue
+                if entry.is_file(follow_symlinks=False):
+                    if name in marker_names:
+                        has_marker = True
+                    _, ext = os.path.splitext(name)
+                    if ext.lower() in _CODE_EXTENSIONS:
+                        root_code_hits += 1
+                elif entry.is_dir(follow_symlinks=False) and name not in _SKIP_DIRS:
+                    try:
+                        with os.scandir(entry.path) as sub_entries:
+                            for sub in sub_entries:
+                                if not sub.is_file(follow_symlinks=False):
+                                    continue
+                                _, ext = os.path.splitext(sub.name)
+                                if ext.lower() in _CODE_EXTENSIONS:
+                                    nested_code_hits += 1
+                                    if nested_code_hits >= 2:
+                                        break
+                    except (PermissionError, OSError):
+                        continue
+                if has_marker and (root_code_hits + nested_code_hits) >= 1:
+                    return True
+                if root_code_hits >= 2:
+                    return True
+    except (PermissionError, OSError):
+        return False
+
+    return False
 
 
 def _dedup_iterations(

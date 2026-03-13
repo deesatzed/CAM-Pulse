@@ -25,7 +25,7 @@ import os
 import pytest
 
 from claw.core.config import AgentConfig, ClawConfig, load_config
-from claw.core.models import Methodology, Project, Task, TaskStatus
+from claw.core.models import ActionTemplate, Methodology, Project, Task, TaskStatus
 from claw.db.embeddings import EmbeddingEngine
 from claw.memory.hybrid_search import HybridSearch
 from claw.memory.semantic import SemanticMemory
@@ -429,13 +429,31 @@ class TestParseFindings:
         assert len(results) == 1
         assert results[0].source_files == []
 
+    def test_parses_optional_runbook_fields(self):
+        """execution_steps/acceptance_checks/rollback/preconditions are parsed when present."""
+        findings_data = [
+            self._make_finding_dict(
+                execution_steps=["npm install", "npm test"],
+                acceptance_checks=["npm test -- --runInBand"],
+                rollback_steps=["git restore src/app.ts"],
+                preconditions=["Node 20 installed"],
+            )
+        ]
+        results = parse_findings(json.dumps(findings_data), "test-repo")
+        assert len(results) == 1
+        finding = results[0]
+        assert finding.execution_steps == ["npm install", "npm test"]
+        assert finding.acceptance_checks == ["npm test -- --runInBand"]
+        assert finding.rollback_steps == ["git restore src/app.ts"]
+        assert finding.preconditions == ["Node 20 installed"]
+
 
 # ===========================================================================
 # 3. _discover_repos()
 # ===========================================================================
 
 class TestDiscoverRepos:
-    """Tests for _discover_repos() — git repository discovery."""
+    """Tests for _discover_repos() — repo discovery."""
 
     def test_finds_base_level_repo(self, tmp_path):
         """If base itself has .git, it is discovered."""
@@ -490,6 +508,42 @@ class TestDiscoverRepos:
     def test_empty_directory(self, tmp_path):
         """Empty directory returns empty list."""
         repos = _discover_repos(tmp_path)
+        assert repos == []
+
+    def test_finds_extracted_source_tree_with_project_markers(self, tmp_path):
+        """Extracted source trees without .git are still discoverable."""
+        repo = tmp_path / "downloaded-project"
+        repo.mkdir()
+        (repo / "README.md").write_text("# Downloaded Project", encoding="utf-8")
+        (repo / "pyproject.toml").write_text("[project]\nname='demo'", encoding="utf-8")
+        (repo / "main.py").write_text("print('hi')", encoding="utf-8")
+
+        repos = _discover_repos(tmp_path)
+
+        assert len(repos) == 1
+        assert repos[0].name == "downloaded-project"
+        assert repos[0].source_kind == "source_tree"
+
+    def test_finds_extracted_source_tree_from_multiple_source_files(self, tmp_path):
+        """Source-heavy folders without markers are treated as repo candidates."""
+        repo = tmp_path / "src-drop"
+        repo.mkdir()
+        (repo / "app.py").write_text("print('x')", encoding="utf-8")
+        (repo / "utils.py").write_text("print('y')", encoding="utf-8")
+
+        repos = _discover_repos(tmp_path)
+
+        assert len(repos) == 1
+        assert repos[0].source_kind == "source_tree"
+
+    def test_skips_non_repo_like_source_folder(self, tmp_path):
+        """A folder with a single loose file is not treated as a repo."""
+        loose = tmp_path / "random-dir"
+        loose.mkdir()
+        (loose / "notes.txt").write_text("hello", encoding="utf-8")
+
+        repos = _discover_repos(tmp_path)
+
         assert repos == []
 
     def test_skips_skip_dirs_at_child_level(self, tmp_path):
@@ -813,6 +867,31 @@ class TestStoreFinding:
         methodology = await repository.get_methodology(method_id)
         assert "[Mined from rich-cli]" in methodology.problem_description
 
+    async def test_store_finding_creates_action_template_for_runbook(self, repo_miner, repository, sample_project):
+        """Findings with concrete commands create reusable action templates."""
+        await repository.create_project(sample_project)
+        finding = MiningFinding(
+            title="Useful build pipeline",
+            description="Build and test flow for TypeScript service",
+            category="code_quality",
+            source_repo="nanochat",
+            relevance_score=0.88,
+            execution_steps=["npm install", "npm run build"],
+            acceptance_checks=["npm test -- --runInBand"],
+            rollback_steps=["git restore src/service.ts"],
+            preconditions=["Node 20 installed"],
+        )
+        method_id = await repo_miner.store_finding(finding, sample_project.id)
+        assert method_id
+        assert finding.action_template_id is not None
+
+        template = await repository.get_action_template(finding.action_template_id)
+        assert template is not None
+        assert template.source_methodology_id == method_id
+        assert template.execution_steps == ["npm install", "npm run build"]
+        assert template.acceptance_checks == ["npm test -- --runInBand"]
+        assert template.source_repo == "nanochat"
+
 
 # ===========================================================================
 # 8. RepoMiner._generate_tasks() — async, real database
@@ -945,6 +1024,41 @@ class TestGenerateTasks:
         ]
         tasks = await repo_miner._generate_tasks(findings, sample_project.id, min_relevance=0.6)
         assert tasks[0].status == TaskStatus.PENDING
+
+    async def test_generated_task_carries_runbook_fields(self, repo_miner, repository, sample_project):
+        """Generated tasks copy execution and acceptance commands into typed fields."""
+        await repository.create_project(sample_project)
+        await repository.create_action_template(
+            ActionTemplate(
+                id="tmpl-123",
+                title="Pipeline template",
+                problem_pattern="Build/test standardization",
+                execution_steps=["npm ci", "npm run lint"],
+                acceptance_checks=["npm test"],
+            )
+        )
+        findings = [
+            MiningFinding(
+                title="Pipeline hardening",
+                description="Make build/test repeatable",
+                category="code_quality",
+                source_repo="bioclaw",
+                relevance_score=0.9,
+                action_template_id="tmpl-123",
+                execution_steps=["npm ci", "npm run lint"],
+                acceptance_checks=["npm test"],
+                rollback_steps=["git restore src/index.ts"],
+                preconditions=["Node installed"],
+            ),
+        ]
+        tasks = await repo_miner._generate_tasks(findings, sample_project.id, min_relevance=0.6)
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.action_template_id == "tmpl-123"
+        assert task.execution_steps == ["npm ci", "npm run lint"]
+        assert task.acceptance_checks == ["npm test"]
+        assert "### Execution Steps" in task.description
+        assert "### Acceptance Checks" in task.description
 
 
 # ===========================================================================
