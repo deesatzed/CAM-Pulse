@@ -252,9 +252,13 @@ class DatabaseEngine:
                 CREATE INDEX IF NOT EXISTS idx_action_templates_repo ON action_templates(source_repo);
                 CREATE INDEX IF NOT EXISTS idx_action_templates_confidence ON action_templates(confidence DESC);
             """)
-            await self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tasks_action_template ON tasks(action_template_id)"
+            tasks_row = await self.fetch_one(
+                "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='tasks'"
             )
+            if tasks_row and tasks_row["cnt"] > 0:
+                await self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tasks_action_template ON tasks(action_template_id)"
+                )
             await self.conn.commit()
             logger.info("Migration applied: action_templates table created")
 

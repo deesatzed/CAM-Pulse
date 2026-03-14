@@ -20,7 +20,7 @@ This repository is documented for a new operator, not as an internal lab noteboo
 ```bash
 git clone https://github.com/deesatzed/clawamorphosis.git
 cd clawamorphosis
-python3.12 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```

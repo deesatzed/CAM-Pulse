@@ -4,6 +4,7 @@ import struct
 
 import pytest
 
+from claw.core.config import DatabaseConfig
 from claw.core.models import (
     ActionTemplate,
     HypothesisEntry,
@@ -15,12 +16,36 @@ from claw.core.models import (
     TaskStatus,
     TokenCostRecord,
 )
+from claw.db.engine import DatabaseEngine
 
 
 class TestDatabaseEngine:
     async def test_connect_and_schema(self, db_engine):
         """Engine connects and schema is created."""
         assert db_engine.conn is not None
+
+    async def test_fresh_db_migrations_do_not_fail_before_schema(self, tmp_path):
+        """A brand-new DB can run migrations before schema initialization."""
+        db_path = tmp_path / "fresh.db"
+        engine = DatabaseEngine(DatabaseConfig(db_path=str(db_path)))
+        await engine.connect()
+        try:
+            await engine.apply_migrations()
+            await engine.initialize_schema()
+
+            row = await engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='tasks'"
+            )
+            assert row is not None
+            assert row["cnt"] == 1
+
+            row = await engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='action_templates'"
+            )
+            assert row is not None
+            assert row["cnt"] == 1
+        finally:
+            await engine.close()
 
     async def test_execute_and_fetch(self, db_engine):
         await db_engine.execute(
