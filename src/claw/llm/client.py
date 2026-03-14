@@ -321,6 +321,61 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
+        sanitized = _escape_json_control_chars_in_strings(cleaned)
+        if sanitized != cleaned:
+            try:
+                return json.loads(sanitized)
+            except json.JSONDecodeError:
+                pass
         raise ResponseParseError(
             f"Failed to parse JSON from LLM response: {e}\nRaw: {text[:500]}"
         )
+
+
+def _escape_json_control_chars_in_strings(text: str) -> str:
+    """Escape raw control characters that models sometimes emit inside JSON strings."""
+    out: list[str] = []
+    in_string = False
+    escaped = False
+
+    for ch in text:
+        if in_string:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+
+            codepoint = ord(ch)
+            if codepoint < 0x20:
+                if ch == "\n":
+                    out.append("\\n")
+                elif ch == "\r":
+                    out.append("\\r")
+                elif ch == "\t":
+                    out.append("\\t")
+                elif ch == "\b":
+                    out.append("\\b")
+                elif ch == "\f":
+                    out.append("\\f")
+                else:
+                    out.append(f"\\u{codepoint:04x}")
+                continue
+
+            out.append(ch)
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = True
+
+    return "".join(out)

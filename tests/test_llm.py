@@ -50,6 +50,16 @@ class TestParseJson:
         with pytest.raises(ResponseParseError):
             _parse_json_response("not json")
 
+    def test_recovers_from_raw_newline_inside_json_string(self):
+        raw = '{"ideas": [{"title": "Agent Benchmark Orchestrator", "tagline": "line one\nline two"}]}'
+        result = _parse_json_response(raw)
+        assert result["ideas"][0]["tagline"] == "line one\nline two"
+
+    def test_recovers_from_raw_tab_inside_json_string(self):
+        raw = '{"ideas": [{"title": "Tabbed", "tagline": "alpha\tbeta"}]}'
+        result = _parse_json_response(raw)
+        assert result["ideas"][0]["tagline"] == "alpha\tbeta"
+
 
 class TestLLMClientCooldown:
     def test_cooldown_mechanism(self):
