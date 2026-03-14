@@ -25,12 +25,32 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+Note:
+
+- install is heavy because CAM currently pulls ML dependencies such as `torch`, `transformers`, and `sentence-transformers`
+- if shell activation is unreliable in your environment, you can run CAM directly as `.venv/bin/cam`
+
+## Smoke Test
+
+Use these exact commands first:
+
+```bash
+.venv/bin/cam --help
+.venv/bin/cam govern stats
+```
+
+What this proves:
+
+- the CLI is installed
+- the database can initialize on a fresh clone
+- the local runtime is basically healthy
+
 ## Configure
 
 Use the interactive setup first:
 
 ```bash
-cam setup
+.venv/bin/cam setup
 ```
 
 Or export the keys you need before running CAM:
@@ -47,13 +67,13 @@ export GEMINI_API_KEY=...
 Evaluate a repository:
 
 ```bash
-cam evaluate /path/to/repo
+.venv/bin/cam evaluate /path/to/repo
 ```
 
 Mine two source repos to learn from them:
 
 ```bash
-cam mine /path/to/source-repos \
+.venv/bin/cam mine /path/to/source-repos \
   --target /path/to/target-repo \
   --max-repos 2 \
   --depth 2 \
@@ -63,7 +83,7 @@ cam mine /path/to/source-repos \
 Create or modify a target repo from that learned context:
 
 ```bash
-cam create /path/to/target-repo \
+.venv/bin/cam create /path/to/target-repo \
   --repo-mode new \
   --request "Build the app I described" \
   --spec "Must be standalone" \
@@ -74,7 +94,7 @@ cam create /path/to/target-repo \
 If you want CAM to attempt execution immediately:
 
 ```bash
-cam create /path/to/target-repo \
+.venv/bin/cam create /path/to/target-repo \
   --repo-mode new \
   --request "Build the app I described" \
   --check "pytest -q" \
@@ -85,19 +105,19 @@ cam create /path/to/target-repo \
 Validate the result:
 
 ```bash
-cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
+.venv/bin/cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
 ```
 
 Benchmark only after validation passes:
 
 ```bash
-cam benchmark --max-minutes 5
+.venv/bin/cam benchmark --max-minutes 5
 ```
 
 Export learned knowledge for a standalone app:
 
 ```bash
-cam forge-export \
+.venv/bin/cam forge-export \
   --out data/cam_knowledge_pack.jsonl \
   --max-methodologies 200 \
   --max-tasks 200 \
@@ -130,11 +150,11 @@ cam forge-export \
 Run tests:
 
 ```bash
-pytest
+.venv/bin/pytest
 ```
 
 Show CLI help:
 
 ```bash
-cam --help
+.venv/bin/cam --help
 ```
