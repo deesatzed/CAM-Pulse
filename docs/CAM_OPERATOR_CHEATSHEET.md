@@ -45,6 +45,17 @@ Preview only, no model calls:
 .venv/bin/cam mine /path/to/repo-folder --scan-only --depth 3 --max-repos 5
 ```
 
+Default behavior:
+- unchanged repos are skipped automatically
+- changed repos are rescanned automatically
+- use `--force-rescan` when you want to ignore the ledger and mine them again anyway
+
+Inspect the folder first:
+
+```bash
+.venv/bin/cam mine-report /path/to/repo-folder --depth 3
+```
+
 Real mining:
 
 ```bash

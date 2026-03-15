@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import time
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -87,6 +88,8 @@ class RepoMiningResult:
     cost_usd: float = 0.0
     duration_seconds: float = 0.0
     error: Optional[str] = None
+    skipped: bool = False
+    skip_reason: Optional[str] = None
 
 
 @dataclass
@@ -98,6 +101,7 @@ class MiningReport:
     total_cost_usd: float = 0.0
     total_tokens: int = 0
     total_duration_seconds: float = 0.0
+    repos_skipped: int = 0
     repo_results: list[RepoMiningResult] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
 
@@ -113,6 +117,114 @@ class RepoCandidate:
     file_count: int = 0      # number of source files (proxy for completeness)
     last_commit_ts: float = 0.0  # timestamp of last git activity
     total_bytes: int = 0     # approximate source size
+    scan_signature: str = "" # lightweight content/mtime signature for incremental mining
+
+
+@dataclass
+class RepoScanRecord:
+    """Ledger entry for a previously mined repo."""
+    repo_path: str
+    repo_name: str
+    canonical_name: str
+    source_kind: str
+    scan_signature: str
+    file_count: int
+    total_bytes: int
+    last_commit_ts: float
+    last_mined_at: float
+    findings_count: int = 0
+    tokens_used: int = 0
+
+
+class RepoScanLedger:
+    """Persistent repo-mining ledger used to skip unchanged repos."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._records: dict[str, RepoScanRecord] = {}
+        self._loaded = False
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if not self.path.exists():
+            return
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Failed to load mining ledger %s", self.path)
+            return
+
+        raw_records = payload.get("records", {})
+        if not isinstance(raw_records, dict):
+            return
+
+        for key, value in raw_records.items():
+            if not isinstance(value, dict):
+                continue
+            try:
+                self._records[key] = RepoScanRecord(**value)
+            except TypeError:
+                continue
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "records": {
+                key: record.__dict__
+                for key, record in sorted(self._records.items())
+            },
+        }
+        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def repo_key(repo_path: Path) -> str:
+        try:
+            return str(repo_path.resolve())
+        except OSError:
+            return str(repo_path)
+
+    def get_record(self, repo_path: Path) -> Optional[RepoScanRecord]:
+        self._load()
+        return self._records.get(self.repo_key(repo_path))
+
+    def should_mine(
+        self,
+        candidate: RepoCandidate,
+        *,
+        skip_known: bool = True,
+        force_rescan: bool = False,
+    ) -> tuple[bool, str]:
+        if force_rescan:
+            return True, "forced"
+        if not skip_known:
+            return True, "skip-known disabled"
+
+        existing = self.get_record(candidate.path)
+        if existing is None:
+            return True, "new"
+        if existing.scan_signature != candidate.scan_signature:
+            return True, "changed"
+        return False, "unchanged"
+
+    def record_result(self, candidate: RepoCandidate, result: RepoMiningResult) -> None:
+        self._load()
+        self._records[self.repo_key(candidate.path)] = RepoScanRecord(
+            repo_path=self.repo_key(candidate.path),
+            repo_name=candidate.name,
+            canonical_name=candidate.canonical_name,
+            source_kind=candidate.source_kind,
+            scan_signature=candidate.scan_signature,
+            file_count=candidate.file_count,
+            total_bytes=candidate.total_bytes,
+            last_commit_ts=candidate.last_commit_ts,
+            last_mined_at=time.time(),
+            findings_count=len(result.findings),
+            tokens_used=result.tokens_used,
+        )
+        self._save()
 
 
 def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> tuple[str, int]:
@@ -308,6 +420,7 @@ class RepoMiner:
         config: ClawConfig,
         governance: Any = None,
         assimilation_engine: Any = None,
+        scan_ledger_path: Optional[Path] = None,
     ):
         self.repository = repository
         self.llm_client = llm_client
@@ -316,6 +429,9 @@ class RepoMiner:
         self.governance = governance
         self.assimilation_engine = assimilation_engine
         self._prompt_template: Optional[str] = None
+        self.scan_ledger = RepoScanLedger(
+            scan_ledger_path or _default_scan_ledger_path(config)
+        )
 
     def _get_prompt_template(self) -> str:
         """Load the mining prompt template from prompts/repo-mine.md."""
@@ -348,6 +464,8 @@ class RepoMiner:
         on_repo_complete: Optional[Any] = None,
         max_depth: int = 6,
         dedup_iterations: bool = True,
+        skip_known: bool = True,
+        force_rescan: bool = False,
     ) -> MiningReport:
         """Discover repos in a directory and mine each.
 
@@ -385,14 +503,32 @@ class RepoMiner:
                     len(candidates), len(skipped),
                 )
 
-        # Limit repos
-        repos = [(c.path, c.name) for c in candidates[:max_repos]]
-        logger.info("Found %d repos to mine in %s", len(repos), base)
+        mining_plan: list[tuple[RepoCandidate, str]] = []
+        skipped_candidates: list[tuple[RepoCandidate, str]] = []
+        for candidate in candidates:
+            should_mine, reason = self.scan_ledger.should_mine(
+                candidate,
+                skip_known=skip_known,
+                force_rescan=force_rescan,
+            )
+            if should_mine:
+                mining_plan.append((candidate, reason))
+            else:
+                skipped_candidates.append((candidate, reason))
+
+        selected_candidates = mining_plan[:max_repos]
+        logger.info(
+            "Found %d repos to mine in %s (%d skipped as unchanged)",
+            len(selected_candidates), base, len(skipped_candidates),
+        )
 
         report = MiningReport()
         start = time.monotonic()
+        report.repos_skipped = len(skipped_candidates)
 
-        for repo_path, repo_name in repos:
+        for candidate, _reason in selected_candidates:
+            repo_path = candidate.path
+            repo_name = candidate.name
             try:
                 result = await self.mine_repo(repo_path, repo_name, target_project_id)
                 report.repo_results.append(result)
@@ -400,6 +536,8 @@ class RepoMiner:
                 report.total_findings += len(result.findings)
                 report.total_cost_usd += result.cost_usd
                 report.total_tokens += result.tokens_used
+                if not result.error and not result.skipped:
+                    self.scan_ledger.record_result(candidate, result)
 
                 if on_repo_complete:
                     on_repo_complete(repo_name, result)
@@ -769,48 +907,39 @@ def _canonicalize_name(name: str) -> str:
     return result
 
 
-def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int]:
+def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int, str]:
     """Collect lightweight metadata for a repo (no subprocess calls).
 
     Returns:
-        (file_count, last_commit_ts, total_bytes)
+        (file_count, last_commit_ts, total_bytes, scan_signature)
     """
     file_count = 0
     total_bytes = 0
+    latest_source_ts = 0.0
+    fingerprint = hashlib.sha1()
 
-    # Count source files in top-level directory only (fast scan)
     try:
-        with os.scandir(repo_path) as entries:
-            for entry in entries:
-                if entry.is_file(follow_symlinks=False):
-                    _, ext = os.path.splitext(entry.name)
-                    if ext.lower() in _CODE_EXTENSIONS:
-                        file_count += 1
-                        try:
-                            total_bytes += entry.stat(follow_symlinks=False).st_size
-                        except OSError:
-                            pass
-    except (PermissionError, OSError):
-        pass
-
-    # Also count files in immediate subdirectories (one level deeper)
-    try:
-        with os.scandir(repo_path) as entries:
-            for entry in entries:
-                if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in _SKIP_DIRS:
-                    try:
-                        with os.scandir(entry.path) as sub_entries:
-                            for sub in sub_entries:
-                                if sub.is_file(follow_symlinks=False):
-                                    _, ext = os.path.splitext(sub.name)
-                                    if ext.lower() in _CODE_EXTENSIONS:
-                                        file_count += 1
-                                        try:
-                                            total_bytes += sub.stat(follow_symlinks=False).st_size
-                                        except OSError:
-                                            pass
-                    except (PermissionError, OSError):
-                        pass
+        for path in sorted(repo_path.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(repo_path)
+            if any(part in _SKIP_DIRS for part in rel.parts):
+                continue
+            if path.suffix.lower() not in _CODE_EXTENSIONS:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            file_count += 1
+            total_bytes += stat.st_size
+            latest_source_ts = max(latest_source_ts, stat.st_mtime)
+            fingerprint.update(str(rel).encode("utf-8", errors="replace"))
+            fingerprint.update(b":")
+            fingerprint.update(str(stat.st_size).encode())
+            fingerprint.update(b":")
+            fingerprint.update(str(stat.st_mtime_ns).encode())
+            fingerprint.update(b"\n")
     except (PermissionError, OSError):
         pass
 
@@ -828,8 +957,12 @@ def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int]:
             last_commit_ts = git_dir.stat().st_mtime
         except OSError:
             pass
+    last_commit_ts = max(last_commit_ts, latest_source_ts)
+    scan_signature = hashlib.sha1(
+        f"{file_count}:{total_bytes}:{last_commit_ts:.6f}:{fingerprint.hexdigest()}".encode("utf-8")
+    ).hexdigest()
 
-    return file_count, last_commit_ts, total_bytes
+    return file_count, last_commit_ts, total_bytes, scan_signature
 
 
 def _discover_repos(
@@ -879,7 +1012,7 @@ def _discover_repos(
                 if resolved not in seen:
                     seen.add(resolved)
                     name = dir_path.name
-                    file_count, last_commit_ts, total_bytes = _collect_repo_metadata(dir_path)
+                    file_count, last_commit_ts, total_bytes, scan_signature = _collect_repo_metadata(dir_path)
                     candidates.append(RepoCandidate(
                         path=dir_path,
                         name=name,
@@ -889,6 +1022,7 @@ def _discover_repos(
                         file_count=file_count,
                         last_commit_ts=last_commit_ts,
                         total_bytes=total_bytes,
+                        scan_signature=scan_signature,
                     ))
                 # Don't descend into candidate repos — they're leaf nodes
                 continue
@@ -1052,3 +1186,10 @@ def _category_to_agent(category: str) -> str:
         "cross_cutting": "grok",
     }
     return mapping.get(category, "claude")
+
+
+def _default_scan_ledger_path(config: ClawConfig) -> Path:
+    db_path = str(config.database.db_path)
+    if db_path == ":memory:":
+        return Path("data") / "mining_registry.json"
+    return Path(db_path).resolve().parent / "mining_registry.json"

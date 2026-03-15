@@ -2669,6 +2669,9 @@ def mine(
     tasks: bool = typer.Option(True, "--tasks/--no-tasks", help="Generate enhancement tasks from findings"),
     depth: int = typer.Option(6, "--depth", "-d", help="Max directory depth for repo discovery"),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Dedup repo iterations by canonical name"),
+    skip_known: bool = typer.Option(True, "--skip-known/--no-skip-known", help="Skip repos already mined when unchanged"),
+    force_rescan: bool = typer.Option(False, "--force-rescan", help="Ignore the mining ledger and rescan selected repos"),
+    changed_only: bool = typer.Option(False, "--changed-only", help="Only show/mine repos that are new or changed according to the mining ledger"),
     scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
     max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
@@ -2710,14 +2713,14 @@ def mine(
         raise typer.Exit(1)
 
     if scan_only:
-        _mine_scan_only(dir_path, depth, dedup, max_repos)
+        _mine_scan_only(dir_path, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
         return
 
     try:
         asyncio.run(asyncio.wait_for(
             _mine_async(
                 dir_path, target, max_repos, min_relevance, tasks, config,
-                depth, dedup,
+                depth, dedup, skip_known, force_rescan, changed_only,
             ),
             timeout=max_minutes * 60,
         ))
@@ -2726,24 +2729,134 @@ def mine(
         raise typer.Exit(124)
 
 
+@app.command(name="mine-report")
+def mine_report(
+    directory: str = typer.Argument(..., help="Path to directory containing repos to inspect"),
+    depth: int = typer.Option(6, "--depth", "-d", help="Max directory depth for repo discovery"),
+    dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Dedup repo iterations by canonical name"),
+    changed_only: bool = typer.Option(False, "--changed-only", help="Only show repos that are new or changed"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show repo mining status from the persistent mining ledger."""
+    _setup_logging(False)
+
+    dir_path = Path(directory).resolve()
+    if not dir_path.exists():
+        console.print(f"[red]Directory does not exist: {dir_path}[/red]")
+        raise typer.Exit(1)
+    if not dir_path.is_dir():
+        console.print(f"[red]Path is not a directory: {dir_path}[/red]")
+        raise typer.Exit(1)
+
+    from claw.core.config import load_config
+    from claw.miner import RepoScanLedger, _default_scan_ledger_path, _discover_repos, _dedup_iterations
+
+    cfg = load_config(Path(config) if config else None)
+    ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
+    candidates = _discover_repos(dir_path, max_depth=depth)
+    skipped: list = []
+    selected = candidates
+    if dedup:
+        selected, skipped = _dedup_iterations(candidates)
+
+    console.print(f"\n[bold]CAM Mine Report[/bold]")
+    console.print(f"  Directory: {dir_path}")
+    console.print(f"  Depth: {depth}")
+    console.print(f"  Dedup: {dedup}")
+    console.print(f"  Changed only: {changed_only}")
+    console.print(f"  Ledger: {ledger.path}")
+
+    table = Table(title=f"Mining Status ({len(selected)} selected)")
+    table.add_column("#", justify="right", style="dim", width=4)
+    table.add_column("Name", style="cyan", max_width=30)
+    table.add_column("Kind", style="magenta", width=11)
+    table.add_column("Status", style="green", max_width=18)
+    table.add_column("Last Mined", style="dim", width=18)
+    table.add_column("Findings", justify="right", style="yellow", width=8)
+    table.add_column("Tokens", justify="right", style="yellow", width=8)
+
+    unchanged = 0
+    changed = 0
+    new = 0
+    rows_added = 0
+    for idx, candidate in enumerate(selected, start=1):
+        should_mine, reason = ledger.should_mine(candidate, skip_known=True, force_rescan=False)
+        record = ledger.get_record(candidate.path)
+        if not should_mine:
+            status = "unchanged"
+            unchanged += 1
+        elif reason == "changed":
+            status = "changed"
+            changed += 1
+        else:
+            status = "new"
+            new += 1
+
+        if changed_only and status == "unchanged":
+            continue
+
+        last_mined = "-"
+        findings = "-"
+        tokens = "-"
+        if record is not None:
+            from datetime import datetime
+            last_mined = datetime.fromtimestamp(record.last_mined_at).strftime("%Y-%m-%d %H:%M")
+            findings = str(record.findings_count)
+            tokens = str(record.tokens_used)
+
+        table.add_row(
+            str(idx),
+            candidate.name,
+            candidate.source_kind,
+            status,
+            last_mined,
+            findings,
+            tokens,
+        )
+        rows_added += 1
+
+    if rows_added:
+        console.print(table)
+    else:
+        console.print("[yellow]No repos matched the requested report filters.[/yellow]")
+
+    console.print(f"\n[bold]Summary[/bold]")
+    console.print(f"  Total discovered: {len(candidates)}")
+    console.print(f"  Selected after dedup: {len(selected)}")
+    console.print(f"  New: {new}")
+    console.print(f"  Changed: {changed}")
+    console.print(f"  Unchanged: {unchanged}")
+    console.print(f"  Dedup skipped: {len(skipped)}")
+
+
 def _mine_scan_only(
     dir_path: Path,
     depth: int,
     dedup: bool,
     max_repos: int,
+    config_path: Optional[str],
+    skip_known: bool,
+    force_rescan: bool,
+    changed_only: bool,
 ) -> None:
     """Preview discovered repos without mining (no LLM calls, no DB)."""
     from datetime import datetime
-    from claw.miner import _discover_repos, _dedup_iterations
+    from claw.core.config import load_config
+    from claw.miner import RepoScanLedger, _default_scan_ledger_path, _discover_repos, _dedup_iterations
 
     console.print(f"\n[bold]CLAW Repo Scanner (scan-only)[/bold]")
     console.print(f"  Directory: {dir_path}")
     console.print(f"  Depth: {depth}")
     console.print(f"  Dedup: {dedup}")
+    console.print(f"  Skip unchanged repos: {skip_known}")
+    console.print(f"  Force rescan: {force_rescan}")
+    console.print(f"  Changed only: {changed_only}")
     console.print()
 
     console.print("[cyan]Scanning for repos...[/cyan]")
     candidates = _discover_repos(dir_path, max_depth=depth)
+    cfg = load_config(Path(config_path) if config_path else None)
+    ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
 
     if not candidates:
         console.print("[yellow]No repositories or source trees found.[/yellow]")
@@ -2754,8 +2867,15 @@ def _mine_scan_only(
     if dedup:
         selected, skipped = _dedup_iterations(candidates)
 
+    effective_candidates = selected
+    if changed_only:
+        effective_candidates = [
+            c for c in selected
+            if ledger.should_mine(c, skip_known=skip_known, force_rescan=force_rescan)[0]
+        ]
+
     # Build discovery table
-    table = Table(title=f"Discovered Repos ({len(candidates)} total, {len(selected)} selected)")
+    table = Table(title=f"Discovered Repos ({len(candidates)} total, {len(effective_candidates)} eligible)")
     table.add_column("#", justify="right", style="dim", width=4)
     table.add_column("Name", style="cyan", max_width=30)
     table.add_column("Canonical", style="blue", max_width=25)
@@ -2767,6 +2887,7 @@ def _mine_scan_only(
     table.add_column("Status", max_width=20)
 
     skipped_names = {id(s[0]) for s in skipped}
+    ledger_selected = 0
 
     for i, c in enumerate(candidates, 1):
         if c.total_bytes >= 1024 * 1024:
@@ -2781,11 +2902,29 @@ def _mine_scan_only(
         else:
             ts_str = "-"
 
+        ledger_should_mine, ledger_reason = ledger.should_mine(
+            c,
+            skip_known=skip_known,
+            force_rescan=force_rescan,
+        )
+
         if id(c) in skipped_names:
             reason = next(r for s, r in skipped if id(s) == id(c))
             status = f"[dim]skipped: {reason[:18]}[/dim]"
+        elif not ledger_should_mine:
+            status = "[yellow]already mined[/yellow]"
+        elif ledger_reason == "changed":
+            ledger_selected += 1
+            status = "[green]changed -> rescan[/green]"
+        elif ledger_reason == "forced":
+            ledger_selected += 1
+            status = "[green]force rescan[/green]"
         else:
+            ledger_selected += 1
             status = "[green]selected[/green]"
+
+        if changed_only and (id(c) in skipped_names or not ledger_should_mine):
+            continue
 
         table.add_row(
             str(i), c.name, c.canonical_name, str(c.file_count),
@@ -2797,12 +2936,12 @@ def _mine_scan_only(
     # Summary
     console.print(f"\n[bold]Summary[/bold]")
     console.print(f"  Total discovered: {len(candidates)}")
-    console.print(f"  Selected: {len(selected)}")
+    console.print(f"  Eligible after filters: {len(effective_candidates)}")
     console.print(f"  Skipped (dedup): {len(skipped)}")
-    if max_repos < len(selected):
+    if max_repos < ledger_selected:
         console.print(f"  Will mine (--max-repos): {max_repos}")
     else:
-        console.print(f"  Will mine: {len(selected)}")
+        console.print(f"  Will mine: {ledger_selected}")
 
     # Show dedup groups with multiple iterations
     if dedup and skipped:
@@ -2832,6 +2971,9 @@ async def _mine_async(
     config_path: Optional[str],
     max_depth: int = 6,
     dedup_iterations: bool = True,
+    skip_known: bool = True,
+    force_rescan: bool = False,
+    changed_only: bool = False,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -2856,6 +2998,9 @@ async def _mine_async(
         console.print(f"  Generate tasks: {generate_tasks}")
         console.print(f"  Depth: {max_depth}")
         console.print(f"  Dedup: {dedup_iterations}")
+        console.print(f"  Skip unchanged repos: {skip_known}")
+        console.print(f"  Force rescan: {force_rescan}")
+        console.print(f"  Changed only: {changed_only}")
         console.print(f"  Database: {ctx.config.database.db_path}")
         console.print()
 
@@ -2864,6 +3009,8 @@ async def _mine_async(
             n_findings = len(result.findings) if result.findings else 0
             if result.error:
                 console.print(f"  [red]x {repo_name}: {result.error}[/red]")
+            elif result.skipped:
+                console.print(f"  [yellow]- {repo_name}: skipped ({result.skip_reason})[/yellow]")
             else:
                 console.print(
                     f"  [green]+ {repo_name}[/green]: "
@@ -2881,6 +3028,8 @@ async def _mine_async(
             on_repo_complete=on_repo_complete,
             max_depth=max_depth,
             dedup_iterations=dedup_iterations,
+            skip_known=skip_known or changed_only,
+            force_rescan=force_rescan,
         )
 
         # Display results table
@@ -2894,7 +3043,10 @@ async def _mine_async(
         results_table.add_column("Status", max_width=20)
 
         for result in report.repo_results:
-            status = "[green]OK[/green]" if not result.error else f"[red]{result.error[:18]}[/red]"
+            if result.skipped:
+                status = f"[yellow]skipped: {result.skip_reason}[/yellow]"
+            else:
+                status = "[green]OK[/green]" if not result.error else f"[red]{result.error[:18]}[/red]"
             results_table.add_row(
                 result.repo_name,
                 str(result.files_analyzed),
@@ -2909,6 +3061,7 @@ async def _mine_async(
         # Summary
         console.print(f"\n[bold]Summary[/bold]")
         console.print(f"  Repos scanned: {report.repos_scanned}")
+        console.print(f"  Repos skipped: {report.repos_skipped}")
         console.print(f"  Total findings: {report.total_findings}")
         console.print(f"  Tasks generated: {report.tasks_generated}")
         console.print(f"  Total tokens: {report.total_tokens}")

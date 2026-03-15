@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 
 import pytest
 
@@ -35,6 +36,7 @@ from claw.miner import (
     RepoCandidate,
     RepoMiner,
     RepoMiningResult,
+    RepoScanLedger,
     _MAX_FINDINGS_PER_REPO,
     _SKIP_DIRS,
     _VALID_CATEGORIES,
@@ -273,6 +275,67 @@ class TestSerializeRepo:
         (tmp_path / "main.py").write_text("pass", encoding="utf-8")
         content, count = serialize_repo(tmp_path)
         assert count == 1
+
+
+class TestIncrementalMiningLedger:
+    def test_collect_repo_metadata_signature_changes_when_file_changes(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        target = repo / "main.py"
+        target.write_text("print('v1')\n", encoding="utf-8")
+
+        count_1, ts_1, size_1, sig_1 = _collect_repo_metadata(repo)
+        assert count_1 == 1
+        assert size_1 > 0
+        assert sig_1
+
+        time.sleep(0.01)
+        target.write_text("print('v2')\nprint('more')\n", encoding="utf-8")
+
+        count_2, ts_2, size_2, sig_2 = _collect_repo_metadata(repo)
+        assert count_2 == 1
+        assert size_2 > size_1
+        assert ts_2 >= ts_1
+        assert sig_2 != sig_1
+
+    def test_scan_ledger_skips_unchanged_and_rescans_changed(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "README.md").write_text("# demo\n", encoding="utf-8")
+        (repo / "main.py").write_text("print('v1')\n", encoding="utf-8")
+
+        candidate = _discover_repos(tmp_path, max_depth=2)[0]
+        ledger = RepoScanLedger(tmp_path / "mining_registry.json")
+
+        should_mine, reason = ledger.should_mine(candidate)
+        assert should_mine is True
+        assert reason == "new"
+
+        result = RepoMiningResult(
+            repo_name=candidate.name,
+            repo_path=str(candidate.path),
+            findings=[MiningFinding(
+                title="Pattern",
+                description="A sufficiently descriptive finding for incremental mining ledger tests.",
+                category="architecture",
+                source_repo=candidate.name,
+            )],
+            files_analyzed=2,
+            tokens_used=123,
+        )
+        ledger.record_result(candidate, result)
+
+        loaded = RepoScanLedger(tmp_path / "mining_registry.json")
+        should_mine, reason = loaded.should_mine(candidate)
+        assert should_mine is False
+        assert reason == "unchanged"
+
+        time.sleep(0.01)
+        (repo / "main.py").write_text("print('v2')\n", encoding="utf-8")
+        changed_candidate = _discover_repos(tmp_path, max_depth=2)[0]
+        should_mine, reason = loaded.should_mine(changed_candidate)
+        assert should_mine is True
+        assert reason == "changed"
 
 
 # ===========================================================================
@@ -1259,8 +1322,10 @@ class TestCollectRepoMetadata:
         (tmp_path / "utils.py").write_text("y = 2", encoding="utf-8")
         (tmp_path / "data.bin").write_bytes(b"\x00")
 
-        file_count, _, total_bytes = _collect_repo_metadata(tmp_path)
+        file_count, _, total_bytes, scan_signature = _collect_repo_metadata(tmp_path)
         assert file_count >= 2  # at least top-level .py files
+        assert total_bytes > 0
+        assert scan_signature
 
     def test_includes_subdirectory_files(self, tmp_path):
         """Counts files in immediate subdirectories too."""
@@ -1270,7 +1335,7 @@ class TestCollectRepoMetadata:
         (src / "app.py").write_text("pass", encoding="utf-8")
         (src / "lib.py").write_text("pass", encoding="utf-8")
 
-        file_count, _, _ = _collect_repo_metadata(tmp_path)
+        file_count, _, _, _ = _collect_repo_metadata(tmp_path)
         assert file_count >= 2
 
     def test_uses_git_mtime_for_timestamp(self, tmp_path):
@@ -1279,14 +1344,14 @@ class TestCollectRepoMetadata:
         git_dir.mkdir()
         (git_dir / "HEAD").write_text("ref: refs/heads/main", encoding="utf-8")
 
-        _, last_commit_ts, _ = _collect_repo_metadata(tmp_path)
+        _, last_commit_ts, _, _ = _collect_repo_metadata(tmp_path)
         assert last_commit_ts > 0
 
     def test_handles_no_git_dir(self, tmp_path):
-        """Returns 0 timestamp when no .git directory."""
+        """Falls back to source file mtimes when no .git directory exists."""
         (tmp_path / "main.py").write_text("x = 1", encoding="utf-8")
-        _, last_commit_ts, _ = _collect_repo_metadata(tmp_path)
-        assert last_commit_ts == 0.0
+        _, last_commit_ts, _, _ = _collect_repo_metadata(tmp_path)
+        assert last_commit_ts > 0.0
 
 
 # ===========================================================================

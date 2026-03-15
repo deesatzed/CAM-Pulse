@@ -368,17 +368,20 @@ What it does:
 - stores transferable findings in CAM semantic memory
 - can generate enhancement tasks for a target project
 - supports scan-only preview mode with no model calls
+- keeps a persistent mining ledger so unchanged repos are skipped by default
 
 Syntax:
 
 ```bash
-cam mine <directory> [--target /path/to/project] [--max-repos N] [--min-relevance 0.6] [--tasks/--no-tasks] [--depth N] [--dedup/--no-dedup] [--scan-only] [--max-minutes N]
+cam mine <directory> [--target /path/to/project] [--max-repos N] [--min-relevance 0.6] [--tasks/--no-tasks] [--depth N] [--dedup/--no-dedup] [--skip-known/--no-skip-known] [--force-rescan] [--scan-only] [--max-minutes N]
 ```
 
 Key options:
 - `--target`: where the mined findings should be considered relevant
 - `--min-relevance`: threshold for task generation
 - `--scan-only`: preview discovered repos without spending model calls
+- `--skip-known`: skip repos already mined when unchanged
+- `--force-rescan`: ignore the mining ledger and rescan selected repos
 - `--tasks`: whether to generate tasks from findings
 
 Example use case: improve CAM itself
@@ -388,6 +391,54 @@ cam mine /Users/o2satz/multiclaw/Repo2Eval \
   --target /Users/o2satz/multiclaw \
   --max-repos 4 \
   --max-minutes 20
+```
+
+Example use case: check a folder again later without wasting tokens
+
+```bash
+cam mine /Users/o2satz/multiclaw/Repo2Eval \
+  --scan-only \
+  --max-repos 10
+```
+
+If CAM says `Will mine: 0`, the selected repos are unchanged and would be skipped.
+
+If you know you want to rerun them anyway:
+
+```bash
+cam mine /Users/o2satz/multiclaw/Repo2Eval \
+  --max-repos 10 \
+  --force-rescan
+```
+
+## `cam mine-report`
+
+Purpose:
+Inspect a repo folder against CAM’s persistent mining ledger before spending tokens.
+
+What it does:
+- discovers repos/source trees in a directory
+- compares each one against the mining ledger
+- shows whether each repo is `new`, `changed`, or `unchanged`
+- shows when a repo was last mined and how many findings/tokens were recorded
+
+Syntax:
+
+```bash
+cam mine-report <directory> [--depth N] [--dedup/--no-dedup] [--changed-only]
+```
+
+Example use case:
+You added more repos to `Repo2Eval` and want to know what actually needs scanning.
+
+```bash
+cam mine-report /Users/o2satz/multiclaw/Repo2Eval --depth 3
+```
+
+Example use case: only show the repos that would justify fresh work
+
+```bash
+cam mine-report /Users/o2satz/multiclaw/Repo2Eval --depth 3 --changed-only
 ```
 
 Example use case: support a new app build

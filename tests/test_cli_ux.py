@@ -39,6 +39,10 @@ class TestCLIUXSurface:
         commands = _command_map()
         assert "ideate" in commands
 
+    def test_mine_report_command_registered(self):
+        commands = _command_map()
+        assert "mine-report" in commands
+
     def test_benchmark_command_registered(self):
         commands = _command_map()
         assert "benchmark" in commands
@@ -66,6 +70,9 @@ class TestCLIUXSurface:
         mine_cb = commands["mine"]
         sig = inspect.signature(mine_cb)
         assert "max_minutes" in sig.parameters
+        assert "skip_known" in sig.parameters
+        assert "force_rescan" in sig.parameters
+        assert "changed_only" in sig.parameters
 
     def test_create_has_repo_mode_and_time_guardrail(self):
         commands = _command_map()

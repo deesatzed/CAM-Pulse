@@ -20,6 +20,7 @@ CAM is not just a wrapper around a chat model. The distinctive parts are the wor
 - `create --execute` no longer trusts an agent saying "I changed files". CAM now checks the actual workspace diff and marks the run as failed if nothing changed.
 - `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM’s knowledge without importing CAM itself.
 - `mine` can detect extracted source trees even when they are not full `.git` clones, which matters when you are evaluating zip-downloaded repos.
+- `mine` now keeps a persistent scan ledger, so unchanged repos are skipped by default and only changed repos are rescanned unless you force a refresh.
 
 The practical result is that CAM is designed to help with real repo work, not just repo discussion.
 
@@ -29,6 +30,8 @@ Today CAM can:
 
 - evaluate one repo and decide what looks worth improving
 - mine a folder of repos and store transferable patterns in CAM memory
+- avoid re-spending tokens on unchanged repos that CAM already mined
+- report which repos are new, changed, or unchanged before you rescan them
 - search and inspect what CAM has already learned
 - ideate novel app concepts using both stored CAM knowledge and candidate repos
 - create a spec-backed task for a fixed repo, augmented repo, or new repo
@@ -190,6 +193,17 @@ Use this when you want CAM to tell you what it would change before it tries to c
 
 Use this when you want CAM to extract reusable patterns from outside repos and make that knowledge available to a target project.
 
+By default, `mine` now behaves incrementally:
+- unchanged repos are skipped before any model call
+- changed repos are rescanned automatically
+- `--force-rescan` overrides the ledger and rescans selected repos anyway
+
+To inspect the folder state before mining:
+
+```bash
+.venv/bin/cam mine-report /path/to/source-repos --depth 2
+```
+
 ### 3. Invent new app ideas from CAM memory plus repo inputs
 
 ```bash
@@ -333,6 +347,7 @@ That is the core build.
 | `cam evaluate <repo>` | Inspect one repository and produce findings |
 | `cam enhance <repo>` | Run the full improve-and-verify loop on one repository |
 | `cam mine <dir>` | Learn from repositories in a directory |
+| `cam mine-report <dir>` | Show which repos are new, changed, or unchanged in the mining ledger |
 | `cam ideate <dir>` | Generate novel standalone app concepts from CAM memory plus repo inputs |
 | `cam create <repo>` | Create, augment, or fix a repository from a task request |
 | `cam validate` | Check the created result against its saved spec |
