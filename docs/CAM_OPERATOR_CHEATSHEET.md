@@ -49,11 +49,18 @@ Default behavior:
 - unchanged repos are skipped automatically
 - changed repos are rescanned automatically
 - use `--force-rescan` when you want to ignore the ledger and mine them again anyway
+- live mining now validates required provider keys before it starts unless you explicitly use `--no-live-keycheck`
 
 Inspect the folder first:
 
 ```bash
 .venv/bin/cam mine-report /path/to/repo-folder --depth 3
+```
+
+Preflight the real provider path first:
+
+```bash
+.venv/bin/cam keycheck --for mine --live
 ```
 
 Real mining:
@@ -163,6 +170,7 @@ Use this when:
 ### Improve CAM using outside repos
 
 ```bash
+.venv/bin/cam keycheck --for mine --live
 .venv/bin/cam mine /path/to/repo-folder --target /Users/o2satz/multiclaw --max-repos 4 --max-minutes 20
 .venv/bin/cam kb insights
 ```
@@ -170,6 +178,7 @@ Use this when:
 ### Build a new standalone app using outside repos
 
 ```bash
+.venv/bin/cam keycheck --for mine --live
 .venv/bin/cam mine /path/to/repo-folder --target /path/to/new-app --max-repos 4 --max-minutes 20
 .venv/bin/cam ideate /path/to/repo-folder --ideas 3 --max-repos 4
 .venv/bin/cam create /path/to/new-app --repo-mode new --request "Build the selected concept"

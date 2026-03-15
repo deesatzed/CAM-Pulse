@@ -373,7 +373,7 @@ What it does:
 Syntax:
 
 ```bash
-cam mine <directory> [--target /path/to/project] [--max-repos N] [--min-relevance 0.6] [--tasks/--no-tasks] [--depth N] [--dedup/--no-dedup] [--skip-known/--no-skip-known] [--force-rescan] [--scan-only] [--max-minutes N]
+cam mine <directory> [--target /path/to/project] [--max-repos N] [--min-relevance 0.6] [--tasks/--no-tasks] [--depth N] [--dedup/--no-dedup] [--skip-known/--no-skip-known] [--force-rescan] [--scan-only] [--live-keycheck/--no-live-keycheck] [--max-minutes N]
 ```
 
 Key options:
@@ -382,11 +382,13 @@ Key options:
 - `--scan-only`: preview discovered repos without spending model calls
 - `--skip-known`: skip repos already mined when unchanged
 - `--force-rescan`: ignore the mining ledger and rescan selected repos
+- `--live-keycheck`: validate required provider keys with tiny real calls before live mining
 - `--tasks`: whether to generate tasks from findings
 
 Example use case: improve CAM itself
 
 ```bash
+cam keycheck --for mine --live
 cam mine /Users/o2satz/multiclaw/Repo2Eval \
   --target /Users/o2satz/multiclaw \
   --max-repos 4 \
@@ -403,12 +405,24 @@ cam mine /Users/o2satz/multiclaw/Repo2Eval \
 
 If CAM says `Will mine: 0`, the selected repos are unchanged and would be skipped.
 
+By default, live `cam mine` also validates provider access before starting. If you want the preflight separately:
+
+```bash
+cam keycheck --for mine --live
+```
+
 If you know you want to rerun them anyway:
 
 ```bash
 cam mine /Users/o2satz/multiclaw/Repo2Eval \
   --max-repos 10 \
   --force-rescan
+```
+
+If you explicitly want to skip the built-in live provider validation:
+
+```bash
+cam mine /path/to/repos --no-live-keycheck
 ```
 
 ## `cam mine-report`
@@ -439,6 +453,29 @@ Example use case: only show the repos that would justify fresh work
 
 ```bash
 cam mine-report /Users/o2satz/multiclaw/Repo2Eval --depth 3 --changed-only
+```
+
+## `cam keycheck`
+
+Purpose:
+Preflight API keys before you start a live model-backed command.
+
+What it does:
+- checks whether the required env vars are present for a command path
+- with `--live`, runs tiny real provider calls so invalid keys fail before longer work starts
+- currently supports `mine` and `ideate`
+
+Syntax:
+
+```bash
+cam keycheck --for mine|ideate [--live]
+```
+
+Example use case:
+You want to confirm `mine` will not fail on missing or invalid provider credentials.
+
+```bash
+cam keycheck --for mine --live
 ```
 
 ## `cam assimilation-report`

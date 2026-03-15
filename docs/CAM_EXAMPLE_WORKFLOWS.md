@@ -59,7 +59,29 @@ What this shows:
 - CAM can discover a source-tree style repo
 - you can preview repo selection before making model calls
 
-## Workflow 3: Export CAM Knowledge For Standalone Use
+## Workflow 3: Preflight Live Mining Credentials
+
+Command:
+
+```bash
+.venv/bin/cam keycheck --for mine --live
+```
+
+Expected behavior:
+
+```text
+CAM API Key Check
+  Command: mine
+...
+CAM Live API Validation
+...
+```
+
+What this shows:
+- CAM can fail fast on missing or invalid provider credentials before a real mine run starts
+- the same live validation is now built into `cam mine` by default
+
+## Workflow 4: Export CAM Knowledge For Standalone Use
 
 Command:
 
@@ -109,7 +131,7 @@ What this means in practice:
 - CAM is not only storing knowledge inside its own DB
 - it can hand that knowledge to a separate application
 
-## Workflow 4: Create A Spec-Backed Task
+## Workflow 5: Create A Spec-Backed Task
 
 Command:
 

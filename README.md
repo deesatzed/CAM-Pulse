@@ -169,7 +169,7 @@ Or export the keys you need before running CAM:
 export OPENROUTER_API_KEY=...
 export ANTHROPIC_API_KEY=...
 export OPENAI_API_KEY=...
-export GEMINI_API_KEY=...
+export GOOGLE_API_KEY=...
 ```
 
 ## First Practical Workflows
@@ -186,6 +186,7 @@ Use this when you want CAM to tell you what it would change before it tries to c
 ### 2. Learn from outside repos
 
 ```bash
+.venv/bin/cam keycheck --for mine --live
 .venv/bin/cam mine /path/to/source-repos \
   --target /path/to/target-repo \
   --max-repos 2 \
@@ -199,11 +200,18 @@ By default, `mine` now behaves incrementally:
 - unchanged repos are skipped before any model call
 - changed repos are rescanned automatically
 - `--force-rescan` overrides the ledger and rescans selected repos anyway
+- before live mining starts, CAM now validates the required provider keys with tiny real calls unless you explicitly pass `--no-live-keycheck`
 
 To inspect the folder state before mining:
 
 ```bash
 .venv/bin/cam mine-report /path/to/source-repos --depth 2
+```
+
+To verify keys/providers before a live run without starting mining:
+
+```bash
+.venv/bin/cam keycheck --for mine --live
 ```
 
 To inspect whether prior methodologies are just stored versus actually becoming useful:
@@ -360,6 +368,7 @@ That is the core build.
 | `cam setup` | Configure agent keys, models, budgets, and defaults |
 | `cam evaluate <repo>` | Inspect one repository and produce findings |
 | `cam enhance <repo>` | Run the full improve-and-verify loop on one repository |
+| `cam keycheck` | Preflight required API keys, optionally with tiny real provider calls |
 | `cam mine <dir>` | Learn from repositories in a directory |
 | `cam mine-report <dir>` | Show which repos are new, changed, or unchanged in the mining ledger |
 | `cam assimilation-report` | Show the learning continuum from stored knowledge to proven usefulness |
