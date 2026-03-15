@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -85,6 +86,164 @@ def _run_python_script_with_timeout(script_path: Path, args: list[str], max_minu
             console.print("[dim]Partial stdout:[/dim]")
             console.print(exc.stdout.strip())
         raise typer.Exit(124)
+
+
+def _uses_remote_gemini_embeddings(config: Any) -> bool:
+    model_name = str(getattr(config.embeddings, "model", "") or "")
+    required_model = str(getattr(config.embeddings, "required_model", "") or "")
+    return model_name.startswith("gemini-embedding") or required_model.startswith("gemini-embedding")
+
+
+def _required_api_keys_for_command(config: Any, command_name: str) -> list[tuple[str, str]]:
+    command = command_name.strip().lower()
+    requirements: list[tuple[str, str]] = []
+
+    if command in {"mine", "ideate"}:
+        requirements.append(("OPENROUTER_API_KEY", "OpenRouter LLM access"))
+
+    if command == "mine" and _uses_remote_gemini_embeddings(config):
+        key_name = getattr(config.embeddings, "api_key_env", "") or "GOOGLE_API_KEY"
+        requirements.append((str(key_name), "Gemini embeddings for methodology persistence"))
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for key_name, reason in requirements:
+        if key_name in seen:
+            continue
+        seen.add(key_name)
+        deduped.append((key_name, reason))
+    return deduped
+
+
+def _select_live_llm_model(config: Any, command_name: str) -> str:
+    command = command_name.strip().lower()
+    if command == "mine":
+        for agent_name in ("claude", "gemini", "codex", "grok"):
+            agent_cfg = config.agents.get(agent_name)
+            if agent_cfg and agent_cfg.enabled and agent_cfg.model:
+                return agent_cfg.model
+        raise typer.BadParameter("No enabled agent model is configured for mining")
+    return _select_ideation_model(config)
+
+
+def _print_api_key_check(config: Any, command_name: str) -> list[str]:
+    requirements = _required_api_keys_for_command(config, command_name)
+    console.print(f"\n[bold]CAM API Key Check[/bold]")
+    console.print(f"  Command: {command_name}")
+
+    if not requirements:
+        console.print("  No API keys required for this command path.")
+        return []
+
+    table = Table(title="Required Keys")
+    table.add_column("Key", style="cyan")
+    table.add_column("Status", style="bold")
+    table.add_column("Why", style="dim", max_width=44)
+
+    missing: list[str] = []
+    for key_name, reason in requirements:
+        present = bool(os.getenv(key_name, ""))
+        if present:
+            status = "[green]set[/green]"
+        else:
+            status = "[red]missing[/red]"
+            missing.append(key_name)
+        table.add_row(key_name, status, reason)
+
+    console.print(table)
+    return missing
+
+
+def _fail_if_missing_api_keys(config: Any, command_name: str) -> None:
+    missing = _print_api_key_check(config, command_name)
+    if not missing:
+        return
+
+    console.print("\n[red]Required API keys are missing. Refusing to start live work.[/red]")
+    for key_name in missing:
+        console.print(f"  export {key_name}=your-key-here")
+    raise typer.Exit(1)
+
+
+async def _run_live_key_checks(config: Any, command_name: str) -> list[dict[str, str]]:
+    from claw.db.embeddings import EmbeddingEngine
+    from claw.llm.client import LLMClient, LLMMessage
+
+    command = command_name.strip().lower()
+    results: list[dict[str, str]] = []
+
+    if any(key == "OPENROUTER_API_KEY" for key, _ in _required_api_keys_for_command(config, command)):
+        model = _select_live_llm_model(config, command)
+        llm_client = LLMClient(config.llm)
+        try:
+            response = await llm_client.complete(
+                messages=[LLMMessage(role="user", content="Reply with OK only.")],
+                model=model,
+                temperature=0.0,
+                max_tokens=8,
+            )
+            content = (response.content or "").strip().replace("\n", " ")
+            results.append({
+                "service": "OpenRouter",
+                "status": "ok",
+                "detail": f"model={model} reply={content[:60] or 'non-empty'}",
+            })
+        except Exception as exc:
+            results.append({
+                "service": "OpenRouter",
+                "status": "failed",
+                "detail": str(exc),
+            })
+        finally:
+            await llm_client.close()
+
+    if command == "mine" and _uses_remote_gemini_embeddings(config):
+        try:
+            engine = EmbeddingEngine(config.embeddings)
+            vector = engine.encode("cam keycheck live probe")
+            results.append({
+                "service": "Gemini embeddings",
+                "status": "ok",
+                "detail": f"model={engine.model_name} dim={len(vector)}",
+            })
+        except Exception as exc:
+            results.append({
+                "service": "Gemini embeddings",
+                "status": "failed",
+                "detail": str(exc),
+            })
+
+    return results
+
+
+def _render_live_key_check_results(results: list[dict[str, str]]) -> bool:
+    console.print("\n[bold]CAM Live API Validation[/bold]")
+    table = Table(title="Provider Checks")
+    table.add_column("Service", style="cyan")
+    table.add_column("Status", style="bold")
+    table.add_column("Detail", max_width=56)
+
+    failed = False
+    for item in results:
+        status = item["status"]
+        rendered_status = "[green]ok[/green]" if status == "ok" else "[red]failed[/red]"
+        if status != "ok":
+            failed = True
+        table.add_row(item["service"], rendered_status, item["detail"])
+
+    console.print(table)
+    return not failed
+
+
+def _fail_if_live_key_checks_fail(config: Any, command_name: str) -> None:
+    try:
+        live_results = asyncio.run(_run_live_key_checks(config, command_name))
+    except Exception as exc:
+        console.print(f"\n[red]Live preflight failed before provider validation: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if not _render_live_key_check_results(live_results):
+        raise typer.Exit(1)
 
 
 def _build_create_spec(
@@ -2617,6 +2776,7 @@ def ideate(
 ) -> None:
     """Generate novel app concepts from CAM memory plus candidate repos."""
     _setup_logging(False)
+    from claw.core.config import load_config
 
     dir_path = Path(directory).resolve()
     if not dir_path.exists():
@@ -2639,6 +2799,9 @@ def ideate(
         console.print("[red]--max-minutes must be at least 1[/red]")
         raise typer.Exit(1)
 
+    cfg = load_config(Path(config) if config else None)
+    _fail_if_missing_api_keys(cfg, "ideate")
+
     try:
         asyncio.run(asyncio.wait_for(
             _ideate_async(
@@ -2658,6 +2821,37 @@ def ideate(
     except TimeoutError:
         console.print(f"[red]Ideation timed out after {max_minutes} minute(s)[/red]")
         raise typer.Exit(124)
+
+
+@app.command(name="keycheck")
+def keycheck(
+    for_command: str = typer.Option("mine", "--for", help="Command to preflight: mine, ideate"),
+    live: bool = typer.Option(False, "--live", help="Also validate the keys with a tiny real provider call"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Quick API-key preflight before running a live command."""
+    _setup_logging(False)
+    normalized = for_command.strip().lower()
+    if normalized not in {"mine", "ideate"}:
+        console.print("[red]--for must be one of: mine, ideate[/red]")
+        raise typer.Exit(1)
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    missing = _print_api_key_check(cfg, normalized)
+    if missing:
+        console.print("\n[yellow]Set the missing keys before starting live work.[/yellow]")
+        for key_name in missing:
+            console.print(f"  export {key_name}=your-key-here")
+        raise typer.Exit(1)
+
+    if not live:
+        console.print("\n[green]Preflight passed.[/green]")
+        return
+
+    _fail_if_live_key_checks_fail(cfg, normalized)
+    console.print("\n[green]Live preflight passed.[/green]")
 
 
 async def _ideate_async(
@@ -2840,6 +3034,7 @@ def mine(
     force_rescan: bool = typer.Option(False, "--force-rescan", help="Ignore the mining ledger and rescan selected repos"),
     changed_only: bool = typer.Option(False, "--changed-only", help="Only show/mine repos that are new or changed according to the mining ledger"),
     scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
+    live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys with tiny real calls before live mining"),
     max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
@@ -2882,6 +3077,13 @@ def mine(
     if scan_only:
         _mine_scan_only(dir_path, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
         return
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    _fail_if_missing_api_keys(cfg, "mine")
+    if live_keycheck:
+        _fail_if_live_key_checks_fail(cfg, "mine")
 
     try:
         asyncio.run(asyncio.wait_for(

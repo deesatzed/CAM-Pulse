@@ -51,6 +51,10 @@ class TestCLIUXSurface:
         commands = _command_map()
         assert "reassess" in commands
 
+    def test_keycheck_command_registered(self):
+        commands = _command_map()
+        assert "keycheck" in commands
+
     def test_benchmark_command_registered(self):
         commands = _command_map()
         assert "benchmark" in commands
@@ -81,6 +85,7 @@ class TestCLIUXSurface:
         assert "skip_known" in sig.parameters
         assert "force_rescan" in sig.parameters
         assert "changed_only" in sig.parameters
+        assert "live_keycheck" in sig.parameters
 
     def test_create_has_repo_mode_and_time_guardrail(self):
         commands = _command_map()
@@ -136,3 +141,10 @@ class TestCLIUXSurface:
         cb = commands["forge-benchmark"]
         sig = inspect.signature(cb)
         assert "max_minutes" in sig.parameters
+
+    def test_keycheck_has_for_command_option(self):
+        commands = _command_map()
+        cb = commands["keycheck"]
+        sig = inspect.signature(cb)
+        assert "for_command" in sig.parameters
+        assert "live" in sig.parameters
