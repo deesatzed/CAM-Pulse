@@ -40,6 +40,9 @@ Return a JSON array of findings. Each finding must have these fields:
     "description": "Detailed description of the pattern/feature/technique (2-4 sentences)",
     "category": "one of: architecture|ai_integration|memory|code_quality|cli_ux|testing|data_processing|security|algorithm|cross_cutting",
     "source_files": ["relative/path/to/key/file.py"],
+    "source_symbols": [
+      {"file_path": "relative/path/to/key/file.py", "symbol_name": "function_or_class_name", "symbol_kind": "function|class|module", "note": "why this symbol matters"}
+    ],
     "implementation_sketch": "How this could be adapted for CLAW (2-5 sentences with specific file/class suggestions)",
     "augmentation_notes": "What CLAW currently lacks that this addresses",
     "execution_steps": ["Optional: concrete commands to execute this pattern safely in a target repo"],
@@ -61,6 +64,7 @@ Return a JSON array of findings. Each finding must have these fields:
 - Focus on **transferable ideas**, not repo-specific business logic
 - Prefer patterns that are **novel or well-implemented**, not obvious boilerplate
 - Include the most relevant source files that demonstrate the pattern
+- Include `source_symbols` when a specific function, class, or module is the real carrier of the idea
 - implementation_sketch should reference specific CLAW modules where the pattern could be integrated
 - When including execution/acceptance commands, use concrete, low-risk commands (no destructive operations)
 

@@ -989,6 +989,59 @@ class TestStoreFinding:
         assert cap["source_artifacts"][0]["file_path"] == "src/verify.py"
         assert cap["dependencies"] == ["pytest installed"]
 
+    async def test_store_finding_preserves_symbol_level_source_artifacts(
+        self, repo_miner, repository, sample_project
+    ):
+        await repository.create_project(sample_project)
+        finding = MiningFinding(
+            title="Prompt registry pattern",
+            description="A function-oriented pattern with strong verification.",
+            category="architecture",
+            source_repo="symbolic-repo",
+            source_files=["src/prompting.py"],
+            source_symbols=[
+                {
+                    "file_path": "src/prompting.py",
+                    "symbol_name": "build_prompt_registry",
+                    "symbol_kind": "function",
+                    "note": "top-level function implementing the pattern",
+                }
+            ],
+            relevance_score=0.8,
+        )
+        method_id = await repo_miner.store_finding(finding, sample_project.id)
+        methodology = await repository.get_methodology(method_id)
+        assert methodology is not None
+        artifacts = methodology.capability_data["source_artifacts"]
+        assert any(item["symbol_name"] == "build_prompt_registry" for item in artifacts)
+
+
+class TestSymbolExtraction:
+    def test_attach_symbol_provenance_extracts_python_symbols(self, repo_miner, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        source = repo / "signals.py"
+        source.write_text(
+            "class PromptRegistry:\n    pass\n\n"
+            "def build_prompt_registry():\n    return PromptRegistry()\n",
+            encoding="utf-8",
+        )
+
+        finding = MiningFinding(
+            title="Prompt registry pattern",
+            description="The build_prompt_registry function wires a registry for prompt loading.",
+            category="architecture",
+            source_repo="tmp-repo",
+            source_files=["signals.py"],
+        )
+        repo_miner._attach_symbol_provenance([finding], repo)
+        names = {item["symbol_name"] for item in finding.source_symbols}
+        kinds = {item["symbol_kind"] for item in finding.source_symbols}
+        assert "build_prompt_registry" in names
+        assert "PromptRegistry" in names
+        assert "function" in kinds
+        assert "class" in kinds
+
 
 # ===========================================================================
 # 8. RepoMiner._generate_tasks() — async, real database

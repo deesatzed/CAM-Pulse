@@ -16,6 +16,7 @@ import os
 import re
 import time
 import hashlib
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -79,6 +80,7 @@ class MiningFinding:
     category: str
     source_repo: str
     source_files: list[str] = field(default_factory=list)
+    source_symbols: list[dict[str, str]] = field(default_factory=list)
     implementation_sketch: str = ""
     augmentation_notes: str = ""
     relevance_score: float = 0.5
@@ -378,6 +380,25 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             source_files = []
         source_files = [str(f) for f in source_files if f]
 
+        source_symbols = item.get("source_symbols", [])
+        if not isinstance(source_symbols, list):
+            source_symbols = []
+        normalized_symbols: list[dict[str, str]] = []
+        for symbol in source_symbols:
+            if isinstance(symbol, dict):
+                file_path = str(symbol.get("file_path", "")).strip()
+                symbol_name = str(symbol.get("symbol_name", "")).strip()
+                symbol_kind = str(symbol.get("symbol_kind", "symbol")).strip() or "symbol"
+                if file_path and symbol_name:
+                    normalized_symbols.append(
+                        {
+                            "file_path": file_path,
+                            "symbol_name": symbol_name,
+                            "symbol_kind": symbol_kind,
+                            "note": str(symbol.get("note", "")).strip(),
+                        }
+                    )
+
         # Optional execution plan fields
         execution_steps = item.get("execution_steps", [])
         if not isinstance(execution_steps, list):
@@ -405,6 +426,7 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             category=category,
             source_repo=repo_name,
             source_files=source_files[:20],
+            source_symbols=normalized_symbols[:20],
             implementation_sketch=str(item.get("implementation_sketch", ""))[:2000],
             augmentation_notes=str(item.get("augmentation_notes", ""))[:1000],
             relevance_score=relevance,
@@ -456,6 +478,130 @@ class RepoMiner:
             scan_ledger_path or _default_scan_ledger_path(config)
         )
 
+    @staticmethod
+    def _extract_symbols_from_file(repo_path: Path, relative_path: str, max_symbols: int = 8) -> list[dict[str, str]]:
+        """Extract concrete class/function/module references from a source file."""
+        path = repo_path / relative_path
+        if not path.is_file():
+            return []
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+
+        symbols: list[dict[str, str]] = []
+        module_name = path.stem
+        symbols.append(
+            {
+                "file_path": relative_path,
+                "symbol_name": module_name,
+                "symbol_kind": "module",
+                "note": "module derived from source file",
+            }
+        )
+
+        suffix = path.suffix.lower()
+        if suffix == ".py":
+            try:
+                tree = ast.parse(text)
+                for node in tree.body:
+                    if isinstance(node, ast.ClassDef):
+                        symbols.append(
+                            {
+                                "file_path": relative_path,
+                                "symbol_name": node.name,
+                                "symbol_kind": "class",
+                                "note": "top-level class definition",
+                            }
+                        )
+                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        symbols.append(
+                            {
+                                "file_path": relative_path,
+                                "symbol_name": node.name,
+                                "symbol_kind": "function",
+                                "note": "top-level function definition",
+                            }
+                        )
+            except SyntaxError:
+                pass
+        else:
+            patterns: list[tuple[str, str]] = [
+                (r"(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
+                (r"class\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
+                (r"(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(", "function"),
+                (r"func\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
+                (r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:struct|interface)", "class"),
+                (r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
+                (r"\b(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
+                (r"\b(?:class|interface|record)\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
+            ]
+            for pattern, kind in patterns:
+                for match in re.finditer(pattern, text):
+                    symbols.append(
+                        {
+                            "file_path": relative_path,
+                            "symbol_name": match.group(1),
+                            "symbol_kind": kind,
+                            "note": f"heuristically extracted {kind}",
+                        }
+                    )
+
+        deduped: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in symbols:
+            ident = (item["file_path"], item["symbol_name"], item["symbol_kind"])
+            if ident in seen:
+                continue
+            seen.add(ident)
+            deduped.append(item)
+            if len(deduped) >= max_symbols:
+                break
+        return deduped
+
+    @staticmethod
+    def _score_symbol_relevance(symbol: dict[str, str], finding: MiningFinding) -> int:
+        text = " ".join(
+            [
+                finding.title.lower(),
+                finding.description.lower(),
+                finding.implementation_sketch.lower(),
+                finding.augmentation_notes.lower(),
+            ]
+        )
+        name = symbol.get("symbol_name", "").lower()
+        score = 0
+        if name and name in text:
+            score += 4
+        name_tokens = {token for token in re.findall(r"[a-z0-9_]+", name) if len(token) >= 3}
+        text_tokens = {token for token in re.findall(r"[a-z0-9_]+", text) if len(token) >= 3}
+        score += len(name_tokens & text_tokens)
+        kind = symbol.get("symbol_kind", "")
+        if kind in {"class", "function"}:
+            score += 1
+        return score
+
+    def _attach_symbol_provenance(self, findings: list[MiningFinding], repo_path: Path, per_finding_limit: int = 8) -> None:
+        """Attach concrete symbol references from mined source files."""
+        for finding in findings:
+            if finding.source_symbols:
+                continue
+            candidates: list[dict[str, str]] = []
+            for relative_path in finding.source_files:
+                candidates.extend(self._extract_symbols_from_file(repo_path, relative_path))
+            candidates.sort(key=lambda item: self._score_symbol_relevance(item, finding), reverse=True)
+            deduped: list[dict[str, str]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for item in candidates:
+                ident = (item["file_path"], item["symbol_name"], item["symbol_kind"])
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                deduped.append(item)
+                if len(deduped) >= per_finding_limit:
+                    break
+            finding.source_symbols = deduped
+
     def _seed_capability_data_from_finding(self, finding: MiningFinding) -> dict[str, Any]:
         """Create retrieval-friendly seed capability metadata from a mining finding.
 
@@ -474,6 +620,15 @@ class RepoMiner:
             }
             for path in finding.source_files
         ]
+        for symbol in finding.source_symbols:
+            source_artifacts.append(
+                {
+                    "file_path": symbol.get("file_path", ""),
+                    "symbol_name": symbol.get("symbol_name"),
+                    "symbol_kind": symbol.get("symbol_kind", "symbol"),
+                    "note": symbol.get("note", ""),
+                }
+            )
 
         triggers = list(_CATEGORY_TRIGGER_MAP.get(finding.category, []))
         if finding.execution_steps or finding.acceptance_checks:
@@ -713,6 +868,7 @@ class RepoMiner:
 
         # Parse findings
         findings = parse_findings(response.content, repo_name)
+        self._attach_symbol_provenance(findings, Path(repo_path))
         logger.info("Extracted %d findings from %s", len(findings), repo_name)
 
         # Store each finding in semantic memory
