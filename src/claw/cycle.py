@@ -152,6 +152,20 @@ def _apply_structured_file_operations(
     return True, None
 
 
+def _agent_can_modify_workspace(agent: Any) -> bool:
+    capability = getattr(agent, "can_modify_workspace", None)
+    if callable(capability):
+        return bool(capability())
+    return True
+
+
+def _agent_can_use_internal_executor(agent: Any) -> bool:
+    capability = getattr(agent, "can_use_internal_workspace_executor", None)
+    if callable(capability):
+        return bool(capability())
+    return False
+
+
 class ClawCycle(ABC):
     """Abstract base for all claw cycle levels."""
 
@@ -481,11 +495,8 @@ class MicroClaw(ClawCycle):
         await self.ctx.repository.increment_task_attempt(task_ctx.task.id)
 
         agent = self.ctx.agents[agent_id]
-        can_modify_workspace = hasattr(agent, "can_modify_workspace") and agent.can_modify_workspace()
-        can_use_internal_executor = (
-            hasattr(agent, "can_use_internal_workspace_executor")
-            and agent.can_use_internal_workspace_executor()
-        )
+        can_modify_workspace = _agent_can_modify_workspace(agent)
+        can_use_internal_executor = _agent_can_use_internal_executor(agent)
         if not can_modify_workspace and not can_use_internal_executor:
             outcome = TaskOutcome(
                 agent_id=agent_id,
@@ -527,10 +538,10 @@ class MicroClaw(ClawCycle):
         actual_files_changed, actual_diff = _compute_workspace_change(before_snapshot, after_snapshot)
 
         # Trust the real workspace diff over model self-report.
-        if actual_files_changed:
+        if workspace_dir and actual_files_changed:
             outcome.files_changed = actual_files_changed
             outcome.diff = actual_diff
-        elif not outcome.failure_reason:
+        elif workspace_dir and not outcome.failure_reason:
             outcome.files_changed = []
             outcome.diff = ""
             outcome.failure_reason = "no_workspace_changes"

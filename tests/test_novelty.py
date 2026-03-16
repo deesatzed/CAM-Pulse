@@ -35,6 +35,7 @@ from claw.evolution.assimilation import (
 from claw.memory.lifecycle import evaluate_transition, _is_novelty_protected
 from claw.memory.hybrid_search import HybridSearch, HybridSearchResult
 from claw.memory.fitness import get_fitness_score
+from tests.conftest import requires_google
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +305,7 @@ class TestTypeRarity:
 # 2. Integration Tests (require DB)
 # ===========================================================================
 
+@requires_google
 class TestNearestNeighborNovelty:
     """Test nearest-neighbor novelty with real embeddings."""
 
@@ -371,6 +373,7 @@ class TestNearestNeighborNovelty:
         assert result == 0.5
 
 
+@requires_google
 class TestCentroidDistanceNovelty:
     """Test centroid distance signal."""
 
