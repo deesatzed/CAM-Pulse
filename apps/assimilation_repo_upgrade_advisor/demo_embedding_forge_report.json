@@ -1,0 +1,145 @@
+{
+  "repo": "../embedding_forge",
+  "knowledge_items": 160,
+  "recommendations": [
+    {
+      "title": "Add automated tests before expanding features",
+      "category": "testing",
+      "confidence": 0.549,
+      "difficulty": "medium",
+      "payoff": "high",
+      "evidence": [
+        "Python files: 2",
+        "No test files were found."
+      ],
+      "first_step": "Add a tests/ directory and one smoke test covering the primary module entrypoint.",
+      "provenance": [
+        {
+          "item_id": "meth:29970e19-94ed-4898-b97b-736959a0f8d0",
+          "title": "[Mined from xplay] Prompt A/B Testing Harness: A built-in harness for running A/B tests on system prompts, automatically",
+          "source_repo": "xplay",
+          "score": 0.91,
+          "rationale": "code, quality, testing, tests, which"
+        },
+        {
+          "item_id": "meth:a0b90506-6f92-493d-81d2-6b727ab19179",
+          "title": "[Mined from whs112625] Claim-Gate Verification Pipeline: A rigorous verification pattern where AI agents must generate a",
+          "source_repo": "whs112625",
+          "score": 0.866,
+          "rationale": "before, code, detection, regression, testing"
+        },
+        {
+          "item_id": "meth:66a47fdd-f432-4007-be32-3523094cbdeb",
+          "title": "[Mined from autoresearch-macos] Fixed-Budget Evaluation Harness: Standardizes performance comparisons by enforcing a str",
+          "source_repo": "autoresearch-macos",
+          "score": 0.858,
+          "rationale": "add, iteration, testing, tests"
+        }
+      ]
+    },
+    {
+      "title": "Add package metadata and repeatable developer entrypoints",
+      "category": "architecture",
+      "confidence": 0.508,
+      "difficulty": "low",
+      "payoff": "high",
+      "evidence": [
+        "Python source detected.",
+        "No pyproject.toml found."
+      ],
+      "first_step": "Create pyproject.toml with project metadata and a minimal build-system section.",
+      "provenance": [
+        {
+          "item_id": "meth:e160807d-cf44-42b6-9d79-ccb2e323bdf7",
+          "title": "[Mined from workspace] Tiered Configuration Access Pattern: A tiered configuration manager that resolves settings by che",
+          "source_repo": "workspace",
+          "score": 0.835,
+          "rationale": "architecture, cli, source, workspace"
+        },
+        {
+          "item_id": "meth:5a4265e7-b2f2-4cf5-a54f-7cc808543010",
+          "title": "[Mined from workspace_mostly_works] Hospital-Based Advisory Flagging: A domain-specific metadata pattern that adds a 'fl",
+          "source_repo": "workspace_mostly_works",
+          "score": 0.806,
+          "rationale": "add, architecture, metadata, source"
+        },
+        {
+          "item_id": "meth:c990950e-b4e8-4dbf-86df-90c9cb02b2b3",
+          "title": "[Mined from workspace (Copy)] Database-Agnostic Migration Scripting: A standalone migration pattern that uses raw SQL ex",
+          "source_repo": "workspace (Copy)",
+          "score": 0.798,
+          "rationale": "architecture, source, verification, workspace"
+        }
+      ]
+    },
+    {
+      "title": "Strengthen operator-facing documentation",
+      "category": "code_quality",
+      "confidence": 0.502,
+      "difficulty": "low",
+      "payoff": "medium",
+      "evidence": [
+        "Documentation-like files found: 1",
+        "No docs/ directory found."
+      ],
+      "first_step": "Add docs/ with a quickstart and one architecture note describing the main workflow.",
+      "provenance": [
+        {
+          "item_id": "meth:54d161ed-3952-4f7c-ba5f-b323294d5295",
+          "title": "[Mined from Anthropic-Cybersecurity-Skills] Reference Documentation Pattern per Skill: Skills include optional reference",
+          "source_repo": "Anthropic-Cybersecurity-Skills",
+          "score": 0.816,
+          "rationale": "code_quality, documentation, guidance, implementation"
+        },
+        {
+          "item_id": "meth:a0b90506-6f92-493d-81d2-6b727ab19179",
+          "title": "[Mined from whs112625] Claim-Gate Verification Pipeline: A rigorous verification pattern where AI agents must generate a",
+          "source_repo": "whs112625",
+          "score": 0.807,
+          "rationale": "code_quality, implementation, which, written"
+        },
+        {
+          "item_id": "meth:35a2e6ac-f798-4d1c-aa22-fcccf20951d3",
+          "title": "[Mined from xplur] Adaptive Metric Weighting: A system where evaluation metric weights (e.g., compression vs. accuracy) ",
+          "source_repo": "xplur",
+          "score": 0.786,
+          "rationale": "code_quality, harder, implementation"
+        }
+      ]
+    },
+    {
+      "title": "Add continuous verification checks",
+      "category": "devops",
+      "confidence": 0.471,
+      "difficulty": "medium",
+      "payoff": "high",
+      "evidence": [
+        "No .github/workflows YAML files found."
+      ],
+      "first_step": "Create a GitHub Actions workflow that runs the test suite and one CLI invocation.",
+      "provenance": [
+        {
+          "item_id": "meth:b0789c5f-626b-45ab-b9f0-b7dac335ce11",
+          "title": "[Mined from whs112625] Agent Score Evolution Tracking: The system tracks agent performance over time, allowing for the '",
+          "source_repo": "whs112625",
+          "score": 0.797,
+          "rationale": "add, quality, static"
+        },
+        {
+          "item_id": "meth:16a3c9b3-0543-4931-afda-be8b4f7066f9",
+          "title": "[Mined from Anthropic-Cybersecurity-Skills] Workflow Step Pattern with Verification Checks: Skills define workflows as n",
+          "source_repo": "Anthropic-Cybersecurity-Skills",
+          "score": 0.747,
+          "rationale": "checks, verification, workflow"
+        },
+        {
+          "item_id": "meth:a0b90506-6f92-493d-81d2-6b727ab19179",
+          "title": "[Mined from whs112625] Claim-Gate Verification Pipeline: A rigorous verification pattern where AI agents must generate a",
+          "source_repo": "whs112625",
+          "score": 0.719,
+          "rationale": "change, tests, verification"
+        }
+      ]
+    }
+  ]
+}

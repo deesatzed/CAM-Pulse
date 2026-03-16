@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assimilation-repo-upgrade-advisor"
+version = "0.1.0"
+description = "Standalone advisor that turns CAM knowledge packs into repo upgrade plans with provenance."
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "CAM" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["advisor_app*"]
