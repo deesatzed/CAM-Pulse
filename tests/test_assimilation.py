@@ -23,6 +23,8 @@ from claw.evolution.assimilation import (
     CapabilityComposer,
     SynergyDiscoverer,
     _canonical_pair,
+    _merge_capability_dicts,
+    _needs_capability_enrichment,
     _parse_capability_json,
     _parse_synergy_json,
 )
@@ -76,6 +78,9 @@ def _make_capability_data(**overrides) -> dict:
             standalone=True,
         ),
         capability_type="analysis",
+        source_repos=["seed-repo"],
+        applicability=["Useful when analyzing optimization behavior"],
+        activation_triggers=["regression_risk"],
     )
     d = data.model_dump()
     d.update(overrides)
@@ -105,10 +110,13 @@ class TestCapabilityModels:
             domain=["refactoring"],
             composability=ComposabilityInterface(standalone=False),
             capability_type="transformation",
+            source_repos=["repo-a"],
+            activation_triggers=["missing_tests"],
         )
         assert len(cd.inputs) == 1
         assert cd.domain == ["refactoring"]
         assert cd.composability.standalone is False
+        assert cd.source_repos == ["repo-a"]
 
     def test_capability_data_serialization_roundtrip(self):
         cd = CapabilityData(
@@ -601,6 +609,7 @@ class TestParseCapabilityJson:
         assert result is not None
         assert result["capability_type"] == "analysis"
         assert len(result["inputs"]) == 1
+        assert result["source_repos"] == []
 
     def test_json_with_markdown_fencing(self):
         raw = '```json\n{"inputs": [], "outputs": [], "domain": ["test"], "capability_type": "detection"}\n```'
@@ -618,10 +627,50 @@ class TestParseCapabilityJson:
         assert result is not None
         assert result["inputs"] == []
         assert result["outputs"] == []
+        assert result["activation_triggers"] == []
 
     def test_non_dict_returns_none(self):
         result = _parse_capability_json('"just a string"')
         assert result is None
+
+
+class TestCapabilityMergeHelpers:
+    def test_merge_capability_dicts_preserves_seed_and_enriched_fields(self):
+        seed = {
+            "schema_version": 2,
+            "enrichment_status": "seeded",
+            "inputs": [],
+            "outputs": [],
+            "domain": ["testing"],
+            "composability": {"can_chain_after": [], "can_chain_before": [], "standalone": True},
+            "capability_type": "validation",
+            "source_repos": ["repo-a"],
+            "source_artifacts": [{"file_path": "src/a.py", "symbol_name": None, "symbol_kind": "file", "note": ""}],
+            "applicability": ["useful for missing tests"],
+            "non_applicability": ["do not apply blindly"],
+            "activation_triggers": ["missing_tests"],
+            "dependencies": [],
+            "risks": ["context-sensitive"],
+            "composition_candidates": [],
+            "evidence": ["source_file:src/a.py"],
+        }
+        extracted = _make_capability_data(
+            domain=["testing", "code_quality"],
+            inputs=[{"name": "repo", "type": "file_manifest", "required": True, "description": ""}],
+            outputs=[{"name": "checks", "type": "test_results", "required": True, "description": ""}],
+        )
+        merged = _merge_capability_dicts(seed, extracted)
+        assert merged["enrichment_status"] == "merged"
+        assert "repo-a" in merged["source_repos"]
+        assert "testing" in merged["domain"]
+        assert "code_quality" in merged["domain"]
+        assert merged["inputs"][0]["name"] == "repo"
+        assert "missing_tests" in merged["activation_triggers"]
+
+    def test_needs_capability_enrichment(self):
+        assert _needs_capability_enrichment(None) is True
+        assert _needs_capability_enrichment({"enrichment_status": "seeded"}) is True
+        assert _needs_capability_enrichment(_make_capability_data()) is False
 
 
 class TestParseSynergyJson:

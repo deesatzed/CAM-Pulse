@@ -4,6 +4,8 @@ Analyze the methodology below and return a JSON object with these fields:
 
 ```json
 {
+  "schema_version": 2,
+  "enrichment_status": "enriched",
   "inputs": [
     {"name": "input_name", "type": "type_category", "required": true, "description": "what this input is"}
   ],
@@ -11,6 +13,17 @@ Analyze the methodology below and return a JSON object with these fields:
     {"name": "output_name", "type": "type_category", "required": true, "description": "what this output is"}
   ],
   "domain": ["domain_tag_1", "domain_tag_2"],
+  "source_repos": ["repo_name_if_known"],
+  "source_artifacts": [
+    {"file_path": "relative/path.py", "symbol_name": "function_or_class", "symbol_kind": "function", "note": "why this artifact matters"}
+  ],
+  "applicability": ["When this capability is useful"],
+  "non_applicability": ["When this capability should not be applied"],
+  "activation_triggers": ["repo_signal_or_task_trigger"],
+  "dependencies": ["tools, files, or prior capabilities required"],
+  "risks": ["main misuse or failure risks"],
+  "composition_candidates": ["other capability types or patterns this combines with"],
+  "evidence": ["short evidence snippets from the methodology text"],
   "composability": {
     "can_chain_after": ["capability_type_1"],
     "can_chain_before": ["capability_type_2"],
@@ -36,6 +49,7 @@ Use lowercase_snake_case. Examples: ml_training, web_development, testing, secur
 - can_chain_before: what types of capabilities typically consume this capability's outputs
 - standalone: true if the capability can operate independently without chaining
 - Return ONLY the JSON object, no markdown fencing, no explanation
+- Preserve any source repo, source artifact, applicability, trigger, dependency, risk, or evidence hints already visible in the methodology text or tags
 
 ## Methodology to analyze
 

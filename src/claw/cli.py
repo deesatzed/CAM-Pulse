@@ -658,6 +658,12 @@ def _derive_activation_triggers(meth: Any, *, template_count: int = 0) -> list[s
     ]
     capability_data = getattr(meth, "capability_data", None) or {}
     if isinstance(capability_data, dict):
+        for trigger in capability_data.get("activation_triggers", []) or []:
+            text_parts.append(str(trigger))
+        for hint in capability_data.get("applicability", []) or []:
+            text_parts.append(str(hint))
+        for hint in capability_data.get("non_applicability", []) or []:
+            text_parts.append(str(hint))
         text_parts.extend(capability_data.get("domain", []) or [])
         ctype = capability_data.get("capability_type")
         if ctype:
@@ -5702,10 +5708,26 @@ async def _kb_capability_async(cap_id: str) -> None:
             cap_table.add_column("Value", max_width=50)
             cap_table.add_row("Type", cd.get("capability_type", "-"))
             cap_table.add_row("Domains", ", ".join(cd.get("domain", [])))
-            cap_table.add_row("IO Types In", ", ".join(str(t) for t in cd.get("io_types_in", [])))
-            cap_table.add_row("IO Types Out", ", ".join(str(t) for t in cd.get("io_types_out", [])))
-            cap_table.add_row("Composability", str(cd.get("composability_score", "-")))
-            cap_table.add_row("Standalone", str(cd.get("standalone_viable", "-")))
+            cap_table.add_row(
+                "Inputs",
+                ", ".join(
+                    f"{item.get('name', '?')}:{item.get('type', '?')}"
+                    for item in cd.get("inputs", [])[:4]
+                    if isinstance(item, dict)
+                ) or "-",
+            )
+            cap_table.add_row(
+                "Outputs",
+                ", ".join(
+                    f"{item.get('name', '?')}:{item.get('type', '?')}"
+                    for item in cd.get("outputs", [])[:4]
+                    if isinstance(item, dict)
+                ) or "-",
+            )
+            composability = cd.get("composability", {}) if isinstance(cd.get("composability"), dict) else {}
+            cap_table.add_row("Standalone", str(composability.get("standalone", "-")))
+            cap_table.add_row("Triggers", ", ".join(cd.get("activation_triggers", [])[:5]) or "-")
+            cap_table.add_row("Source Repos", ", ".join(cd.get("source_repos", [])[:4]) or "-")
             console.print(cap_table)
 
         # Metadata

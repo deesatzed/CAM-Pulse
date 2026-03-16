@@ -141,6 +141,14 @@ class CapabilityIO(BaseModel):
     description: str = ""
 
 
+class CapabilityArtifactReference(BaseModel):
+    """Concrete source artifact that backs a reusable capability."""
+    file_path: str
+    symbol_name: Optional[str] = None
+    symbol_kind: str = "file"  # file, function, class, module, workflow, config_pattern
+    note: str = ""
+
+
 class ComposabilityInterface(BaseModel):
     """Describes how a capability can chain with others."""
     can_chain_after: list[str] = Field(default_factory=list)  # domain tags
@@ -150,11 +158,22 @@ class ComposabilityInterface(BaseModel):
 
 class CapabilityData(BaseModel):
     """Structured capability metadata stored as JSON in methodologies.capability_data."""
+    schema_version: int = 2
+    enrichment_status: str = "enriched"  # seeded, partial, enriched, merged
     inputs: list[CapabilityIO] = Field(default_factory=list)
     outputs: list[CapabilityIO] = Field(default_factory=list)
     domain: list[str] = Field(default_factory=list)
     composability: ComposabilityInterface = Field(default_factory=ComposabilityInterface)
     capability_type: str = "transformation"  # transformation, analysis, generation, validation
+    source_repos: list[str] = Field(default_factory=list)
+    source_artifacts: list[CapabilityArtifactReference] = Field(default_factory=list)
+    applicability: list[str] = Field(default_factory=list)
+    non_applicability: list[str] = Field(default_factory=list)
+    activation_triggers: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    composition_candidates: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
 
 
 class SynergyEdgeType(str, enum.Enum):

@@ -961,6 +961,34 @@ class TestStoreFinding:
         assert template.acceptance_checks == ["npm test -- --runInBand"]
         assert template.source_repo == "nanochat"
 
+    async def test_store_finding_seeds_capability_data_with_provenance_and_triggers(
+        self, repo_miner, repository, sample_project
+    ):
+        await repository.create_project(sample_project)
+        finding = MiningFinding(
+            title="Verification pipeline",
+            description="A reusable workflow pattern with explicit verification checks.",
+            category="testing",
+            source_repo="verifier-lib",
+            source_files=["src/verify.py", "tests/test_verify.py"],
+            implementation_sketch="Adapt this into a validation runner for CLAW.",
+            augmentation_notes="Needs adaptation to local repo layout.",
+            relevance_score=0.82,
+            preconditions=["pytest installed"],
+        )
+        method_id = await repo_miner.store_finding(finding, sample_project.id)
+        methodology = await repository.get_methodology(method_id)
+        assert methodology is not None
+        assert methodology.capability_data is not None
+        cap = methodology.capability_data
+        assert cap["enrichment_status"] == "seeded"
+        assert cap["source_repos"] == ["verifier-lib"]
+        assert cap["domain"] == ["testing"]
+        assert "missing_tests" in cap["activation_triggers"]
+        assert "high_relevance" in cap["activation_triggers"]
+        assert cap["source_artifacts"][0]["file_path"] == "src/verify.py"
+        assert cap["dependencies"] == ["pytest installed"]
+
 
 # ===========================================================================
 # 8. RepoMiner._generate_tasks() — async, real database

@@ -74,6 +74,96 @@ def _parse_capability_json(raw: str) -> Optional[dict]:
         return None
 
 
+def _merge_capability_dicts(seed: Optional[dict], extracted: dict) -> dict:
+    """Merge mined seed metadata with LLM-enriched capability data.
+
+    Seed metadata preserves provenance, applicability hints, and activation
+    triggers gathered at mining time. Extracted data contributes structured
+    IO/domain/composability inferred by the assimilation model.
+    """
+    if not seed:
+        merged = dict(extracted)
+        merged.setdefault("schema_version", 2)
+        merged.setdefault("enrichment_status", "enriched")
+        return CapabilityData(**merged).model_dump()
+
+    merged = dict(seed)
+    merged["schema_version"] = max(int(seed.get("schema_version", 1)), int(extracted.get("schema_version", 1)), 2)
+    merged["enrichment_status"] = "merged"
+
+    for key in ("inputs", "outputs", "domain"):
+        seed_values = list(seed.get(key, []) or [])
+        extracted_values = list(extracted.get(key, []) or [])
+        if key == "domain":
+            combined: list[Any] = []
+            for value in seed_values + extracted_values:
+                if value not in combined:
+                    combined.append(value)
+            merged[key] = combined
+            continue
+
+        seen: set[tuple[Any, ...]] = set()
+        combined_items: list[dict[str, Any]] = []
+        for item in seed_values + extracted_values:
+            if not isinstance(item, dict):
+                continue
+            ident = (item.get("name"), item.get("type"))
+            if ident in seen:
+                continue
+            seen.add(ident)
+            combined_items.append(item)
+        merged[key] = combined_items
+
+    for key in (
+        "source_repos",
+        "applicability",
+        "non_applicability",
+        "activation_triggers",
+        "dependencies",
+        "risks",
+        "composition_candidates",
+        "evidence",
+    ):
+        combined: list[Any] = []
+        for value in list(seed.get(key, []) or []) + list(extracted.get(key, []) or []):
+            if value not in combined:
+                combined.append(value)
+        merged[key] = combined
+
+    artifacts = []
+    seen_artifacts: set[tuple[Any, ...]] = set()
+    for item in list(seed.get("source_artifacts", []) or []) + list(extracted.get("source_artifacts", []) or []):
+        if not isinstance(item, dict):
+            continue
+        ident = (item.get("file_path"), item.get("symbol_name"), item.get("symbol_kind"))
+        if ident in seen_artifacts:
+            continue
+        seen_artifacts.add(ident)
+        artifacts.append(item)
+    merged["source_artifacts"] = artifacts
+
+    if extracted.get("capability_type"):
+        merged["capability_type"] = extracted["capability_type"]
+    if extracted.get("composability"):
+        merged["composability"] = extracted["composability"]
+
+    return CapabilityData(**merged).model_dump()
+
+
+def _needs_capability_enrichment(capability_data: Optional[dict]) -> bool:
+    """Return True if capability data is missing or only lightly seeded."""
+    if not capability_data:
+        return True
+    status = capability_data.get("enrichment_status")
+    if status in {"seeded", "partial"}:
+        return True
+    if not capability_data.get("domain"):
+        return True
+    if not capability_data.get("inputs") and not capability_data.get("outputs"):
+        return True
+    return False
+
+
 def _parse_synergy_json(raw: str) -> Optional[dict]:
     """Parse LLM synergy analysis response."""
     cleaned = raw.strip()
@@ -161,7 +251,7 @@ class CapabilityExtractor:
             logger.warning("Methodology %s not found for enrichment", methodology_id)
             return False
 
-        if methodology.capability_data is not None:
+        if not _needs_capability_enrichment(methodology.capability_data):
             logger.debug("Methodology %s already enriched", methodology_id)
             return True
 
@@ -169,7 +259,8 @@ class CapabilityExtractor:
         if cap_data is None:
             return False
 
-        await self.repository.update_methodology_capability_data(methodology_id, cap_data)
+        merged = _merge_capability_dicts(methodology.capability_data, cap_data)
+        await self.repository.update_methodology_capability_data(methodology_id, merged)
         logger.info("Enriched methodology %s with capability_data", methodology_id)
         return True
 

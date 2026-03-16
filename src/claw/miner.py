@@ -57,6 +57,19 @@ _VALID_CATEGORIES: set[str] = {
 # Maximum findings per repo.
 _MAX_FINDINGS_PER_REPO: int = 15
 
+_CATEGORY_TRIGGER_MAP: dict[str, list[str]] = {
+    "architecture": ["missing_packaging", "repo_structure", "entrypoint_clarity"],
+    "ai_integration": ["model_integration", "agent_orchestration", "prompt_flow"],
+    "memory": ["retrieval_quality", "knowledge_pack", "memory_schema"],
+    "code_quality": ["quality_gate", "documentation_gap", "type_safety"],
+    "cli_ux": ["cli_entrypoint", "operator_experience", "workflow_clarity"],
+    "testing": ["missing_tests", "regression_risk", "verification_gap"],
+    "data_processing": ["pipeline_gap", "ingestion_flow", "structured_data_flow"],
+    "security": ["dynamic_execution_risk", "input_validation", "compliance_gap"],
+    "algorithm": ["scoring_logic", "matching_strategy", "heuristic_refinement"],
+    "cross_cutting": ["cross_domain_reuse", "observability_gap", "operationalization"],
+}
+
 
 @dataclass
 class MiningFinding:
@@ -443,6 +456,60 @@ class RepoMiner:
             scan_ledger_path or _default_scan_ledger_path(config)
         )
 
+    def _seed_capability_data_from_finding(self, finding: MiningFinding) -> dict[str, Any]:
+        """Create retrieval-friendly seed capability metadata from a mining finding.
+
+        This adds provenance and trigger metadata immediately, before the richer
+        LLM-based assimilation pass fills in IO/domain/composability details.
+        """
+        applicability = [finding.description.strip(), finding.implementation_sketch.strip()]
+        applicability = [item for item in applicability if item]
+
+        source_artifacts = [
+            {
+                "file_path": path,
+                "symbol_name": None,
+                "symbol_kind": "file",
+                "note": f"Mined from {finding.source_repo}",
+            }
+            for path in finding.source_files
+        ]
+
+        triggers = list(_CATEGORY_TRIGGER_MAP.get(finding.category, []))
+        if finding.execution_steps or finding.acceptance_checks:
+            triggers.append("has_action_template_candidate")
+        if finding.relevance_score >= 0.8:
+            triggers.append("high_relevance")
+
+        non_applicability: list[str] = []
+        if finding.augmentation_notes.strip():
+            non_applicability.append(
+                "Requires adaptation to the target repo; do not apply blindly."
+            )
+
+        return {
+            "schema_version": 2,
+            "enrichment_status": "seeded",
+            "inputs": [],
+            "outputs": [],
+            "domain": [finding.category],
+            "composability": {
+                "can_chain_after": [],
+                "can_chain_before": [],
+                "standalone": True,
+            },
+            "capability_type": "validation" if finding.category in {"testing", "security", "code_quality"} else "transformation",
+            "source_repos": [finding.source_repo],
+            "source_artifacts": source_artifacts,
+            "applicability": applicability,
+            "non_applicability": non_applicability,
+            "activation_triggers": sorted(set(triggers)),
+            "dependencies": list(finding.preconditions),
+            "risks": [finding.augmentation_notes.strip()] if finding.augmentation_notes.strip() else [],
+            "composition_candidates": [],
+            "evidence": [f"source_file:{path}" for path in finding.source_files],
+        }
+
     def _get_prompt_template(self) -> str:
         """Load the mining prompt template from prompts/repo-mine.md."""
         if self._prompt_template is None:
@@ -728,6 +795,11 @@ class RepoMiner:
             scope="global",
             methodology_type="PATTERN",
             files_affected=finding.source_files,
+        )
+
+        await self.repository.update_methodology_capability_data(
+            methodology.id,
+            self._seed_capability_data_from_finding(finding),
         )
 
         logger.debug("Stored finding '%s' as methodology %s", finding.title, methodology.id)
