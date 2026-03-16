@@ -12,6 +12,7 @@ operating at four nested scales:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -72,6 +73,82 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
         else:
             lines.append(f"*** {path}")
     return files_changed, "\n".join(lines)
+
+
+def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, Any]]:
+    if not raw_output:
+        return None
+
+    candidates = [raw_output.strip()]
+    if "```json" in raw_output:
+        for chunk in raw_output.split("```json")[1:]:
+            candidate = chunk.split("```", 1)[0].strip()
+            if candidate:
+                candidates.append(candidate)
+    if "```" in raw_output:
+        for chunk in raw_output.split("```")[1:]:
+            candidate = chunk.split("```", 1)[0].strip()
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _apply_structured_file_operations(
+    workspace_dir: Optional[str],
+    raw_output: Optional[str],
+) -> tuple[bool, Optional[str]]:
+    if not workspace_dir:
+        return False, "workspace_missing"
+
+    payload = _extract_structured_output(raw_output)
+    if payload is None:
+        return False, "structured_output_missing"
+
+    operations = payload.get("file_operations")
+    if not isinstance(operations, list) or not operations:
+        return False, "file_operations_missing"
+
+    root = Path(workspace_dir).resolve()
+    for op in operations:
+        if not isinstance(op, dict):
+            return False, "file_operation_invalid"
+
+        rel_path = str(op.get("path", "")).strip()
+        action = str(op.get("action", "write")).strip().lower()
+        if not rel_path:
+            return False, "file_path_missing"
+
+        rel = Path(rel_path)
+        if rel.is_absolute() or ".." in rel.parts:
+            return False, f"unsafe_path:{rel_path}"
+
+        target = (root / rel).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return False, f"unsafe_path:{rel_path}"
+
+        if action == "write":
+            content = op.get("content")
+            if not isinstance(content, str):
+                return False, f"content_missing:{rel_path}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        elif action == "delete":
+            if target.exists():
+                target.unlink()
+        else:
+            return False, f"unsupported_action:{action}"
+
+    return True, None
 
 
 class ClawCycle(ABC):
@@ -403,6 +480,28 @@ class MicroClaw(ClawCycle):
         await self.ctx.repository.increment_task_attempt(task_ctx.task.id)
 
         agent = self.ctx.agents[agent_id]
+        can_modify_workspace = hasattr(agent, "can_modify_workspace") and agent.can_modify_workspace()
+        can_use_internal_executor = (
+            hasattr(agent, "can_use_internal_workspace_executor")
+            and agent.can_use_internal_workspace_executor()
+        )
+        if not can_modify_workspace and not can_use_internal_executor:
+            outcome = TaskOutcome(
+                agent_id=agent_id,
+                failure_reason="agent_cannot_modify_workspace",
+                failure_detail=(
+                    "Selected agent mode cannot modify workspace files and has no internal CAM "
+                    "executor path. Use a CLI-capable agent or a structured-output-capable mode."
+                ),
+                tests_passed=False,
+            )
+            self._current_outcome = outcome
+            logger.warning(
+                "Agent %s cannot modify workspace in current mode; refusing execution",
+                agent_id,
+            )
+            return (agent_id, task_ctx, outcome)
+
         workspace_dir = getattr(agent, "workspace_dir", None)
         before_snapshot = _snapshot_workspace(workspace_dir)
 
@@ -414,6 +513,15 @@ class MicroClaw(ClawCycle):
         )
 
         outcome = await agent.run(task_ctx)
+        if not can_modify_workspace and can_use_internal_executor:
+            applied, apply_error = _apply_structured_file_operations(workspace_dir, outcome.raw_output)
+            if not applied and not outcome.failure_reason:
+                outcome.failure_reason = "structured_execution_failed"
+                outcome.failure_detail = (
+                    "CAM could not apply structured file operations from the agent output: "
+                    f"{apply_error}"
+                )
+                outcome.tests_passed = False
         after_snapshot = _snapshot_workspace(workspace_dir)
         actual_files_changed, actual_diff = _compute_workspace_change(before_snapshot, after_snapshot)
 
@@ -580,30 +688,13 @@ class MicroClaw(ClawCycle):
                 cost_usd=outcome.cost_usd,
             )
 
-            # Record failure in error KB for cross-task pattern detection
+            # ErrorKB reads from the shared hypothesis_log, so the direct write
+            # above is sufficient and avoids double-inserting the same attempt.
             if self.ctx.error_kb is not None:
-                try:
-                    await self.ctx.error_kb.record_attempt(
-                        task_id=task.id,
-                        attempt_number=attempt,
-                        approach_summary=outcome.approach_summary or "Failed attempt",
-                        outcome=HypothesisOutcome.FAILURE,
-                        error_signature=error_sig,
-                        error_full=outcome.failure_detail,
-                        files_changed=outcome.files_changed,
-                        duration_seconds=outcome.duration_seconds,
-                        model_used=outcome.model_used,
-                        agent_id=agent_id,
-                    )
-                    logger.info(
-                        "Recorded failure in error KB for task %s (error: %s)",
-                        task.id, error_sig,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to record error in KB for task %s: %s",
-                        task.id, e,
-                    )
+                logger.info(
+                    "Recorded failure in hypothesis log for task %s (error: %s)",
+                    task.id, error_sig,
+                )
 
             # Reset to PENDING for retry
             await self.ctx.repository.update_task_status(task.id, TaskStatus.PENDING)

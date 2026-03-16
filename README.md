@@ -18,6 +18,7 @@ CAM is not just a wrapper around a chat model. The distinctive parts are the wor
 - `create` writes a real creation spec, not just a prompt, so the requested outcome is explicit and reviewable.
 - `validate` checks the created repo against the saved spec and acceptance rules.
 - `create --execute` no longer trusts an agent saying "I changed files". CAM now checks the actual workspace diff and marks the run as failed if nothing changed.
+- execution workflows now refuse to pretend they can build when no executable build path exists in the current runtime.
 - `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM’s knowledge without importing CAM itself.
 - `mine` can detect extracted source trees even when they are not full `.git` clones, which matters when you are evaluating zip-downloaded repos.
 - `mine` now keeps a persistent scan ledger, so unchanged repos are skipped by default and only changed repos are rescanned unless you force a refresh.
@@ -37,6 +38,7 @@ Today CAM can:
 - actively reassess old methodologies against a new task and recommend which ones should be reactivated now
 - ideate novel app concepts using both stored CAM knowledge and candidate repos
 - create a spec-backed task for a fixed repo, augmented repo, or new repo
+- report whether the current runtime actually satisfies CAM's builder expectations
 - validate whether a created repo actually changed and whether executable checks passed
 - export CAM knowledge into a standalone knowledge pack
 - run a deterministic standalone Forge benchmark on fixture data
@@ -99,6 +101,7 @@ These are important because they are easy places for agent systems to become fak
 CAM is strong as an operator and orchestrator, but it is not magic.
 
 - `cam create --execute` is safer than before, but it is not yet a guaranteed autonomous app-builder.
+- if all configured agents are reasoning-only, CAM now treats create/enhance execution as planning/spec workflows instead of pretending they can write a repo.
 - `validate` proves basic correctness against the saved spec and checks; it does not prove product quality by itself.
 - `benchmark` is only as strong as the benchmark corpus and metrics you feed it.
 - standalone Forge currently has a real benchmark harness, but not yet a proven positive retrieval lift on the fixture corpus. The current best fixture run matches baseline rather than beating it.
@@ -178,6 +181,7 @@ export GOOGLE_API_KEY=...
 
 ```bash
 .venv/bin/cam evaluate /path/to/repo --mode quick
+.venv/bin/cam doctor expectations
 .venv/bin/cam enhance /path/to/repo --dry-run
 ```
 
@@ -393,6 +397,7 @@ These are the preferred expert paths. The older flat commands still work as comp
 - Which command to use first: [docs/CAM_COMMAND_DECISION_TREE.md](docs/CAM_COMMAND_DECISION_TREE.md)
 - Beginner assimilation walkthrough: [docs/CAM_BEGINNER_ASSIMILATION_GUIDE.md](docs/CAM_BEGINNER_ASSIMILATION_GUIDE.md)
 - Proven capabilities and example transcripts: [docs/CAM_PROVEN_CAPABILITIES.md](docs/CAM_PROVEN_CAPABILITIES.md)
+- Project charter and anti-drift expectations: [docs/CAM_PROJECT_CHARTER.md](docs/CAM_PROJECT_CHARTER.md)
 - Short operator quick-reference: [docs/CAM_OPERATOR_CHEATSHEET.md](docs/CAM_OPERATOR_CHEATSHEET.md)
 - End-to-end example workflows and outputs: [docs/CAM_EXAMPLE_WORKFLOWS.md](docs/CAM_EXAMPLE_WORKFLOWS.md)
 

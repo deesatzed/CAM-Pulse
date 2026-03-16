@@ -12,6 +12,8 @@ Validates that:
 - TaskContext has hints field
 """
 
+import logging
+
 import pytest
 
 from claw.core.config import load_config
@@ -346,6 +348,38 @@ class TestMicroClawLearnEvolution:
         # Verify the error was recorded in the hypothesis log via error KB
         count = await ctx.repository.get_hypothesis_count(evo_task.id)
         assert count >= 1
+
+    async def test_learn_failure_does_not_double_log_attempt(
+        self,
+        evolution_context,
+        evo_project,
+        evo_task,
+        caplog,
+    ):
+        ctx = evolution_context
+        await ctx.repository.create_project(evo_project)
+        await ctx.repository.create_task(evo_task)
+
+        micro = MicroClaw(ctx, evo_project.id)
+        outcome = TaskOutcome(
+            approach_summary="Attempted bad pool expansion",
+            failure_reason="memory_overflow",
+            failure_detail="OOM after 500 connections",
+            files_changed=[],
+            duration_seconds=5.0,
+        )
+        verification = VerificationResult(
+            approved=False,
+            violations=[{"check": "execution", "detail": "memory_overflow"}],
+            quality_score=0.2,
+        )
+        task_ctx = TaskContext(task=evo_task)
+
+        with caplog.at_level(logging.WARNING, logger="claw.cycle"):
+            await micro.learn(("claude", task_ctx, outcome, verification))
+
+        assert await ctx.repository.get_hypothesis_count(evo_task.id) == 1
+        assert "Failed to record error in KB" not in caplog.text
 
     async def test_learn_success_triggers_pattern_extraction(self, evolution_context, evo_project):
         ctx = evolution_context

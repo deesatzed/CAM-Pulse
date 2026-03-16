@@ -74,6 +74,14 @@ class TestCLIUXSurface:
         commands = _command_map()
         assert "keycheck" in commands
 
+    def test_doctor_expectations_command_registered(self):
+        groups = _group_map()
+        doctor_names = {
+            cmd.name or (cmd.callback.__name__ if cmd.callback else "")
+            for cmd in groups["doctor"].registered_commands
+        }
+        assert "expectations" in doctor_names
+
     def test_grouped_workflow_namespaces_registered(self):
         groups = _group_map()
         assert "learn" in groups
@@ -107,7 +115,7 @@ class TestCLIUXSurface:
             cmd.name or (cmd.callback.__name__ if cmd.callback else "")
             for cmd in groups["doctor"].registered_commands
         }
-        assert {"keycheck", "status"} <= doctor_names
+        assert {"keycheck", "status", "expectations"} <= doctor_names
 
     def test_benchmark_command_registered(self):
         commands = _command_map()

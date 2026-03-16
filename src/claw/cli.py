@@ -68,6 +68,29 @@ doctor_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_FOUNDATION_CHARTER = [
+    {
+        "name": "learn",
+        "expectation": "CAM must assimilate reusable knowledge from repos into structured memory.",
+    },
+    {
+        "name": "reassess",
+        "expectation": "CAM must reactivate old knowledge for new tasks instead of leaving it as dead notes.",
+    },
+    {
+        "name": "validate",
+        "expectation": "CAM must reject claimed success when the repo did not materially change.",
+    },
+    {
+        "name": "standalone_output",
+        "expectation": "Generated apps may be built by CAM, but must not depend on CAM runtime code.",
+    },
+    {
+        "name": "builder_truth",
+        "expectation": "Create/enhance execution may only be treated as real if an executable build path exists.",
+    },
+]
+
 
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -261,6 +284,99 @@ def _fail_if_live_key_checks_fail(config: Any, command_name: str) -> None:
         raise typer.Exit(1)
 
 
+def _agent_supports_workspace_execution(agent: Any) -> bool:
+    """Return whether an agent can directly modify workspace files."""
+    if agent is None:
+        return False
+    direct_capability = getattr(agent, "can_modify_workspace", None)
+    if callable(direct_capability):
+        try:
+            if direct_capability():
+                return True
+        except Exception:
+            return False
+    internal_capability = getattr(agent, "can_use_internal_workspace_executor", None)
+    if callable(internal_capability):
+        try:
+            return bool(internal_capability())
+        except Exception:
+            return False
+    return False
+
+
+def _workspace_execution_agents(ctx: Any) -> tuple[list[str], list[str]]:
+    executable: list[str] = []
+    read_only: list[str] = []
+    for agent_name, agent in getattr(ctx, "agents", {}).items():
+        if _agent_supports_workspace_execution(agent):
+            executable.append(agent_name)
+        else:
+            read_only.append(agent_name)
+    return executable, read_only
+
+
+def _print_workspace_execution_preflight(ctx: Any, workflow_name: str) -> bool:
+    executable, read_only = _workspace_execution_agents(ctx)
+    if executable:
+        return True
+
+    console.print(
+        f"\n[red]{workflow_name} cannot execute real repo changes in the current runtime.[/red]"
+    )
+    if read_only:
+        console.print(
+            "[red]Configured agents are reasoning-only in their current modes: "
+            f"{', '.join(sorted(read_only))}.[/red]"
+        )
+    else:
+        console.print("[red]No executable build agents are configured.[/red]")
+    console.print(
+        "[yellow]To run real code changes, enable a CLI-capable agent or an agent mode that emits structured file operations for CAM's internal executor.[/yellow]"
+    )
+    return False
+
+
+def _build_foundation_expectation_report(ctx: Any) -> dict[str, Any]:
+    executable, read_only = _workspace_execution_agents(ctx)
+    checks = [
+        {
+            "name": "learn",
+            "ok": bool(getattr(ctx, "miner", None) and getattr(ctx, "assimilation_engine", None) and getattr(ctx, "semantic_memory", None)),
+            "detail": "Repo mining, semantic memory, and assimilation engine are wired.",
+        },
+        {
+            "name": "reassess",
+            "ok": bool(getattr(ctx, "semantic_memory", None) and getattr(ctx, "repository", None)),
+            "detail": "Memory/repository layers required for reassessment are wired.",
+        },
+        {
+            "name": "validate",
+            "ok": bool(getattr(ctx, "repository", None) and getattr(ctx, "verifier", None)),
+            "detail": "Validation and repo-state checks are available.",
+        },
+        {
+            "name": "standalone_output",
+            "ok": True,
+            "detail": "Policy: generated apps must not import CAM runtime code at runtime.",
+        },
+        {
+            "name": "builder_truth",
+            "ok": bool(executable),
+            "detail": (
+                f"Executable build agents: {', '.join(sorted(executable))}"
+                if executable else
+                "No executable build agent is configured; create/enhance execution must be treated as planning/spec-only."
+            ),
+        },
+    ]
+    return {
+        "checks": checks,
+        "writable_agents": sorted(executable),
+        "readonly_agents": sorted(read_only),
+        "builder_execution_available": bool(executable),
+    }
+
+
 def _build_create_spec(
     repo_path: Path,
     request: str,
@@ -271,6 +387,14 @@ def _build_create_spec(
     acceptance_checks: list[str],
     spec_items: list[str],
 ) -> dict[str, Any]:
+    seeded_steps, seeded_checks = _seed_create_runbook(
+        repo_mode=repo_mode,
+        task_type=task_type,
+        request=request,
+        spec_items=spec_items,
+        execution_steps=execution_steps,
+        acceptance_checks=acceptance_checks,
+    )
     baseline_snapshot = _snapshot_repo_state(repo_path)
     return {
         "version": 1,
@@ -281,8 +405,8 @@ def _build_create_spec(
         "task_type": task_type,
         "spec_items": spec_items,
         "baseline_snapshot": baseline_snapshot,
-        "execution_steps": execution_steps,
-        "acceptance_checks": acceptance_checks,
+        "execution_steps": seeded_steps,
+        "acceptance_checks": seeded_checks,
         "validation": {
             "require_repo_exists": True,
             "require_nonempty_repo": True,
@@ -293,6 +417,65 @@ def _build_create_spec(
         },
         "created_at_epoch": int(_time.time()),
     }
+
+
+def _seed_create_runbook(
+    *,
+    repo_mode: str,
+    task_type: str,
+    request: str,
+    spec_items: list[str],
+    execution_steps: list[str],
+    acceptance_checks: list[str],
+) -> tuple[list[str], list[str]]:
+    """Seed a usable runbook when create is underspecified."""
+    clean_steps = [step.strip() for step in execution_steps if step.strip()]
+    clean_checks = [check.strip() for check in acceptance_checks if check.strip()]
+    if clean_steps and clean_checks:
+        return clean_steps, clean_checks
+
+    combined_text = " ".join([request, *spec_items]).lower()
+
+    seeded_steps = list(clean_steps)
+    if not seeded_steps:
+        if repo_mode == "new":
+            seeded_steps.extend([
+                "Read the create spec and identify the minimum standalone architecture needed for the requested app.",
+                "Scaffold the new repository structure, entrypoints, and configuration files needed to run the app.",
+                "Implement the core user workflow first, then add supporting modules and documentation.",
+                "Add or update automated tests for the primary workflow before claiming success.",
+                "Run the acceptance checks, fix failures, and leave the repo in a runnable state.",
+            ])
+        elif repo_mode == "augment":
+            seeded_steps.extend([
+                "Read the create spec and map the requested capability onto the existing repository structure.",
+                "Inspect the current code paths and identify the smallest safe integration points for the new behavior.",
+                "Implement the augmentation with tests and documentation updates.",
+                "Run the acceptance checks, fix failures, and preserve existing working behavior.",
+            ])
+        else:
+            seeded_steps.extend([
+                "Read the create spec and isolate the files or flows that must change to satisfy the request.",
+                "Implement the requested repair or refinement with focused edits rather than broad rewrites.",
+                "Add or update regression tests for the changed behavior.",
+                "Run the acceptance checks and confirm the target repo materially changed.",
+            ])
+
+    seeded_checks = list(clean_checks)
+    if not seeded_checks:
+        seeded_checks.extend([
+            "Repository materially changed from the baseline snapshot",
+            "Primary requested workflow can be demonstrated end-to-end",
+            "README or equivalent usage documentation explains how to run the result",
+        ])
+        if "standalone" in combined_text:
+            seeded_checks.append("Result does not require CAM runtime imports")
+        if "cli" in combined_text or "command" in combined_text or "entrypoint" in combined_text:
+            seeded_checks.append("A user-facing CLI entrypoint exists and shows a help or usage screen")
+        if task_type in {"architecture", "bug_fix", "testing", "refactoring"}:
+            seeded_checks.append("Automated tests exist for the primary changed behavior")
+
+    return seeded_steps, seeded_checks
 
 
 def _write_create_spec(spec: dict[str, Any]) -> Path:
@@ -1353,6 +1536,8 @@ async def _enhance_async(
         if not ctx.agents:
             console.print("[red]No agents available. Enable at least one agent in claw.toml.[/red]")
             return
+        if not dry_run and not _print_workspace_execution_preflight(ctx, "Enhancement"):
+            return
 
         # Phase 1: Evaluate
         console.print("\n[cyan]Phase 1: Evaluating repository...[/cyan]")
@@ -1487,6 +1672,8 @@ async def _enhance_battery_async(
 
         if not ctx.agents:
             console.print("[red]No agents available. Enable at least one agent in claw.toml.[/red]")
+            return
+        if not dry_run and not _print_workspace_execution_preflight(ctx, "Enhancement"):
             return
 
         if dry_run:
@@ -1782,6 +1969,11 @@ async def _fleet_enhance_async(
         console.print(f"  Max tasks per repo: {max_tasks_per_repo}")
         console.print(f"  Agents: {', '.join(ctx.agents.keys()) or 'none'}")
         console.print(f"  Database: {ctx.config.database.db_path}")
+        if not ctx.agents:
+            console.print("[red]No agents available. Enable at least one agent in claw.toml.[/red]")
+            return
+        if not _print_workspace_execution_preflight(ctx, "Fleet enhancement"):
+            return
 
         # ---------------------------------------------------------------
         # Phase 1: Scan for repositories
@@ -2333,6 +2525,15 @@ async def _status_async(config_path: Optional[str]) -> None:
             status_str = "[green]available[/green]" if health.available else f"[red]unavailable: {health.error}[/red]"
             console.print(f"  {name}: {status_str}")
 
+        writable_agents, readonly_agents = _workspace_execution_agents(ctx)
+        console.print("\n  Execution capability:")
+        if writable_agents:
+            console.print(f"    executable agents: {', '.join(writable_agents)}")
+        else:
+            console.print("    [red]executable agents: none[/red]")
+        if readonly_agents:
+            console.print(f"    reasoning-only agents: {', '.join(readonly_agents)}")
+
         # Task summary
         summary = await ctx.repository.get_task_status_summary()
         if summary:
@@ -2342,6 +2543,46 @@ async def _status_async(config_path: Optional[str]) -> None:
         else:
             console.print("  No tasks yet.")
 
+    finally:
+        await ctx.close()
+
+
+async def _expectations_async(config_path: Optional[str]) -> None:
+    from claw.core.factory import ClawFactory
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        report = _build_foundation_expectation_report(ctx)
+        console.print("\n[bold]CAM Expectations[/bold]")
+        console.print("  Purpose: keep CAM aligned with its stated role as a learning + building system")
+
+        charter = Table(title="Project Charter")
+        charter.add_column("Expectation", style="cyan")
+        charter.add_column("Meaning", max_width=80)
+        for item in _FOUNDATION_CHARTER:
+            charter.add_row(item["name"], item["expectation"])
+        console.print(charter)
+
+        checks = Table(title="Current Runtime Checks")
+        checks.add_column("Check", style="cyan")
+        checks.add_column("Status", style="bold")
+        checks.add_column("Detail", max_width=84)
+        for item in report["checks"]:
+            status = "[green]ok[/green]" if item["ok"] else "[red]gap[/red]"
+            checks.add_row(item["name"], status, item["detail"])
+        console.print(checks)
+
+        if report["builder_execution_available"]:
+            console.print(
+                f"\n[green]Builder execution available via: {', '.join(report['writable_agents'])}[/green]"
+            )
+        else:
+            console.print(
+                "\n[yellow]Current consequence: `create --execute`, `quickstart --execute`, and non-dry-run `enhance` "
+                "must be treated as planning/spec workflows until a writable agent is configured.[/yellow]"
+            )
     finally:
         await ctx.close()
 
@@ -2574,6 +2815,16 @@ async def _quickstart_async(
         if execute:
             if not ctx.agents:
                 console.print("\n[red]No agents available to execute. Enable at least one agent in claw.toml.[/red]")
+                return
+
+            selected_agent = ctx.agents.get(recommended)
+            if selected_agent is not None and not _agent_supports_workspace_execution(selected_agent):
+                console.print(
+                    "\n[red]Selected agent cannot modify workspace files in its current mode.[/red]"
+                )
+                console.print(
+                    f"[red]Agent '{recommended}' must run in CLI mode for quickstart/create execution.[/red]"
+                )
                 return
 
             console.print("\n[cyan]Executing quickstart task...[/cyan]")
@@ -4919,6 +5170,15 @@ def doctor_status(
 ) -> None:
     """Preferred grouped alias for `cam status`."""
     status(config=config)
+
+
+@doctor_app.command(name="expectations")
+def doctor_expectations(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show whether the current runtime satisfies CAM's core product expectations."""
+    _setup_logging(False)
+    asyncio.run(_expectations_async(config))
 
 
 @app.command(name="prism-demo", hidden=True)

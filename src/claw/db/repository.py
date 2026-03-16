@@ -8,6 +8,7 @@ makes the dual-backend (sqlite-vec + FTS5) transparent.
 from __future__ import annotations
 
 import json
+import re
 import struct
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +28,19 @@ from claw.core.models import (
     TokenCostRecord,
 )
 from claw.db.engine import DatabaseEngine
+
+
+def _build_safe_fts5_query(query: str) -> str:
+    """Convert free-form text into a safe FTS5 MATCH query.
+
+    SQLite FTS treats `token:` as a column-qualified search, which breaks on
+    natural-language strings like `Creation mode: new`. We downgrade queries to
+    a quoted token AND expression so punctuation cannot be misread as syntax.
+    """
+    tokens = re.findall(r"[A-Za-z0-9_]+", query.lower())
+    if not tokens:
+        return ""
+    return " AND ".join(f'"{token}"' for token in tokens)
 
 
 class Repository:
@@ -488,13 +502,16 @@ class Repository:
 
     async def search_methodologies_text(self, query: str, limit: int = 5) -> list[Methodology]:
         """Full-text search on methodologies using FTS5."""
+        safe_query = _build_safe_fts5_query(query)
+        if not safe_query:
+            return []
         rows = await self.engine.fetch_all(
             """SELECT methodology_id, rank
                FROM methodology_fts
                WHERE methodology_fts MATCH ?
                ORDER BY rank
                LIMIT ?""",
-            [query, limit],
+            [safe_query, limit],
         )
 
         results = []

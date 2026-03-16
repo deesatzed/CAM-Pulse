@@ -145,6 +145,22 @@ class AgentInterface(ABC):
             return ws
         return None
 
+    def can_modify_workspace(self) -> bool:
+        """Whether this agent mode can directly edit files in the workspace.
+
+        Unknown/custom test agents default to True so existing test doubles keep
+        working. Real built-in agents only get write capability in CLI mode.
+        """
+        mode = getattr(self, "mode", None)
+        if mode is None:
+            return True
+        return mode == AgentMode.CLI
+
+    def can_use_internal_workspace_executor(self) -> bool:
+        """Whether CAM can turn this agent's output into real file changes."""
+        mode = getattr(self, "mode", None)
+        return mode in {AgentMode.OPENROUTER, AgentMode.API}
+
     async def execute_openrouter(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> TaskOutcome:
@@ -279,6 +295,24 @@ class AgentInterface(ABC):
             parts.append("\n## Hints from Past Solutions")
             for hint in task.hints:
                 parts.append(f"- {hint}")
+
+        if self.can_use_internal_workspace_executor():
+            parts.append(
+                "\n## Required Output Format\n"
+                "Return only valid JSON with this shape:\n"
+                "{\n"
+                '  "summary": "short explanation",\n'
+                '  "file_operations": [\n'
+                '    {"path": "relative/path.ext", "action": "write", "content": "full file contents"}\n'
+                "  ]\n"
+                "}\n"
+                "Rules:\n"
+                "- Use only relative paths inside the target repo.\n"
+                "- Do not include markdown fences or prose outside the JSON object.\n"
+                "- Use action `write` to create or replace a file.\n"
+                "- Use action `delete` only when removal is necessary.\n"
+                "- For standalone app requests, do not import CAM runtime code unless explicitly asked."
+            )
 
         return "\n".join(parts)
 

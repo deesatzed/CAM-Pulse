@@ -6,6 +6,7 @@ import pytest
 
 from claw.core.models import (
     ActionTemplate,
+    AgentMode,
     Project,
     Task,
     TaskContext,
@@ -81,6 +82,85 @@ class TestMicroClaw:
         assert outcome.failure_reason is None
         assert outcome.files_changed == ["app.py"]
         assert "app.py" in outcome.diff
+
+    async def test_act_refuses_agent_mode_without_workspace_write(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+        tmp_path,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+
+        class ReadOnlyAgent:
+            mode = AgentMode.OPENROUTER
+            workspace_dir = str(workspace)
+
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return False
+
+            async def run(self, task_ctx):
+                raise AssertionError("run() should not be called for non-writable agents")
+
+        ctx.agents["codex"] = ReadOnlyAgent()
+
+        micro = MicroClaw(ctx, sample_project.id)
+        task_ctx = TaskContext(task=sample_task)
+        agent_id, _, outcome = await micro.act(("codex", task_ctx))
+
+        assert agent_id == "codex"
+        assert outcome.failure_reason == "agent_cannot_modify_workspace"
+        assert "structured-output-capable mode" in (outcome.failure_detail or "")
+
+    async def test_act_applies_structured_file_ops_from_readonly_agent(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+        tmp_path,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+
+        class StructuredAgent:
+            mode = AgentMode.OPENROUTER
+            workspace_dir = str(workspace)
+
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return True
+
+            async def run(self, task_ctx):
+                return TaskOutcome(
+                    approach_summary="Emit structured file operations",
+                    tests_passed=False,
+                    raw_output='{"summary":"create app","file_operations":[{"path":"app.py","action":"write","content":"print(\\"hello\\")\\n"}]}',
+                )
+
+        ctx.agents["codex"] = StructuredAgent()
+
+        micro = MicroClaw(ctx, sample_project.id)
+        task_ctx = TaskContext(task=sample_task)
+        agent_id, _, outcome = await micro.act(("codex", task_ctx))
+
+        assert agent_id == "codex"
+        assert outcome.failure_reason is None
+        assert outcome.files_changed == ["app.py"]
+        assert (workspace / "app.py").read_text(encoding="utf-8") == 'print("hello")\n'
 
     async def test_grab_returns_task(self, claw_context, sample_project, sample_task):
         ctx = claw_context

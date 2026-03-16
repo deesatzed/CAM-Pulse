@@ -31,6 +31,91 @@ class TestCreateBenchmarkSpecHelpers:
         assert written["benchmark"]["catastrophic_floor_pct"] == -35.0
         assert written["spec_items"][0] == "Use Gemini embeddings"
 
+    def test_build_create_spec_seeds_runbook_when_missing(self, tmp_path):
+        from claw import cli
+
+        spec = cli._build_create_spec(
+            repo_path=tmp_path / "new-app",
+            request="Create a standalone CLI app for opportunity discovery.",
+            repo_mode="new",
+            title="Opportunity app",
+            task_type="architecture",
+            execution_steps=[],
+            acceptance_checks=[],
+            spec_items=["Must be standalone", "Must expose a CLI entrypoint"],
+        )
+
+        assert len(spec["execution_steps"]) >= 4
+        assert len(spec["acceptance_checks"]) >= 4
+        assert any("cam runtime" in item.lower() for item in spec["acceptance_checks"])
+        assert any("cli" in item.lower() or "entrypoint" in item.lower() for item in spec["acceptance_checks"])
+
+    def test_agent_supports_workspace_execution_only_for_writable_agent(self):
+        from claw import cli
+
+        class WritableAgent:
+            def can_modify_workspace(self):
+                return True
+
+        class ReadOnlyAgent:
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return False
+
+        assert cli._agent_supports_workspace_execution(WritableAgent()) is True
+        assert cli._agent_supports_workspace_execution(ReadOnlyAgent()) is False
+        assert cli._agent_supports_workspace_execution(None) is False
+
+    def test_build_foundation_expectation_report_flags_missing_builder(self):
+        from claw import cli
+
+        class ReadOnlyAgent:
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return False
+
+        class DummyCtx:
+            agents = {"claude": ReadOnlyAgent()}
+            miner = object()
+            assimilation_engine = object()
+            semantic_memory = object()
+            repository = object()
+            verifier = object()
+
+        report = cli._build_foundation_expectation_report(DummyCtx())
+        assert report["builder_execution_available"] is False
+        assert report["readonly_agents"] == ["claude"]
+        builder_truth = next(item for item in report["checks"] if item["name"] == "builder_truth")
+        assert builder_truth["ok"] is False
+
+    def test_build_foundation_expectation_report_flags_writable_builder(self):
+        from claw import cli
+
+        class ExecutableAgent:
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return True
+
+        class DummyCtx:
+            agents = {"codex": ExecutableAgent()}
+            miner = object()
+            assimilation_engine = object()
+            semantic_memory = object()
+            repository = object()
+            verifier = object()
+
+        report = cli._build_foundation_expectation_report(DummyCtx())
+        assert report["builder_execution_available"] is True
+        assert report["writable_agents"] == ["codex"]
+        builder_truth = next(item for item in report["checks"] if item["name"] == "builder_truth")
+        assert builder_truth["ok"] is True
+
     def test_validate_create_spec_runs_acceptance_checks(self, tmp_path):
         from claw import cli
 

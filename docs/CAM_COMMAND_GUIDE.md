@@ -233,6 +233,30 @@ Syntax:
 cam status
 ```
 
+## `cam doctor expectations`
+
+Show whether the current runtime satisfies CAM's core product expectations.
+
+What it does:
+- prints the current charter-level expectations
+- checks whether learning, reassessment, and validation foundations are wired
+- reports whether CAM currently has any real build execution path
+- tells you whether `create --execute` / `enhance` should be treated as real build workflows or planning-only workflows
+
+Syntax:
+
+```bash
+cam doctor expectations [--config claw.toml]
+```
+
+Example use case:
+
+You want to know whether the current agent/runtime configuration can honestly be treated as a real builder before you spend time on `create --execute`.
+
+```bash
+cam doctor expectations
+```
+
 Example use case:
 You want to confirm CAM is configured and the database is reachable.
 

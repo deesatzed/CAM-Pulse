@@ -349,6 +349,14 @@ class TestBuildOpenRouterPrompt:
             assert "Bad approach" in prompt, f"{agent.agent_id} missing forbidden"
             assert "Good hint" in prompt, f"{agent.agent_id} missing hint"
 
+    def test_prompt_requires_structured_file_operations_for_openrouter(self):
+        agent = ClaudeCodeAgent(mode=AgentMode.OPENROUTER, model="m")
+        ctx = _make_task_context(title="Build app", description="Create a tiny app")
+        prompt = agent._build_openrouter_prompt(ctx)
+        assert "Required Output Format" in prompt
+        assert "file_operations" in prompt
+        assert "Return only valid JSON" in prompt
+
 
 # ===========================================================================
 # 5. execute_openrouter() — full method tests

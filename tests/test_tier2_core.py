@@ -407,6 +407,19 @@ class TestRepositoryMethodologyTextSearch:
         results = await repository.search_methodologies_text("pagination")
         assert len(results) >= 1
 
+    async def test_sanitizes_free_form_query_with_colon(self, repository):
+        project, task = await _setup_project_and_task(repository)
+        m = _make_methodology(
+            source_task_id=task.id,
+            problem_description="Creation mode new app flow",
+            methodology_notes="Creation mode new should scaffold a standalone repo",
+        )
+        await repository.save_methodology(m)
+
+        results = await repository.search_methodologies_text("Creation mode: new")
+        assert len(results) >= 1
+        assert results[0].id == m.id
+
 
 class TestRepositoryMethodologyByState:
     """get_methodologies_by_state() filters by lifecycle_state."""
