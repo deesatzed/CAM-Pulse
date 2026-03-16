@@ -148,7 +148,11 @@ class TestMicroClaw:
                 return TaskOutcome(
                     approach_summary="Emit structured file operations",
                     tests_passed=False,
-                    raw_output='{"summary":"create app","file_operations":[{"path":"app.py","action":"write","content":"print(\\"hello\\")\\n"}]}',
+                    raw_output=(
+                        "I created the requested app.\n\n```json\n"
+                        '{"summary":"create app","file_operations":[{"path":"app.py","action":"write","content":"print(\\"hello\\")\\n"}]}'
+                        "\n```"
+                    ),
                 )
 
         ctx.agents["codex"] = StructuredAgent()

@@ -12,8 +12,8 @@ operating at four nested scales:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
+import re
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -31,6 +31,7 @@ from claw.core.models import (
     TaskStatus,
     VerificationResult,
 )
+from claw.llm.client import _parse_json_response
 
 logger = logging.getLogger("claw.cycle")
 
@@ -80,21 +81,21 @@ def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, 
         return None
 
     candidates = [raw_output.strip()]
-    if "```json" in raw_output:
-        for chunk in raw_output.split("```json")[1:]:
-            candidate = chunk.split("```", 1)[0].strip()
-            if candidate:
-                candidates.append(candidate)
-    if "```" in raw_output:
-        for chunk in raw_output.split("```")[1:]:
-            candidate = chunk.split("```", 1)[0].strip()
+    patterns = [
+        r"```json\s*(.*?)\s*```",
+        r"```\s*(.*?)\s*```",
+        r"(\{[\s\S]*\})",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw_output, re.IGNORECASE):
+            candidate = match.group(1).strip()
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
 
     for candidate in candidates:
         try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
+            parsed = _parse_json_response(candidate)
+        except Exception:
             continue
         if isinstance(parsed, dict):
             return parsed
