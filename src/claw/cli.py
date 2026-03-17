@@ -2961,6 +2961,8 @@ async def _doctor_audit_async(
     limit: int,
     expectation_threshold: float,
     config_path: Optional[str],
+    json_out: Optional[str],
+    fail_on_flags: bool,
 ) -> None:
     from claw.core.config import load_config
     from claw.db.engine import DatabaseEngine
@@ -2980,6 +2982,12 @@ async def _doctor_audit_async(
         )
         summary = audit["summary"]
         flagged = audit["flagged"]
+        payload = {
+            "summary": summary,
+            "flagged": flagged,
+            "expectation_threshold": expectation_threshold,
+            "limit": limit,
+        }
 
         console.print("\n[bold]CAM Evidence Audit[/bold]")
         console.print(
@@ -2997,6 +3005,14 @@ async def _doctor_audit_async(
         summary_table.add_row("Low expectation", str(summary["low_expectation_total"]))
         summary_table.add_row("Flagged", str(summary["flagged_total"]))
         console.print(summary_table)
+
+        if json_out:
+            out_path = Path(json_out)
+            if not out_path.is_absolute():
+                out_path = Path.cwd() / out_path
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            console.print(f"\n[dim]JSON report written: {out_path}[/dim]")
 
         if not flagged:
             console.print(
@@ -3026,6 +3042,8 @@ async def _doctor_audit_async(
                 item["problem_description"][:44],
             )
         console.print(table)
+        if fail_on_flags:
+            raise typer.Exit(1)
     finally:
         await engine.close()
 
@@ -5795,6 +5813,16 @@ def doctor_audit(
         max=1.0,
         help="Minimum expectation-match score for high-trust methodologies",
     ),
+    json_out: Optional[str] = typer.Option(
+        None,
+        "--json-out",
+        help="Write a machine-readable JSON summary to this path",
+    ),
+    fail_on_flags: bool = typer.Option(
+        False,
+        "--fail-on-flags",
+        help="Exit nonzero when flagged methodologies are found",
+    ),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
     """Audit high-trust methodologies for attribution-backed evidence quality."""
@@ -5804,6 +5832,8 @@ def doctor_audit(
             limit=limit,
             expectation_threshold=expectation_threshold,
             config_path=config,
+            json_out=json_out,
+            fail_on_flags=fail_on_flags,
         )
     )
 

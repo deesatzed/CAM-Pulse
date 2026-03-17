@@ -53,8 +53,16 @@ jobs:
       - name: Run tests with coverage
         run: pytest tests/ -q --cov=claw --cov-report=xml --cov-report=term
 
-      - name: Smoke doctor audit
-        run: python -m claw.cli doctor audit --limit 5
+      - name: Run doctor audit
+        run: python -m claw.cli doctor audit --limit 5 --json-out doctor_audit.json --fail-on-flags
+
+      - name: Upload doctor audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-audit-${{ matrix.python-version }}
+          path: doctor_audit.json
+          retention-days: 30
 
       - name: Upload coverage report
         if: matrix.python-version == '3.12'

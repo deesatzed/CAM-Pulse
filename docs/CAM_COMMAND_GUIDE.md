@@ -272,7 +272,7 @@ What it does:
 Syntax:
 
 ```bash
-cam doctor audit [--limit 10] [--expectation-threshold 0.65] [--config claw.toml]
+cam doctor audit [--limit 10] [--expectation-threshold 0.65] [--json-out audit.json] [--fail-on-flags] [--config claw.toml]
 ```
 
 Use this after:
@@ -284,6 +284,12 @@ Example:
 
 ```bash
 cam doctor audit --limit 10
+```
+
+CI-style example:
+
+```bash
+cam doctor audit --limit 10 --json-out doctor_audit.json --fail-on-flags
 ```
 
 Example use case:

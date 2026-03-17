@@ -189,6 +189,12 @@ export GOOGLE_API_KEY=...
 Use this when you want CAM to tell you what it would change before it tries to change anything.
 `doctor audit` shows whether CAM's highest-trust methodologies are backed by attributed, expectation-matched evidence or are still relying on legacy/raw-success counters.
 
+For CI or scripts:
+
+```bash
+.venv/bin/cam doctor audit --limit 10 --json-out doctor_audit.json --fail-on-flags
+```
+
 ### 2. Learn from outside repos
 
 ```bash

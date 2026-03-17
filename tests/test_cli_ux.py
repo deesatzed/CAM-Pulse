@@ -216,3 +216,15 @@ class TestCLIUXSurface:
         sig = inspect.signature(cb)
         assert "for_command" in sig.parameters
         assert "live" in sig.parameters
+
+    def test_doctor_audit_has_json_and_fail_options(self):
+        groups = _group_map()
+        doctor_commands = {
+            (cmd.name or (cmd.callback.__name__ if cmd.callback else "")): cmd.callback
+            for cmd in groups["doctor"].registered_commands
+            if cmd.callback is not None
+        }
+        cb = doctor_commands["audit"]
+        sig = inspect.signature(cb)
+        assert "json_out" in sig.parameters
+        assert "fail_on_flags" in sig.parameters
