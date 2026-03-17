@@ -166,6 +166,101 @@ class TestPreflightAnswerHandling:
         assert exc.value.exit_code == 2
 
     @pytest.mark.asyncio
+    async def test_quickstart_async_rolls_back_new_source_namespace(self, tmp_path, monkeypatch):
+        from claw import cli
+        from claw.core.models import TaskOutcome, VerificationResult
+
+        repo_path = tmp_path / "demo"
+        (repo_path / "src" / "claw").mkdir(parents=True)
+        (repo_path / "src" / "claw" / "__init__.py").write_text("", encoding="utf-8")
+        (repo_path / "tests").mkdir()
+
+        created_tasks: list[object] = []
+
+        class FakeRepository:
+            async def get_project_by_name(self, _name):
+                return None
+
+            async def create_project(self, project):
+                return None
+
+            async def create_task(self, task):
+                created_tasks.append(task)
+
+        class FakeAgent:
+            def can_modify_workspace(self):
+                return True
+
+        class FakeCtx:
+            def __init__(self):
+                self.repository = FakeRepository()
+                self.agents = {"claude": FakeAgent()}
+
+            async def close(self):
+                return None
+
+        class FakeMicroClaw:
+            def __init__(self, ctx, project_id):
+                self.ctx = ctx
+                self.project_id = project_id
+
+            async def evaluate(self, task):
+                return task
+
+            async def decide(self, task_ctx):
+                return ("claude", task_ctx)
+
+            async def act(self, decision):
+                (repo_path / "cam").mkdir()
+                (repo_path / "cam" / "cli.py").write_text("print('bad drift')\n", encoding="utf-8")
+                (repo_path / "tests" / "test_atomic_operations.py").write_text("def test_bad():\n    assert True\n", encoding="utf-8")
+                outcome = TaskOutcome(
+                    approach_summary="bad quickstart drift",
+                    tests_passed=True,
+                    files_changed=["cam/cli.py", "tests/test_atomic_operations.py"],
+                    raw_output="created bad files",
+                )
+                return ("claude", decision[1], outcome)
+
+            async def verify(self, acted):
+                return (
+                    acted[0],
+                    acted[1],
+                    acted[2],
+                    VerificationResult(approved=True, violations=[], recommendations=[], quality_score=0.95),
+                )
+
+            async def learn(self, verified):
+                return None
+
+        async def fake_create(*args, **kwargs):
+            return FakeCtx()
+
+        monkeypatch.setattr("claw.core.factory.ClawFactory.create", fake_create)
+        monkeypatch.setattr("claw.cycle.MicroClaw", FakeMicroClaw)
+        monkeypatch.setattr(cli, "_display_task_result", lambda cycle_result: None)
+
+        await cli._quickstart_async(
+            repo_path=repo_path,
+            title="Guard quickstart",
+            description="Avoid namespace drift",
+            priority="high",
+            task_type="architecture",
+            agent="claude",
+            execution_steps=[],
+            acceptance_checks=["pytest -q"],
+            preview=False,
+            execute=True,
+            config_path=None,
+        )
+
+        assert not (repo_path / "cam").exists()
+        assert not (repo_path / "tests" / "test_atomic_operations.py").exists()
+
+        baseline = cli._snapshot_repo_state(repo_path)
+        assert "src/claw/__init__.py" in baseline
+
+    @pytest.mark.asyncio
     async def test_run_preflight_async_reuses_prior_answers(self, tmp_path):
         from claw import cli
 

@@ -541,6 +541,79 @@ def _scan_for_new_source_namespaces(repo_path: Path, baseline_snapshot: dict[str
     return sorted(ns for ns in current_namespaces - baseline_namespaces if ns)
 
 
+def _list_added_repo_files(repo_path: Path, baseline_snapshot: dict[str, Any]) -> list[Path]:
+    current_snapshot = _snapshot_repo_state(repo_path)
+    baseline_files = {str(path) for path in baseline_snapshot.keys()}
+    added: list[Path] = []
+    for rel_path in current_snapshot.keys():
+        rel = str(rel_path)
+        if rel not in baseline_files:
+            candidate = repo_path / rel
+            if candidate.is_file():
+                added.append(candidate)
+    return sorted(added)
+
+
+def _rollback_added_repo_files(repo_path: Path, baseline_snapshot: dict[str, Any]) -> list[str]:
+    removed: list[str] = []
+    for file_path in reversed(_list_added_repo_files(repo_path, baseline_snapshot)):
+        try:
+            rel = str(file_path.relative_to(repo_path))
+            file_path.unlink(missing_ok=True)
+            removed.append(rel)
+        except OSError:
+            continue
+
+    protected_roots = {
+        repo_path,
+        repo_path / ".git",
+        repo_path / "src",
+        repo_path / "tests",
+        repo_path / "docs",
+        repo_path / "data",
+        repo_path / "tmp",
+    }
+    for root, dirs, _files in os.walk(repo_path, topdown=False):
+        root_path = Path(root)
+        if root_path in protected_roots:
+            continue
+        try:
+            if not any(root_path.iterdir()):
+                root_path.rmdir()
+        except OSError:
+            continue
+    return sorted(removed)
+
+
+def _enforce_quickstart_execution_guard(
+    *,
+    repo_path: Path,
+    baseline_snapshot: dict[str, Any],
+    outcome: Any,
+    verification: Any,
+) -> tuple[Any, Any, list[str]]:
+    new_source_namespaces = _scan_for_new_source_namespaces(repo_path, baseline_snapshot)
+    if not new_source_namespaces:
+        return outcome, verification, []
+
+    rolled_back = _rollback_added_repo_files(repo_path, baseline_snapshot)
+    violation_detail = (
+        "new_source_namespace: " + ", ".join(new_source_namespaces)
+        + ("; rolled back added files: " + ", ".join(rolled_back[:8]) if rolled_back else "")
+    )
+    verification.approved = False
+    verification.violations.append({"check": "namespace_guard", "detail": violation_detail})
+    outcome.tests_passed = False
+    outcome.failure_reason = "new_source_namespace"
+    if outcome.test_output:
+        outcome.test_output += "\n"
+    outcome.test_output += (
+        "Quickstart execution introduced forbidden new source namespaces: "
+        + ", ".join(new_source_namespaces)
+    )
+    return outcome, verification, rolled_back
+
+
 def _assess_expectation_contract(
     spec: dict[str, Any],
     *,
@@ -4203,6 +4276,7 @@ async def _quickstart_async(
 
     config_p = Path(config_path) if config_path else None
     ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
+    baseline_snapshot = _snapshot_repo_state(repo_path)
 
     try:
         project = await ctx.repository.get_project_by_name(repo_path.name)
@@ -4261,6 +4335,18 @@ async def _quickstart_async(
             duration = _time.monotonic() - start
 
             agent_id, _, outcome, verification = verified
+            outcome, verification, rolled_back = _enforce_quickstart_execution_guard(
+                repo_path=repo_path,
+                baseline_snapshot=baseline_snapshot,
+                outcome=outcome,
+                verification=verification,
+            )
+            if rolled_back:
+                console.print(
+                    "\n[yellow]Quickstart safety rollback removed added files from the failed execution.[/yellow]"
+                )
+                for rel_path in rolled_back[:8]:
+                    console.print(f"  - {rel_path}")
             cycle_result = CycleResult(
                 cycle_level="micro",
                 task_id=task.id,
