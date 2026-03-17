@@ -758,13 +758,19 @@ def _classify_assimilation_stage(
     *,
     template_count: int = 0,
     template_successes: int = 0,
+    usage_stats: Optional[dict[str, Any]] = None,
 ) -> str:
     """Classify a methodology along the learning/usefulness continuum."""
-    if getattr(meth, "success_count", 0) > 0 or template_successes > 0:
+    usage_stats = usage_stats or {}
+    if (
+        getattr(meth, "success_count", 0) > 0
+        or template_successes > 0
+        or int(usage_stats.get("attributed_success_count", 0) or 0) > 0
+    ):
         return "proven"
-    if template_count > 0:
+    if template_count > 0 or int(usage_stats.get("used_count", 0) or 0) > 0:
         return "operationalized"
-    if getattr(meth, "retrieval_count", 0) > 0:
+    if getattr(meth, "retrieval_count", 0) > 0 or int(usage_stats.get("retrieved_count", 0) or 0) > 0:
         return "retrieved"
     if (
         getattr(meth, "capability_data", None) is not None
@@ -780,9 +786,11 @@ def _is_future_candidate(
     *,
     potential_threshold: float,
     template_count: int = 0,
+    usage_stats: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Estimate whether a methodology looks promising for future use."""
-    if getattr(meth, "success_count", 0) > 0:
+    usage_stats = usage_stats or {}
+    if getattr(meth, "success_count", 0) > 0 or int(usage_stats.get("attributed_success_count", 0) or 0) > 0:
         return False
     potential = getattr(meth, "potential_score", None)
     if potential is not None and potential >= potential_threshold:
@@ -5081,6 +5089,7 @@ async def _assimilation_report_async(limit: int, future_threshold: float) -> Non
             for row in template_rows
             if row.get("source_methodology_id")
         }
+        usage_stats = await repository.get_methodology_usage_stats()
 
         stage_counts = {
             "stored": 0,
@@ -5097,12 +5106,14 @@ async def _assimilation_report_async(limit: int, future_threshold: float) -> Non
 
         for meth in methods:
             stats = template_stats.get(meth.id, {})
+            usage = usage_stats.get(meth.id, {})
             template_count = int(stats.get("count", 0))
             template_successes = int(stats.get("successes", 0))
             stage = _classify_assimilation_stage(
                 meth,
                 template_count=template_count,
                 template_successes=template_successes,
+                usage_stats=usage,
             )
             stage_counts[stage] += 1
 
@@ -5110,23 +5121,34 @@ async def _assimilation_report_async(limit: int, future_threshold: float) -> Non
                 meth,
                 potential_threshold=future_threshold,
                 template_count=template_count,
+                usage_stats=usage,
             ):
-                future_candidates.append((meth, template_count, template_successes))
+                future_candidates.append((meth, template_count, template_successes, usage))
 
             if stage == "proven":
-                proven_items.append((meth, template_count, template_successes))
+                proven_items.append((meth, template_count, template_successes, usage))
             elif stage == "stored":
-                stored_items.append((meth, template_count, template_successes))
+                stored_items.append((meth, template_count, template_successes, usage))
             elif stage == "enriched":
-                enriched_items.append((meth, template_count, template_successes))
+                enriched_items.append((meth, template_count, template_successes, usage))
             elif stage == "operationalized":
-                operationalized_items.append((meth, template_count, template_successes))
+                operationalized_items.append((meth, template_count, template_successes, usage))
 
         future_candidates.sort(key=lambda x: ((x[0].potential_score or 0), (x[0].novelty_score or 0)), reverse=True)
-        proven_items.sort(key=lambda x: (x[0].success_count + x[2], x[0].retrieval_count), reverse=True)
+        proven_items.sort(
+            key=lambda x: (
+                x[0].success_count + x[2] + int((x[3] or {}).get("attributed_success_count", 0) or 0),
+                int((x[3] or {}).get("used_count", 0) or 0),
+                x[0].retrieval_count,
+            ),
+            reverse=True,
+        )
         stored_items.sort(key=lambda x: x[0].created_at, reverse=True)
         enriched_items.sort(key=lambda x: ((x[0].potential_score or 0), (x[0].novelty_score or 0)), reverse=True)
-        operationalized_items.sort(key=lambda x: (x[1], x[0].retrieval_count), reverse=True)
+        operationalized_items.sort(
+            key=lambda x: (x[1], int((x[3] or {}).get("used_count", 0) or 0), x[0].retrieval_count),
+            reverse=True,
+        )
 
         console.print(Panel.fit(
             f"[bold cyan]CAM Assimilation Continuum[/bold cyan]\n"
@@ -5157,14 +5179,17 @@ async def _assimilation_report_async(limit: int, future_threshold: float) -> Non
             future_table.add_column("Potential", justify="right", width=9, style="bold cyan")
             future_table.add_column("Novelty", justify="right", width=8, style="yellow")
             future_table.add_column("Domains", max_width=24)
-            for meth, template_count, _ in future_candidates[:limit]:
+            for meth, template_count, _, usage in future_candidates[:limit]:
                 domains = ", ".join(((meth.capability_data or {}).get("domain", [])[:3]))
+                expect = usage.get("avg_expectation_match_score")
                 future_table.add_row(
                     meth.id[:8],
                     meth.problem_description[:44],
                     f"{(meth.potential_score or 0):.3f}",
                     f"{(meth.novelty_score or 0):.3f}" if meth.novelty_score is not None else "-",
-                    domains or ("templates:" + str(template_count) if template_count else "-"),
+                    domains or (
+                        "expect:" + f"{float(expect):.2f}" if expect is not None else ("templates:" + str(template_count) if template_count else "-")
+                    ),
                 )
             console.print(future_table)
 
@@ -5176,15 +5201,21 @@ async def _assimilation_report_async(limit: int, future_threshold: float) -> Non
             table.add_column("Description", max_width=44)
             table.add_column("Retr", justify="right", width=6)
             table.add_column("Succ", justify="right", width=6)
+            table.add_column("Used", justify="right", width=6)
+            table.add_column("Exp", justify="right", width=6)
             table.add_column("Tpl", justify="right", width=5)
             if score_label:
                 table.add_column(score_label, justify="right", width=9)
-            for meth, template_count, template_successes in items[:limit]:
+            for meth, template_count, template_successes, usage in items[:limit]:
+                used_count = int((usage or {}).get("used_count", 0) or 0)
+                expectation_score = (usage or {}).get("avg_expectation_match_score")
                 row = [
                     meth.id[:8],
                     meth.problem_description[:44],
                     str(meth.retrieval_count),
-                    str(meth.success_count + template_successes),
+                    str(meth.success_count + template_successes + int((usage or {}).get("attributed_success_count", 0) or 0)),
+                    str(used_count),
+                    "-" if expectation_score is None else f"{float(expectation_score):.2f}",
                     str(template_count),
                 ]
                 if score_label == "Potential":

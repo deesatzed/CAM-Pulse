@@ -287,6 +287,60 @@ class TestMicroClaw:
         assert "outcome_attributed" in stages_for_used
         assert all(row.methodology_id != unused.id for row in usage_rows if row.stage == "outcome_attributed")
 
+    async def test_learn_demotes_attributed_methodology_when_expectation_fit_is_low(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        used = Methodology(
+            problem_description="JWT auth validation pattern with token parsing",
+            solution_code="validate_jwt()",
+            problem_embedding=[0.2] * 384,
+        )
+        await ctx.repository.save_methodology(used)
+
+        class SemanticStub:
+            def __init__(self, repository):
+                self.repository = repository
+
+            async def record_outcome(self, methodology_id, success, retrieval_relevance=0.5):
+                await self.repository.update_methodology_outcome(methodology_id, success)
+
+        ctx.semantic_memory = SemanticStub(ctx.repository)
+
+        micro = MicroClaw(ctx, sample_project.id)
+        micro._current_context_brief = ContextBrief(
+            task=sample_task,
+            past_solutions=[used],
+            retrieved_methodology_ids=[used.id],
+        )
+
+        outcome = TaskOutcome(
+            approach_summary="Implemented JWT auth validation with token parsing and auth checks.",
+            raw_output="Added validate_jwt token parsing auth path",
+            tests_passed=True,
+            files_changed=["src/auth.py"],
+            diff="+def validate_jwt(token): pass",
+        )
+        verification = VerificationResult(approved=True, quality_score=0.7, expectation_match_score=0.4)
+
+        await micro.learn(("claude", TaskContext(task=sample_task), outcome, verification))
+
+        used_reloaded = await ctx.repository.get_methodology(used.id)
+        assert used_reloaded is not None
+        assert used_reloaded.success_count == 0
+        assert used_reloaded.failure_count == 1
+
+        usage_rows = await ctx.repository.get_methodology_usage_for_task(sample_task.id)
+        attributed = [row for row in usage_rows if row.methodology_id == used.id and row.stage == "outcome_attributed"]
+        assert len(attributed) == 1
+        assert attributed[0].success is False
+
     async def test_grab_respects_priority(self, claw_context, sample_project):
         ctx = claw_context
         await ctx.repository.create_project(sample_project)

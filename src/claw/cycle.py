@@ -196,6 +196,17 @@ def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, 
     return None
 
 
+def _counts_as_methodology_success(verification: VerificationResult) -> bool:
+    """Only promote methodologies when the result met the expected quality bar."""
+    if not verification.approved:
+        return False
+    if verification.expectation_match_score is not None and verification.expectation_match_score < 0.65:
+        return False
+    if verification.quality_score is not None and verification.quality_score < 0.55:
+        return False
+    return True
+
+
 def _apply_structured_file_operations(
     workspace_dir: Optional[str],
     raw_output: Optional[str],
@@ -729,6 +740,7 @@ class MicroClaw(ClawCycle):
         used_methodologies = _infer_used_methodology_ids(self._current_context_brief, outcome)
 
         if verification.approved:
+            methodology_success = _counts_as_methodology_success(verification)
             # Success path
             await self.ctx.repository.update_task_status(task.id, TaskStatus.DONE)
 
@@ -808,7 +820,7 @@ class MicroClaw(ClawCycle):
                                 project_id=self.project_id,
                                 stage="used_in_outcome",
                                 agent_id=agent_id,
-                                success=True,
+                                success=methodology_success,
                                 expectation_match_score=verification.expectation_match_score,
                                 quality_score=verification.quality_score,
                                 relevance_score=relevance,
@@ -822,16 +834,20 @@ class MicroClaw(ClawCycle):
                                 project_id=self.project_id,
                                 stage="outcome_attributed",
                                 agent_id=agent_id,
-                                success=True,
+                                success=methodology_success,
                                 expectation_match_score=verification.expectation_match_score,
                                 quality_score=verification.quality_score,
                                 relevance_score=relevance,
-                                notes="Successful outcome attributed to retrieved methodology",
+                                notes=(
+                                    "Expectation-matched successful outcome attributed to retrieved methodology"
+                                    if methodology_success else
+                                    "Approved outcome fell below expectation/quality threshold for methodology promotion"
+                                ),
                             )
                         )
                         await self.ctx.semantic_memory.record_outcome(
                             methodology_id,
-                            success=True,
+                            success=methodology_success,
                             retrieval_relevance=relevance,
                         )
                     except Exception as e:

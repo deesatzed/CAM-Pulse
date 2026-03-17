@@ -34,6 +34,13 @@ class TestAssimilationContinuumHelpers:
         meth = Methodology(problem_description="p", solution_code="s")
         assert _classify_assimilation_stage(meth, template_count=1, template_successes=1) == "proven"
 
+    def test_stage_proven_from_attributed_success(self):
+        meth = Methodology(problem_description="p", solution_code="s")
+        assert _classify_assimilation_stage(
+            meth,
+            usage_stats={"attributed_success_count": 1},
+        ) == "proven"
+
     def test_future_candidate_from_high_potential(self):
         meth = Methodology(problem_description="p", solution_code="s", potential_score=0.8)
         assert _is_future_candidate(meth, potential_threshold=0.65) is True
@@ -49,3 +56,11 @@ class TestAssimilationContinuumHelpers:
             capability_data={"domain": ["systems"]},
         )
         assert _is_future_candidate(meth, potential_threshold=0.95, template_count=1) is True
+
+    def test_future_candidate_false_after_attributed_success(self):
+        meth = Methodology(problem_description="p", solution_code="s", potential_score=0.9)
+        assert _is_future_candidate(
+            meth,
+            potential_threshold=0.65,
+            usage_stats={"attributed_success_count": 1},
+        ) is False
