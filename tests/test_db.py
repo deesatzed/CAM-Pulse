@@ -288,6 +288,17 @@ class TestRepository:
         assert summary[sample_task.id]["attributed_success_count"] == 1
         assert summary[sample_task.id]["avg_expectation_match_score"] == pytest.approx(0.9)
 
+        per_method_stats = await repository.get_methodology_usage_stats_for_methodology(m.id)
+        assert per_method_stats["retrieved_count"] == 1
+        assert per_method_stats["used_count"] == 1
+        assert per_method_stats["attributed_count"] == 1
+        assert per_method_stats["attributed_success_count"] == 1
+        assert per_method_stats["avg_quality_score"] == pytest.approx(0.85)
+
+        per_method_rows = await repository.get_methodology_usage_for_methodology(m.id)
+        assert len(per_method_rows) == 3
+        assert per_method_rows[0].stage == "outcome_attributed"
+
     async def test_methodology_save_and_search(self, repository, sample_project, sample_task):
         await repository.create_project(sample_project)
         await repository.create_task(sample_task)

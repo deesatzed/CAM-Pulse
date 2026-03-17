@@ -291,6 +291,20 @@ class Repository:
         )
         return [_row_to_methodology_usage_entry(r) for r in rows]
 
+    async def get_methodology_usage_for_methodology(
+        self,
+        methodology_id: str,
+        limit: int = 20,
+    ) -> list[MethodologyUsageEntry]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM methodology_usage_log
+               WHERE methodology_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [methodology_id, limit],
+        )
+        return [_row_to_methodology_usage_entry(r) for r in rows]
+
     async def get_methodology_usage_stats(self) -> dict[str, dict[str, Any]]:
         rows = await self.engine.fetch_all(
             """SELECT methodology_id,
@@ -318,6 +332,47 @@ class Repository:
             }
             for row in rows
             if row.get("methodology_id")
+        }
+
+    async def get_methodology_usage_stats_for_methodology(self, methodology_id: str) -> dict[str, Any]:
+        row = await self.engine.fetch_one(
+            """SELECT methodology_id,
+                      SUM(CASE WHEN stage = 'retrieved_presented' THEN 1 ELSE 0 END) AS retrieved_count,
+                      SUM(CASE WHEN stage = 'used_in_outcome' THEN 1 ELSE 0 END) AS used_count,
+                      SUM(CASE WHEN stage = 'outcome_attributed' THEN 1 ELSE 0 END) AS attributed_count,
+                      SUM(CASE WHEN stage = 'outcome_attributed' AND success = 1 THEN 1 ELSE 0 END) AS attributed_success_count,
+                      SUM(CASE WHEN stage = 'outcome_attributed' AND success = 0 THEN 1 ELSE 0 END) AS attributed_failure_count,
+                      AVG(CASE WHEN stage = 'outcome_attributed' THEN expectation_match_score END) AS avg_expectation_match_score,
+                      AVG(CASE WHEN stage = 'outcome_attributed' THEN quality_score END) AS avg_quality_score,
+                      AVG(CASE WHEN stage = 'retrieved_presented' THEN relevance_score END) AS avg_relevance_score,
+                      MAX(created_at) AS last_used_at
+               FROM methodology_usage_log
+               WHERE methodology_id = ?
+               GROUP BY methodology_id""",
+            [methodology_id],
+        )
+        if row is None:
+            return {
+                "retrieved_count": 0,
+                "used_count": 0,
+                "attributed_count": 0,
+                "attributed_success_count": 0,
+                "attributed_failure_count": 0,
+                "avg_expectation_match_score": None,
+                "avg_quality_score": None,
+                "avg_relevance_score": None,
+                "last_used_at": None,
+            }
+        return {
+            "retrieved_count": int(row["retrieved_count"] or 0),
+            "used_count": int(row["used_count"] or 0),
+            "attributed_count": int(row["attributed_count"] or 0),
+            "attributed_success_count": int(row["attributed_success_count"] or 0),
+            "attributed_failure_count": int(row["attributed_failure_count"] or 0),
+            "avg_expectation_match_score": row["avg_expectation_match_score"],
+            "avg_quality_score": row["avg_quality_score"],
+            "avg_relevance_score": row["avg_relevance_score"],
+            "last_used_at": row["last_used_at"],
         }
 
     async def get_methodology_usage_summary_for_tasks(self, task_ids: list[str]) -> dict[str, dict[str, Any]]:

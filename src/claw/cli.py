@@ -6225,6 +6225,49 @@ async def _kb_capability_async(cap_id: str) -> None:
         score_table.add_row("Failures", str(m.failure_count))
         console.print(score_table)
 
+        usage_stats = await repository.get_methodology_usage_stats_for_methodology(m.id)
+        usage_entries = await repository.get_methodology_usage_for_methodology(m.id, limit=12)
+        if usage_entries:
+            usage_table = Table(title="Usage Attribution")
+            usage_table.add_column("Metric", style="bold", width=22)
+            usage_table.add_column("Value", justify="right", width=12)
+            usage_table.add_row("Retrieved", str(usage_stats.get("retrieved_count", 0)))
+            usage_table.add_row("Used In Outcomes", str(usage_stats.get("used_count", 0)))
+            usage_table.add_row("Attributed", str(usage_stats.get("attributed_count", 0)))
+            usage_table.add_row("Attributed Success", str(usage_stats.get("attributed_success_count", 0)))
+            usage_table.add_row("Attributed Failure", str(usage_stats.get("attributed_failure_count", 0)))
+            usage_table.add_row(
+                "Avg Expectation Match",
+                "-" if usage_stats.get("avg_expectation_match_score") is None else f"{float(usage_stats['avg_expectation_match_score']):.2f}",
+            )
+            usage_table.add_row(
+                "Avg Quality",
+                "-" if usage_stats.get("avg_quality_score") is None else f"{float(usage_stats['avg_quality_score']):.2f}",
+            )
+            usage_table.add_row(
+                "Last Used",
+                str(usage_stats.get("last_used_at") or "-"),
+            )
+            console.print(usage_table)
+
+            recent_table = Table(title="Recent Usage Events")
+            recent_table.add_column("Task", style="cyan", width=8)
+            recent_table.add_column("Stage", width=18)
+            recent_table.add_column("Success", width=8)
+            recent_table.add_column("Expect", justify="right", width=7)
+            recent_table.add_column("Quality", justify="right", width=7)
+            recent_table.add_column("Agent", width=10)
+            for entry in usage_entries[:8]:
+                recent_table.add_row(
+                    entry.task_id[:8],
+                    entry.stage,
+                    "-" if entry.success is None else ("yes" if entry.success else "no"),
+                    "-" if entry.expectation_match_score is None else f"{float(entry.expectation_match_score):.2f}",
+                    "-" if entry.quality_score is None else f"{float(entry.quality_score):.2f}",
+                    entry.agent_id or "-",
+                )
+            console.print(recent_table)
+
         # Capability data
         cd = m.capability_data
         if cd:
