@@ -880,6 +880,76 @@ def _derive_activation_triggers(meth: Any, *, template_count: int = 0) -> list[s
     return sorted(set(triggers))
 
 
+def _summarize_methodology_usage(entries: list[Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "total_events": len(entries),
+        "methodology_count": 0,
+        "retrieved_count": 0,
+        "used_count": 0,
+        "attributed_count": 0,
+        "attributed_success_count": 0,
+        "avg_expectation_match_score": None,
+        "top_methodologies": [],
+    }
+    if not entries:
+        return summary
+
+    per_methodology: dict[str, dict[str, Any]] = {}
+    expectation_scores: list[float] = []
+
+    for entry in entries:
+        bucket = per_methodology.setdefault(
+            entry.methodology_id,
+            {
+                "methodology_id": entry.methodology_id,
+                "retrieved_count": 0,
+                "used_count": 0,
+                "attributed_count": 0,
+                "success_count": 0,
+                "avg_expectation_match_score": None,
+                "_expectation_scores": [],
+            },
+        )
+        if entry.stage == "retrieved_presented":
+            summary["retrieved_count"] += 1
+            bucket["retrieved_count"] += 1
+        elif entry.stage == "used_in_outcome":
+            summary["used_count"] += 1
+            bucket["used_count"] += 1
+        elif entry.stage == "outcome_attributed":
+            summary["attributed_count"] += 1
+            bucket["attributed_count"] += 1
+            if entry.success:
+                summary["attributed_success_count"] += 1
+                bucket["success_count"] += 1
+            if entry.expectation_match_score is not None:
+                score = float(entry.expectation_match_score)
+                expectation_scores.append(score)
+                bucket["_expectation_scores"].append(score)
+
+    summary["methodology_count"] = len(per_methodology)
+    if expectation_scores:
+        summary["avg_expectation_match_score"] = sum(expectation_scores) / len(expectation_scores)
+
+    top_methodologies: list[dict[str, Any]] = []
+    for bucket in per_methodology.values():
+        scores = bucket.pop("_expectation_scores")
+        if scores:
+            bucket["avg_expectation_match_score"] = sum(scores) / len(scores)
+        top_methodologies.append(bucket)
+    top_methodologies.sort(
+        key=lambda item: (
+            item["success_count"],
+            item["used_count"],
+            item["retrieved_count"],
+            item["methodology_id"],
+        ),
+        reverse=True,
+    )
+    summary["top_methodologies"] = top_methodologies
+    return summary
+
+
 def _score_methodology_for_task(
     meth: Any,
     *,
@@ -888,6 +958,7 @@ def _score_methodology_for_task(
     expectation_tokens: Optional[set[str]] = None,
     template_count: int = 0,
     template_successes: int = 0,
+    usage_stats: Optional[dict[str, Any]] = None,
 ) -> tuple[float, list[str], list[str]]:
     """Heuristic task-conditioned reassessment score and explanation."""
     tags = set(getattr(meth, "tags", []) or [])
@@ -949,6 +1020,33 @@ def _score_methodology_for_task(
     if trigger_set & task_tokens:
         score += 0.08
         reasons.append("activation trigger matched task")
+
+    usage_stats = usage_stats or {}
+    used_count = int(usage_stats.get("used_count", 0) or 0)
+    attributed_success_count = int(usage_stats.get("attributed_success_count", 0) or 0)
+    attributed_failure_count = int(usage_stats.get("attributed_failure_count", 0) or 0)
+    avg_expectation_match_score = usage_stats.get("avg_expectation_match_score")
+    avg_quality_score = usage_stats.get("avg_quality_score")
+
+    if used_count > 0:
+        score += min(0.12, 0.03 * used_count)
+        reasons.append(f"used in outcomes {used_count}x")
+
+    if attributed_success_count > 0:
+        score += min(0.18, 0.06 * attributed_success_count)
+        reasons.append(f"attributed success {attributed_success_count}")
+
+    if attributed_failure_count > 0:
+        score -= min(0.12, 0.04 * attributed_failure_count)
+        reasons.append(f"attributed failure {attributed_failure_count}")
+
+    if avg_expectation_match_score is not None and float(avg_expectation_match_score) >= 0.6:
+        score += min(0.15, float(avg_expectation_match_score) * 0.15)
+        reasons.append(f"expectation-matched outcomes {float(avg_expectation_match_score):.2f}")
+
+    if avg_quality_score is not None and float(avg_quality_score) >= 0.6:
+        score += min(0.12, float(avg_quality_score) * 0.12)
+        reasons.append(f"outcome quality {float(avg_quality_score):.2f}")
 
     return score, reasons, triggers
 
@@ -2681,6 +2779,9 @@ async def _results_async(config_path: Optional[str], limit: int, project_id: Opt
             return
 
         console.print(f"\n[bold]CLAW Task Results[/bold] ({len(rows)} shown)\n")
+        usage_summary = await ctx.repository.get_methodology_usage_summary_for_tasks(
+            [str(row["task_id"]) for row in rows if row.get("task_id")]
+        )
 
         table = Table(show_lines=True)
         table.add_column("#", style="dim", width=3)
@@ -2688,6 +2789,7 @@ async def _results_async(config_path: Optional[str], limit: int, project_id: Opt
         table.add_column("Status", width=10)
         table.add_column("Agent", style="yellow", width=8)
         table.add_column("Outcome", width=9)
+        table.add_column("Knowledge", width=18)
         table.add_column("Duration", justify="right", width=8)
         table.add_column("Summary", max_width=50)
 
@@ -2698,6 +2800,7 @@ async def _results_async(config_path: Optional[str], limit: int, project_id: Opt
             hypothesis_outcome = row.get("hypothesis_outcome") or "-"
             duration = row.get("duration_seconds")
             summary = (row.get("approach_summary") or "")[:50]
+            usage = usage_summary.get(str(row.get("task_id")), {})
 
             # Color status
             if status_val == "DONE":
@@ -2725,9 +2828,24 @@ async def _results_async(config_path: Optional[str], limit: int, project_id: Opt
             else:
                 dur_str = "-"
 
+            if usage:
+                knowledge_parts = [
+                    f"r{usage.get('retrieved_count', 0)}",
+                    f"u{usage.get('used_count', 0)}",
+                ]
+                attributed_count = int(usage.get("attributed_count", 0) or 0)
+                if attributed_count:
+                    knowledge_parts.append(f"a{attributed_count}")
+                expectation_score = usage.get("avg_expectation_match_score")
+                if expectation_score is not None:
+                    knowledge_parts.append(f"e{float(expectation_score):.2f}")
+                knowledge_str = " ".join(knowledge_parts)
+            else:
+                knowledge_str = "-"
+
             table.add_row(
                 str(i), title, status_display, agent,
-                outcome_display, dur_str, summary,
+                outcome_display, knowledge_str, dur_str, summary,
             )
 
         console.print(table)
@@ -2831,7 +2949,7 @@ async def _expectations_async(config_path: Optional[str]) -> None:
         await ctx.close()
 
 
-def _display_runbook_details(task, project_name: str, action_template=None) -> None:
+def _display_runbook_details(task, project_name: str, action_template=None, usage_entries: Optional[list[Any]] = None) -> None:
     """Render runbook sections for a task with optional template fallback."""
     execution_steps = list(task.execution_steps)
     acceptance_checks = list(task.acceptance_checks)
@@ -2859,6 +2977,20 @@ def _display_runbook_details(task, project_name: str, action_template=None) -> N
             f"S/F={action_template.success_count}/{action_template.failure_count})"
         )
 
+    usage_summary = _summarize_methodology_usage(usage_entries or [])
+    if usage_summary["total_events"] > 0:
+        console.print(
+            "  Knowledge Attribution: "
+            f"{usage_summary['methodology_count']} methodology(s), "
+            f"retrieved={usage_summary['retrieved_count']}, "
+            f"used={usage_summary['used_count']}, "
+            f"attributed={usage_summary['attributed_count']}"
+        )
+        if usage_summary["avg_expectation_match_score"] is not None:
+            console.print(
+                f"  Expectation Match: {float(usage_summary['avg_expectation_match_score']):.2f}"
+            )
+
     if preconditions:
         console.print("\n[cyan]Preconditions[/cyan]")
         for item in preconditions:
@@ -2882,6 +3014,25 @@ def _display_runbook_details(task, project_name: str, action_template=None) -> N
         console.print("\n[cyan]Rollback Steps[/cyan]")
         for i, step in enumerate(rollback_steps, 1):
             console.print(f"  {i}. {step}")
+
+    if usage_summary["top_methodologies"]:
+        usage_table = Table(title="Methodology Attribution")
+        usage_table.add_column("Methodology", style="cyan")
+        usage_table.add_column("Retrieved", justify="right")
+        usage_table.add_column("Used", justify="right")
+        usage_table.add_column("Success", justify="right")
+        usage_table.add_column("Expect", justify="right")
+        for item in usage_summary["top_methodologies"][:8]:
+            expectation_score = item.get("avg_expectation_match_score")
+            usage_table.add_row(
+                str(item["methodology_id"])[:8],
+                str(item["retrieved_count"]),
+                str(item["used_count"]),
+                str(item["success_count"]),
+                "-" if expectation_score is None else f"{float(expectation_score):.2f}",
+            )
+        console.print()
+        console.print(usage_table)
 
 
 @app.command(hidden=True)
@@ -2908,16 +3059,83 @@ async def _runbook_async(task_id: str, config_path: Optional[str]) -> None:
 
         project = await ctx.repository.get_project(task.project_id)
         action_template = None
+        usage_entries = await ctx.repository.get_methodology_usage_for_task(task.id)
         if task.action_template_id:
             action_template = await ctx.repository.get_action_template(task.action_template_id)
         _display_runbook_details(
             task=task,
             project_name=project.name if project else task.project_id,
             action_template=action_template,
+            usage_entries=usage_entries,
         )
 
         console.print("\n[dim]Use `cam enhance <repo> --dry-run` to preview execution without running agents.[/dim]")
 
+    finally:
+        await ctx.close()
+
+
+async def _learn_usage_async(task_id: str, config_path: Optional[str]) -> None:
+    from claw.core.factory import ClawFactory
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        task = await ctx.repository.get_task(task_id)
+        if task is None:
+            console.print(f"[red]Task not found: {task_id}[/red]")
+            raise typer.Exit(1)
+
+        entries = await ctx.repository.get_methodology_usage_for_task(task.id)
+        summary = _summarize_methodology_usage(entries)
+
+        console.print("\n[bold]CAM Methodology Usage[/bold]")
+        console.print(f"  Task: {task.title}")
+        console.print(f"  Task ID: {task.id}")
+        console.print(
+            f"  Retrieved={summary['retrieved_count']} | "
+            f"Used={summary['used_count']} | "
+            f"Attributed={summary['attributed_count']}"
+        )
+        if summary["avg_expectation_match_score"] is not None:
+            console.print(f"  Avg Expectation Match: {float(summary['avg_expectation_match_score']):.2f}")
+
+        if not entries:
+            console.print("\n[yellow]No methodology attribution recorded yet.[/yellow]")
+            return
+
+        by_methodology = {item["methodology_id"]: item for item in summary["top_methodologies"]}
+        methods = await ctx.repository.list_methodologies(limit=5000, include_dead=True)
+        method_map = {m.id: m for m in methods}
+
+        table = Table(show_lines=True)
+        table.add_column("Methodology", style="cyan", max_width=48)
+        table.add_column("ID", width=8)
+        table.add_column("Retrieved", justify="right")
+        table.add_column("Used", justify="right")
+        table.add_column("Success", justify="right")
+        table.add_column("Expect", justify="right")
+        table.add_column("Source", max_width=24)
+
+        for methodology_id, item in list(by_methodology.items())[:12]:
+            meth = method_map.get(methodology_id)
+            source = "-"
+            if meth is not None:
+                source = next((tag.split(":", 1)[1] for tag in (meth.tags or []) if tag.startswith("source:")), "-")
+            title = meth.problem_description if meth is not None else methodology_id
+            table.add_row(
+                title[:48],
+                methodology_id[:8],
+                str(item["retrieved_count"]),
+                str(item["used_count"]),
+                str(item["success_count"]),
+                "-" if item.get("avg_expectation_match_score") is None else f"{float(item['avg_expectation_match_score']):.2f}",
+                source,
+            )
+
+        console.print()
+        console.print(table)
     finally:
         await ctx.close()
 
@@ -5053,6 +5271,7 @@ async def _reassess_async(
             for row in template_rows
             if row.get("source_methodology_id")
         }
+        usage_stats = await repository.get_methodology_usage_stats()
 
         recommendations: list[dict[str, Any]] = []
         future_watchlist: list[dict[str, Any]] = []
@@ -5067,6 +5286,7 @@ async def _reassess_async(
                 expectation_tokens=expectation_tokens,
                 template_count=template_count,
                 template_successes=template_successes,
+                usage_stats=usage_stats.get(meth.id),
             )
             stage = _classify_assimilation_stage(
                 meth,
@@ -5090,6 +5310,7 @@ async def _reassess_async(
         recommendations.sort(
             key=lambda x: (
                 x["score"],
+                (usage_stats.get(x["methodology"].id, {}) or {}).get("attributed_success_count", 0),
                 x["methodology"].success_count + x["template_successes"],
                 x["methodology"].retrieval_count,
                 x["methodology"].potential_score or 0,
@@ -5287,6 +5508,16 @@ def learn_synergies(
 ) -> None:
     """Preferred grouped alias for `cam synergies`."""
     synergies(verbose=verbose, config=config)
+
+
+@learn_app.command(name="usage")
+def learn_usage(
+    task_id: str = typer.Argument(..., help="Task ID to inspect methodology attribution for"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show retrieved and attributed methodologies for a task."""
+    _setup_logging(False)
+    asyncio.run(_learn_usage_async(task_id, config))
 
 
 @task_app.command(name="add")

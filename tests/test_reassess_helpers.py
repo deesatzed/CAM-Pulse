@@ -74,3 +74,28 @@ class TestReassessHelpers:
         )
         assert score > 0.2
         assert any("success evidence" in reason for reason in reasons)
+
+    def test_score_methodology_rewards_attributed_expectation_matched_usage(self):
+        meth = Methodology(
+            problem_description="operator-facing upgrade planning with evidence-backed reports",
+            solution_code="...",
+            capability_data={"domain": ["backend", "validation"], "capability_type": "analysis"},
+            potential_score=0.75,
+        )
+        score, reasons, _ = _score_methodology_for_task(
+            meth,
+            task_tokens=_tokenize_reassessment_text("build an operator workflow for repo upgrade recommendations"),
+            repo_tokens=_tokenize_reassessment_text("cli docs validation"),
+            expectation_tokens=_tokenize_reassessment_text("recommendations should fit the intended operator workflow"),
+            usage_stats={
+                "used_count": 2,
+                "attributed_success_count": 2,
+                "attributed_failure_count": 0,
+                "avg_expectation_match_score": 0.9,
+                "avg_quality_score": 0.8,
+            },
+        )
+        assert score >= 0.5
+        assert any("used in outcomes" in reason for reason in reasons)
+        assert any("attributed success" in reason for reason in reasons)
+        assert any("expectation-matched outcomes" in reason for reason in reasons)

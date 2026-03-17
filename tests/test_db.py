@@ -231,6 +231,63 @@ class TestRepository:
         assert rows[0].stage == "retrieved_presented"
         assert rows[0].relevance_score == 0.73
 
+    async def test_methodology_usage_stats_and_task_summary(self, repository, sample_project, sample_task):
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        m = Methodology(
+            problem_description="Expectation-aware repo modernization method",
+            solution_code="pytest -q",
+            problem_embedding=[0.1] * 384,
+            source_task_id=sample_task.id,
+        )
+        await repository.save_methodology(m)
+
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=sample_task.id,
+                methodology_id=m.id,
+                project_id=sample_project.id,
+                stage="retrieved_presented",
+                relevance_score=0.8,
+            )
+        )
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=sample_task.id,
+                methodology_id=m.id,
+                project_id=sample_project.id,
+                stage="used_in_outcome",
+            )
+        )
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=sample_task.id,
+                methodology_id=m.id,
+                project_id=sample_project.id,
+                stage="outcome_attributed",
+                success=True,
+                expectation_match_score=0.9,
+                quality_score=0.85,
+            )
+        )
+
+        stats = await repository.get_methodology_usage_stats()
+        assert m.id in stats
+        assert stats[m.id]["retrieved_count"] == 1
+        assert stats[m.id]["used_count"] == 1
+        assert stats[m.id]["attributed_success_count"] == 1
+        assert stats[m.id]["attributed_failure_count"] == 0
+        assert stats[m.id]["avg_expectation_match_score"] == pytest.approx(0.9)
+
+        summary = await repository.get_methodology_usage_summary_for_tasks([sample_task.id])
+        assert sample_task.id in summary
+        assert summary[sample_task.id]["methodology_count"] == 1
+        assert summary[sample_task.id]["retrieved_count"] == 1
+        assert summary[sample_task.id]["used_count"] == 1
+        assert summary[sample_task.id]["attributed_success_count"] == 1
+        assert summary[sample_task.id]["avg_expectation_match_score"] == pytest.approx(0.9)
+
     async def test_methodology_save_and_search(self, repository, sample_project, sample_task):
         await repository.create_project(sample_project)
         await repository.create_task(sample_task)
