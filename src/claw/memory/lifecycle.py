@@ -9,6 +9,7 @@ State transitions:
     viable -> thriving     : fitness_score > 0.7 AND success_count >= 3
     thriving -> declining  : fitness_score drops below 0.4
     viable -> declining    : failure_count > success_count AND retrieval_count >= 3
+    high-trust -> declining: repeated attributed failures with no attributed success
     declining -> dormant   : not retrieved for 180 days
     dormant -> dead        : not retrieved for 365 days
     declining -> viable    : fitness recovers above 0.5 (rehabilitation)
@@ -37,6 +38,7 @@ REHABILITATION_FITNESS_THRESHOLD = 0.5
 DORMANT_DAYS = 180
 DEAD_DAYS = 365
 NICHE_COLLISION_SIMILARITY = 0.92
+ATTRIBUTED_FAILURE_DECLINE_MINIMUM = 2
 
 
 def evaluate_transition(
@@ -137,7 +139,11 @@ async def apply_transition(
     Returns:
         The new state if transitioned, or None.
     """
-    new_state = evaluate_transition(methodology, now=now)
+    attributed_transition = await _evaluate_attributed_transition(
+        methodology,
+        repository,
+    )
+    new_state = attributed_transition or evaluate_transition(methodology, now=now)
     if new_state is None:
         return None
 
@@ -150,6 +156,41 @@ async def apply_transition(
     await repository.update_methodology_lifecycle(methodology.id, new_state)
     methodology.lifecycle_state = new_state
     return new_state
+
+
+async def _evaluate_attributed_transition(
+    methodology: Methodology,
+    repository: Repository,
+) -> Optional[str]:
+    """Apply high-trust demotion based on attributed evidence.
+
+    High-trust methodologies should not remain thriving/global if repeated
+    attributed outcomes fail and no attributed success exists yet.
+    """
+    current = methodology.lifecycle_state
+    if current in (
+        LifecycleState.DEAD.value,
+        LifecycleState.DORMANT.value,
+        LifecycleState.DECLINING.value,
+    ):
+        return None
+
+    if current != LifecycleState.THRIVING.value and methodology.scope != "global":
+        return None
+
+    usage_stats = await repository.get_methodology_usage_stats_for_methodology(
+        methodology.id
+    )
+    attributed_failures = int(usage_stats.get("attributed_failure_count", 0) or 0)
+    attributed_successes = int(usage_stats.get("attributed_success_count", 0) or 0)
+
+    if (
+        attributed_failures >= ATTRIBUTED_FAILURE_DECLINE_MINIMUM
+        and attributed_successes == 0
+    ):
+        return LifecycleState.DECLINING.value
+
+    return None
 
 
 async def run_periodic_sweep(

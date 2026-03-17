@@ -36,7 +36,13 @@ def _group_map():
     return mapping
 
 
-async def _seed_doctor_audit_db(db_path: str, *, flagged: bool, attributed_success: bool = False) -> None:
+async def _seed_doctor_audit_db(
+    db_path: str,
+    *,
+    flagged: bool,
+    attributed_success: bool = False,
+    attributed_failures: int = 0,
+) -> None:
     from claw.core.config import DatabaseConfig
     from claw.core.models import Methodology, MethodologyUsageEntry, Project, Task
     from claw.db.engine import DatabaseEngine
@@ -71,6 +77,18 @@ async def _seed_doctor_audit_db(db_path: str, *, flagged: bool, attributed_succe
                 success=True,
                 expectation_match_score=0.92,
                 quality_score=0.88,
+            )
+        )
+    for _ in range(attributed_failures):
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=task.id,
+                methodology_id=method.id,
+                project_id=project.id,
+                stage="outcome_attributed",
+                success=False,
+                expectation_match_score=0.25,
+                quality_score=0.20,
             )
         )
     await engine.close()
@@ -338,6 +356,7 @@ class TestCLIUXSurface:
         payload = json.loads(out_path.read_text(encoding="utf-8"))
         assert payload["summary"]["total_reviewed"] == 1
         assert payload["summary"]["flagged_total"] == 1
+        assert payload["summary"]["demotion_candidate_total"] == 0
         assert payload["flagged"][0]["evidence_source"] == "legacy"
         assert "legacy_evidence" in payload["flagged"][0]["flags"]
 
@@ -371,3 +390,31 @@ class TestCLIUXSurface:
         assert payload["summary"]["attribution_backed_total"] == 1
         assert payload["summary"]["flagged_total"] == 0
         assert payload["flagged"] == []
+
+    def test_doctor_audit_marks_demotion_candidate_for_repeated_attributed_failures(
+        self, monkeypatch, tmp_path, claw_config
+    ):
+        from claw.cli import app
+        import claw.core.config as config_module
+
+        db_path = tmp_path / "audit_demotion.db"
+        out_path = tmp_path / "doctor_audit_demotion.json"
+        asyncio.run(
+            _seed_doctor_audit_db(
+                str(db_path),
+                flagged=True,
+                attributed_failures=2,
+            )
+        )
+
+        cfg = deepcopy(claw_config)
+        cfg.database.db_path = str(db_path)
+        monkeypatch.setattr(config_module, "load_config", lambda config_path=None: cfg)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["doctor", "audit", "--json-out", str(out_path)])
+
+        assert result.exit_code == 0
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["summary"]["demotion_candidate_total"] == 1
+        assert "demotion_candidate" in payload["flagged"][0]["flags"]

@@ -3012,7 +3012,7 @@ async def _doctor_audit_async(
 
         console.print("\n[bold]CAM Evidence Audit[/bold]")
         console.print(
-            "  Purpose: flag thriving/global methodologies that still rely on weak or legacy evidence"
+            "  Purpose: flag thriving/global methodologies that still rely on weak or legacy evidence and identify demotion candidates"
         )
 
         summary_table = Table(title="Evidence Summary")
@@ -3024,6 +3024,7 @@ async def _doctor_audit_async(
         summary_table.add_row("Attribution-backed", str(summary["attribution_backed_total"]))
         summary_table.add_row("Legacy-backed", str(summary["legacy_backed_total"]))
         summary_table.add_row("Low expectation", str(summary["low_expectation_total"]))
+        summary_table.add_row("Demotion candidates", str(summary["demotion_candidate_total"]))
         summary_table.add_row("Flagged", str(summary["flagged_total"]))
         console.print(summary_table)
 

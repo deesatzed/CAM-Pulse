@@ -460,6 +460,7 @@ class Repository:
             "attribution_backed_total": 0,
             "legacy_backed_total": 0,
             "low_expectation_total": 0,
+            "demotion_candidate_total": 0,
             "flagged_total": 0,
         }
 
@@ -483,6 +484,8 @@ class Repository:
                 flags.append("global_without_attributed_success")
             elif row["lifecycle_state"] == "thriving" and attributed_success_count == 0:
                 flags.append("thriving_without_attributed_success")
+            if attributed_failure_count >= 2 and attributed_success_count == 0:
+                flags.append("demotion_candidate")
 
             item = {
                 "id": str(row["id"]),
@@ -513,6 +516,8 @@ class Repository:
                 summary["legacy_backed_total"] += 1
             if "low_expectation_match" in flags:
                 summary["low_expectation_total"] += 1
+            if "demotion_candidate" in flags:
+                summary["demotion_candidate_total"] += 1
             if flags:
                 summary["flagged_total"] += 1
 

@@ -31,6 +31,7 @@ from claw.core.models import (
     HypothesisOutcome,
     LifecycleState,
     Methodology,
+    MethodologyUsageEntry,
     Task,
     TaskStatus,
     TokenCostRecord,
@@ -342,6 +343,42 @@ class TestPeriodicSweepExtended:
         transitions = await run_periodic_sweep(repository, now=now)
 
         assert "viable->declining" in transitions
+        reloaded = await repository.get_methodology(m.id)
+        assert reloaded is not None
+        assert reloaded.lifecycle_state == "declining"
+
+    @pytest.mark.asyncio
+    async def test_sweep_thriving_to_declining_on_repeated_attributed_failures(
+        self, repository, sample_project, sample_task
+    ):
+        """High-trust methodologies decline after repeated attributed failures with no successes."""
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        now = datetime.now(UTC)
+        m = _make_methodology(
+            source_task_id=sample_task.id,
+            lifecycle_state="thriving",
+            fitness_vector={"total": 0.9},
+            success_count=4,
+        )
+        await repository.save_methodology(m)
+        for _ in range(2):
+            await repository.log_methodology_usage(
+                MethodologyUsageEntry(
+                    task_id=sample_task.id,
+                    methodology_id=m.id,
+                    project_id=sample_project.id,
+                    stage="outcome_attributed",
+                    success=False,
+                    expectation_match_score=0.25,
+                    quality_score=0.2,
+                )
+            )
+
+        transitions = await run_periodic_sweep(repository, now=now)
+
+        assert "thriving->declining" in transitions
         reloaded = await repository.get_methodology(m.id)
         assert reloaded is not None
         assert reloaded.lifecycle_state == "declining"
