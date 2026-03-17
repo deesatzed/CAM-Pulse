@@ -22,6 +22,7 @@ from claw.core.models import (
     HypothesisEntry,
     HypothesisOutcome,
     Methodology,
+    MethodologyUsageEntry,
     Project,
     Task,
     TaskStatus,
@@ -934,6 +935,29 @@ class TestPatternLearnerPromotion:
         await _save_methodology_with_counts(repository, meth)
         return meth
 
+    async def _log_attributed_successes(
+        self,
+        repository,
+        methodology_id: str,
+        project_id: str,
+        count: int = 3,
+        expectation_match_score: float = 0.9,
+    ) -> None:
+        for _ in range(count):
+            task = _make_task(project_id, title=f"usage-{_uid()}")
+            await repository.create_task(task)
+            await repository.log_methodology_usage(
+                MethodologyUsageEntry(
+                    task_id=task.id,
+                    methodology_id=methodology_id,
+                    project_id=project_id,
+                    stage="outcome_attributed",
+                    success=True,
+                    expectation_match_score=expectation_match_score,
+                    quality_score=0.85,
+                )
+            )
+
     async def test_promote_to_global_success(self, repository):
         project = _make_project()
         await repository.create_project(project)
@@ -944,6 +968,7 @@ class TestPatternLearnerPromotion:
             repository, task.id,
             success_count=5, lifecycle_state="thriving", scope="project",
         )
+        await self._log_attributed_successes(repository, meth.id, project.id, count=3, expectation_match_score=0.9)
 
         pl = PatternLearner(repository)
         result = await pl.promote_to_global(meth.id)
@@ -982,6 +1007,23 @@ class TestPatternLearnerPromotion:
             repository, task.id,
             success_count=2, lifecycle_state="thriving", scope="project",
         )
+        await self._log_attributed_successes(repository, meth.id, project.id, count=2, expectation_match_score=0.9)
+
+        pl = PatternLearner(repository)
+        result = await pl.promote_to_global(meth.id)
+        assert result is False
+
+    async def test_promote_to_global_rejects_low_expectation_match(self, repository):
+        project = _make_project()
+        await repository.create_project(project)
+        task = _make_task(project.id)
+        await repository.create_task(task)
+
+        meth = await self._create_methodology_with_counts(
+            repository, task.id,
+            success_count=5, lifecycle_state="thriving", scope="project",
+        )
+        await self._log_attributed_successes(repository, meth.id, project.id, count=3, expectation_match_score=0.4)
 
         pl = PatternLearner(repository)
         result = await pl.promote_to_global(meth.id)

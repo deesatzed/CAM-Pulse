@@ -44,6 +44,8 @@ class PatternLearner:
         """
         self.repository = repository
         self.semantic_memory = semantic_memory
+        self._promotion_expectation_threshold = 0.65
+        self._promotion_success_minimum = 3
 
     # ------------------------------------------------------------------
     # Pattern extraction
@@ -238,7 +240,7 @@ class PatternLearner:
 
         Requirements:
         - methodology must be in 'thriving' lifecycle state
-        - ``success_count >= 3``
+        - attribution-backed success evidence must meet the global-promotion bar
         - methodology must currently have ``scope = 'project'``
 
         Parameters
@@ -275,12 +277,30 @@ class PatternLearner:
             )
             return False
 
-        # Requirement: success_count >= 3
-        if methodology.success_count < 3:
+        usage_stats = await self.repository.get_methodology_usage_stats_for_methodology(methodology_id)
+        attributed_success_count = int(usage_stats.get("attributed_success_count", 0) or 0)
+        avg_expectation_match_score = usage_stats.get("avg_expectation_match_score")
+
+        # Requirement: expectation-matched attributed successes >= minimum.
+        # Fall back to raw success_count only when no attribution history exists yet.
+        effective_success_count = attributed_success_count or methodology.success_count
+        if effective_success_count < self._promotion_success_minimum:
             logger.info(
-                "Cannot promote methodology %s: success_count=%d (need >= 3)",
+                "Cannot promote methodology %s: effective_success_count=%d (need >= %d)",
                 methodology_id,
-                methodology.success_count,
+                effective_success_count,
+                self._promotion_success_minimum,
+            )
+            return False
+        if attributed_success_count > 0 and (
+            avg_expectation_match_score is None
+            or float(avg_expectation_match_score) < self._promotion_expectation_threshold
+        ):
+            logger.info(
+                "Cannot promote methodology %s: avg_expectation_match_score=%s (need >= %.2f)",
+                methodology_id,
+                avg_expectation_match_score,
+                self._promotion_expectation_threshold,
             )
             return False
 
@@ -307,16 +327,29 @@ class PatternLearner:
         )
 
         logger.info(
-            "Promoted methodology %s to global scope (success_count=%d, "
-            "cross_project_usage=%d)",
+            "Promoted methodology %s to global scope (effective_success_count=%d, "
+            "cross_project_usage=%d, avg_expectation_match_score=%s)",
             methodology_id,
-            methodology.success_count,
+            effective_success_count,
             cross_project_count,
+            avg_expectation_match_score,
         )
         return True
 
     async def _count_cross_project_usage(self, methodology: Any) -> int:
         """Count how many distinct projects have tasks similar to this methodology's source."""
+        usage_rows = await self.repository.engine.fetch_all(
+            """SELECT COUNT(DISTINCT project_id) AS project_count
+               FROM methodology_usage_log
+               WHERE methodology_id = ?
+                 AND stage = 'outcome_attributed'
+                 AND success = 1
+                 AND project_id IS NOT NULL""",
+            [methodology.id],
+        )
+        if usage_rows and usage_rows[0].get("project_count"):
+            return int(usage_rows[0]["project_count"])
+
         if methodology.source_task_id is None:
             return 1
 
