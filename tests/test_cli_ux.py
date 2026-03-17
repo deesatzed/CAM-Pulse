@@ -65,6 +65,13 @@ class TestCLIUXSurface:
         assert (ROOT_DIR / "scripts" / "export_cam_knowledge_pack.py").exists()
         assert (ROOT_DIR / "apps" / "embedding_forge" / "benchmark_regression.py").exists()
 
+    def test_ci_workflow_runs_doctor_audit_gate(self):
+        from claw.cli import ROOT_DIR
+
+        workflow = (ROOT_DIR / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "python -m claw.cli doctor audit --limit 5 --json-out doctor_audit.json --fail-on-flags" in workflow
+        assert "name: doctor-audit-${{ matrix.python-version }}" in workflow
+
     def test_quickstart_command_registered(self):
         commands = _command_map()
         assert "quickstart" in commands
