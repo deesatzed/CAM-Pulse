@@ -20,6 +20,7 @@ from claw.core.models import (
     HypothesisEntry,
     HypothesisOutcome,
     Methodology,
+    MethodologyUsageEntry,
     PeerReview,
     Project,
     SynergyExploration,
@@ -257,6 +258,38 @@ class Repository:
             [task_id],
         )
         return int(row["next_attempt"]) if row else 1
+
+    async def log_methodology_usage(self, entry: MethodologyUsageEntry) -> MethodologyUsageEntry:
+        await self.engine.execute(
+            """INSERT INTO methodology_usage_log
+               (id, task_id, methodology_id, project_id, stage, agent_id, success,
+                expectation_match_score, quality_score, relevance_score, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                entry.id,
+                entry.task_id,
+                entry.methodology_id,
+                entry.project_id,
+                entry.stage,
+                entry.agent_id,
+                None if entry.success is None else int(entry.success),
+                entry.expectation_match_score,
+                entry.quality_score,
+                entry.relevance_score,
+                entry.notes,
+                entry.created_at.isoformat(),
+            ],
+        )
+        return entry
+
+    async def get_methodology_usage_for_task(self, task_id: str) -> list[MethodologyUsageEntry]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM methodology_usage_log
+               WHERE task_id = ?
+               ORDER BY created_at ASC""",
+            [task_id],
+        )
+        return [_row_to_methodology_usage_entry(r) for r in rows]
 
     # -------------------------------------------------------------------
     # Action Templates
@@ -1624,6 +1657,26 @@ def _row_to_context_snapshot(row: dict[str, Any]) -> ContextSnapshot:
         attempt_number=row["attempt_number"],
         git_ref=row["git_ref"],
         file_manifest=manifest,
+        created_at=_parse_dt(row.get("created_at")),
+    )
+
+
+def _row_to_methodology_usage_entry(row: dict[str, Any]) -> MethodologyUsageEntry:
+    success = row.get("success")
+    if success is not None:
+        success = bool(success)
+    return MethodologyUsageEntry(
+        id=row["id"],
+        task_id=row["task_id"],
+        methodology_id=row["methodology_id"],
+        project_id=row.get("project_id"),
+        stage=row.get("stage", "retrieved_presented"),
+        agent_id=row.get("agent_id"),
+        success=success,
+        expectation_match_score=row.get("expectation_match_score"),
+        quality_score=row.get("quality_score"),
+        relevance_score=row.get("relevance_score"),
+        notes=row.get("notes"),
         created_at=_parse_dt(row.get("created_at")),
     )
 

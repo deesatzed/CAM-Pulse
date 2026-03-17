@@ -133,6 +133,22 @@ class HypothesisEntry(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class MethodologyUsageEntry(BaseModel):
+    """Attribution log for methodologies retrieved and used during a task."""
+    id: str = Field(default_factory=_new_id)
+    task_id: str
+    methodology_id: str
+    project_id: Optional[str] = None
+    stage: str = "retrieved_presented"  # retrieved_presented, used_in_outcome, outcome_attributed
+    agent_id: Optional[str] = None
+    success: Optional[bool] = None
+    expectation_match_score: Optional[float] = None
+    quality_score: Optional[float] = None
+    relevance_score: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=_now)
+
+
 class CapabilityIO(BaseModel):
     """Single input or output port of a capability."""
     name: str

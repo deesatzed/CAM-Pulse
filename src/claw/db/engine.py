@@ -266,6 +266,33 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration applied: action_templates table created")
 
+        # Migration 8: create methodology_usage_log table
+        row = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='methodology_usage_log'"
+        )
+        if row and row["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS methodology_usage_log (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    methodology_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+                    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                    stage TEXT NOT NULL DEFAULT 'retrieved_presented',
+                    agent_id TEXT,
+                    success INTEGER,
+                    expectation_match_score REAL,
+                    quality_score REAL,
+                    relevance_score REAL,
+                    notes TEXT,
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_meth_usage_task ON methodology_usage_log(task_id);
+                CREATE INDEX IF NOT EXISTS idx_meth_usage_methodology ON methodology_usage_log(methodology_id);
+                CREATE INDEX IF NOT EXISTS idx_meth_usage_stage ON methodology_usage_log(stage);
+            """)
+            await self.conn.commit()
+            logger.info("Migration applied: methodology_usage_log table created")
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:

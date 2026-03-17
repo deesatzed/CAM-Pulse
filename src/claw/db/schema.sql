@@ -80,6 +80,25 @@ CREATE TABLE IF NOT EXISTS hypothesis_log (
 CREATE INDEX IF NOT EXISTS idx_hyp_task ON hypothesis_log(task_id);
 CREATE INDEX IF NOT EXISTS idx_hyp_error_sig ON hypothesis_log(error_signature);
 
+-- 3b. METHODOLOGY_USAGE_LOG (Attribution of retrieved/used knowledge)
+CREATE TABLE IF NOT EXISTS methodology_usage_log (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    methodology_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    stage TEXT NOT NULL DEFAULT 'retrieved_presented',
+    agent_id TEXT,
+    success INTEGER,
+    expectation_match_score REAL,
+    quality_score REAL,
+    relevance_score REAL,
+    notes TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_meth_usage_task ON methodology_usage_log(task_id);
+CREATE INDEX IF NOT EXISTS idx_meth_usage_methodology ON methodology_usage_log(methodology_id);
+CREATE INDEX IF NOT EXISTS idx_meth_usage_stage ON methodology_usage_log(stage);
+
 -- 4. METHODOLOGIES (Long-Term Memory / RAG)
 CREATE TABLE IF NOT EXISTS methodologies (
     id TEXT PRIMARY KEY,

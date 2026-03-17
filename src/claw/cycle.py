@@ -23,9 +23,11 @@ from typing import Any, Optional
 
 from claw.core.factory import ClawContext
 from claw.core.models import (
+    ContextBrief,
     CycleResult,
     HypothesisEntry,
     HypothesisOutcome,
+    MethodologyUsageEntry,
     Task,
     TaskContext,
     TaskOutcome,
@@ -75,6 +77,59 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
         else:
             lines.append(f"*** {path}")
     return files_changed, "\n".join(lines)
+
+
+def _tokenize_usage_attribution_text(text: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9_+-]{3,}", text.lower()))
+    stopwords = {
+        "the", "and", "for", "with", "that", "this", "from", "into", "using", "use",
+        "build", "create", "make", "repo", "project", "task", "app", "tool", "system",
+        "their", "there", "will", "have", "has", "was", "are", "its", "not",
+    }
+    return {t for t in tokens if t not in stopwords}
+
+
+def _infer_used_methodology_ids(
+    context_brief: Optional[ContextBrief],
+    outcome: TaskOutcome,
+) -> list[tuple[str, float]]:
+    if context_brief is None or not context_brief.past_solutions:
+        return []
+
+    outcome_text = " ".join(
+        part for part in [
+            outcome.approach_summary or "",
+            outcome.raw_output or "",
+            outcome.diff or "",
+            " ".join(outcome.files_changed),
+        ] if part
+    )
+    outcome_tokens = _tokenize_usage_attribution_text(outcome_text)
+    if not outcome_tokens:
+        return []
+
+    ranked: list[tuple[str, float]] = []
+    for meth in context_brief.past_solutions:
+        meth_tokens = _tokenize_usage_attribution_text(
+            " ".join(
+                [
+                    meth.problem_description or "",
+                    meth.methodology_notes or "",
+                    " ".join(meth.tags or []),
+                    " ".join(meth.files_affected or []),
+                ]
+            )
+        )
+        if not meth_tokens:
+            continue
+        overlap = outcome_tokens & meth_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / max(1, len(meth_tokens))
+        if len(overlap) >= 2 or score >= 0.08:
+            ranked.append((meth.id, round(score, 3)))
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    return ranked[:5]
 
 
 _SPEC_FILE_PATTERN = re.compile(r"^Spec file:\s*(.+)$", re.MULTILINE)
@@ -313,6 +368,7 @@ class MicroClaw(ClawCycle):
         self.project_id = project_id
         self.session_id = session_id or str(uuid.uuid4())
         self._current_task: Optional[Task] = None
+        self._current_context_brief: Optional[ContextBrief] = None
         self._current_outcome: Optional[TaskOutcome] = None
         self._current_verification: Optional[VerificationResult] = None
 
@@ -360,16 +416,35 @@ class MicroClaw(ClawCycle):
 
         # Query semantic memory for similar past solutions as hints
         hints: list[str] = []
+        past_solutions: list[Any] = []
+        retrieval_confidence = 0.0
+        retrieval_conflicts: list[str] = []
         if self.ctx.semantic_memory is not None:
             try:
-                similar = await self.ctx.semantic_memory.find_similar(
+                similar, signals = await self.ctx.semantic_memory.find_similar_with_signals(
                     task.description, limit=3
                 )
+                retrieval_confidence = float(signals.get("retrieval_confidence", 0.0) or 0.0)
+                retrieval_conflicts = [str(item) for item in signals.get("conflicts", []) or []]
                 if similar:
                     for s in similar:
-                        if s.methodology and s.methodology.methodology_notes:
-                            hints.append(
-                                f"Similar past solution: {s.methodology.methodology_notes}"
+                        if s.methodology:
+                            if s.methodology not in past_solutions:
+                                past_solutions.append(s.methodology)
+                            if s.methodology.methodology_notes:
+                                hints.append(
+                                    f"Similar past solution: {s.methodology.methodology_notes}"
+                                )
+                            await self.ctx.semantic_memory.record_retrieval(s.methodology.id)
+                            await self.ctx.repository.log_methodology_usage(
+                                MethodologyUsageEntry(
+                                    task_id=task.id,
+                                    methodology_id=s.methodology.id,
+                                    project_id=self.project_id,
+                                    stage="retrieved_presented",
+                                    relevance_score=getattr(s, "combined_score", None),
+                                    notes="Retrieved from semantic memory and presented to agent",
+                                )
                             )
                         # Graph-enhanced: follow synergy edges for complementary capabilities
                         if s.methodology and self.ctx.assimilation_engine is not None:
@@ -450,6 +525,14 @@ class MicroClaw(ClawCycle):
             hints=hints,
             action_template=action_template,
             expectation_contract=_load_expectation_contract_for_task(task),
+        )
+        self._current_context_brief = ContextBrief(
+            task=task,
+            past_solutions=past_solutions,
+            forbidden_approaches=forbidden,
+            retrieval_confidence=retrieval_confidence,
+            retrieval_conflicts=retrieval_conflicts,
+            retrieved_methodology_ids=[m.id for m in past_solutions],
         )
 
         logger.info(
@@ -564,7 +647,10 @@ class MicroClaw(ClawCycle):
             agent_role=agent_id,
         )
 
-        outcome = await agent.run(task_ctx)
+        try:
+            outcome = await agent.run(task_ctx, context=self._current_context_brief)
+        except TypeError:
+            outcome = await agent.run(task_ctx)
         if not can_modify_workspace and can_use_internal_executor:
             applied, apply_error = _apply_structured_file_operations(workspace_dir, outcome.raw_output)
             if not applied and not outcome.failure_reason:
@@ -640,6 +726,7 @@ class MicroClaw(ClawCycle):
         """Update memory, scores, error KB, and semantic memory from the outcome."""
         agent_id, task_ctx, outcome, verification = verified
         task = task_ctx.task
+        used_methodologies = _infer_used_methodology_ids(self._current_context_brief, outcome)
 
         if verification.approved:
             # Success path
@@ -711,6 +798,49 @@ class MicroClaw(ClawCycle):
                         self.project_id, e,
                     )
 
+            if self.ctx.semantic_memory is not None:
+                for methodology_id, relevance in used_methodologies:
+                    try:
+                        await self.ctx.repository.log_methodology_usage(
+                            MethodologyUsageEntry(
+                                task_id=task.id,
+                                methodology_id=methodology_id,
+                                project_id=self.project_id,
+                                stage="used_in_outcome",
+                                agent_id=agent_id,
+                                success=True,
+                                expectation_match_score=verification.expectation_match_score,
+                                quality_score=verification.quality_score,
+                                relevance_score=relevance,
+                                notes="Retrieved methodology inferred in successful outcome",
+                            )
+                        )
+                        await self.ctx.repository.log_methodology_usage(
+                            MethodologyUsageEntry(
+                                task_id=task.id,
+                                methodology_id=methodology_id,
+                                project_id=self.project_id,
+                                stage="outcome_attributed",
+                                agent_id=agent_id,
+                                success=True,
+                                expectation_match_score=verification.expectation_match_score,
+                                quality_score=verification.quality_score,
+                                relevance_score=relevance,
+                                notes="Successful outcome attributed to retrieved methodology",
+                            )
+                        )
+                        await self.ctx.semantic_memory.record_outcome(
+                            methodology_id,
+                            success=True,
+                            retrieval_relevance=relevance,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to record successful methodology usage for %s: %s",
+                            methodology_id,
+                            e,
+                        )
+
             logger.info("Learned: task %s completed by %s", task.title, agent_id)
 
         else:
@@ -750,6 +880,49 @@ class MicroClaw(ClawCycle):
 
             # Reset to PENDING for retry
             await self.ctx.repository.update_task_status(task.id, TaskStatus.PENDING)
+
+            if self.ctx.semantic_memory is not None:
+                for methodology_id, relevance in used_methodologies:
+                    try:
+                        await self.ctx.repository.log_methodology_usage(
+                            MethodologyUsageEntry(
+                                task_id=task.id,
+                                methodology_id=methodology_id,
+                                project_id=self.project_id,
+                                stage="used_in_outcome",
+                                agent_id=agent_id,
+                                success=False,
+                                expectation_match_score=verification.expectation_match_score,
+                                quality_score=verification.quality_score,
+                                relevance_score=relevance,
+                                notes="Retrieved methodology inferred in failed outcome",
+                            )
+                        )
+                        await self.ctx.repository.log_methodology_usage(
+                            MethodologyUsageEntry(
+                                task_id=task.id,
+                                methodology_id=methodology_id,
+                                project_id=self.project_id,
+                                stage="outcome_attributed",
+                                agent_id=agent_id,
+                                success=False,
+                                expectation_match_score=verification.expectation_match_score,
+                                quality_score=verification.quality_score,
+                                relevance_score=relevance,
+                                notes="Failed outcome attributed to retrieved methodology",
+                            )
+                        )
+                        await self.ctx.semantic_memory.record_outcome(
+                            methodology_id,
+                            success=False,
+                            retrieval_relevance=relevance,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to record failed methodology usage for %s: %s",
+                            methodology_id,
+                            e,
+                        )
 
             logger.info(
                 "Learned: task %s failed by %s (error: %s)",

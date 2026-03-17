@@ -10,6 +10,7 @@ from claw.core.models import (
     HypothesisEntry,
     HypothesisOutcome,
     Methodology,
+    MethodologyUsageEntry,
     PeerReview,
     Project,
     Task,
@@ -201,6 +202,34 @@ class TestRepository:
 
         assert await repository.has_duplicate_error(sample_task.id, "AuthError") is True
         assert await repository.has_duplicate_error(sample_task.id, "OtherError") is False
+
+    async def test_methodology_usage_log_lifecycle(self, repository, sample_project, sample_task):
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        m = Methodology(
+            problem_description="CLI fallback testing pattern",
+            solution_code="pytest -q",
+            problem_embedding=[0.2] * 384,
+            source_task_id=sample_task.id,
+        )
+        await repository.save_methodology(m)
+
+        entry = MethodologyUsageEntry(
+            task_id=sample_task.id,
+            methodology_id=m.id,
+            project_id=sample_project.id,
+            stage="retrieved_presented",
+            relevance_score=0.73,
+            notes="Retrieved during evaluation",
+        )
+        await repository.log_methodology_usage(entry)
+
+        rows = await repository.get_methodology_usage_for_task(sample_task.id)
+        assert len(rows) == 1
+        assert rows[0].methodology_id == m.id
+        assert rows[0].stage == "retrieved_presented"
+        assert rows[0].relevance_score == 0.73
 
     async def test_methodology_save_and_search(self, repository, sample_project, sample_task):
         await repository.create_project(sample_project)
