@@ -257,6 +257,35 @@ You want to know whether the current agent/runtime configuration can honestly be
 cam doctor expectations
 ```
 
+## `cam doctor audit`
+
+Audit high-trust methodologies for evidence quality.
+
+What it does:
+- reviews promotion-sensitive methodologies:
+  - `thriving`
+  - or `global` methods that have real usage/success history
+- shows how many are backed by attribution evidence vs legacy/raw-success counters
+- flags methods with weak expectation-match evidence
+- gives you a short list of the specific methodologies that need review
+
+Syntax:
+
+```bash
+cam doctor audit [--limit 10] [--expectation-threshold 0.65] [--config claw.toml]
+```
+
+Use this after:
+- a mine + reassess cycle
+- a batch of create/enhance executions
+- before treating promoted/global knowledge as trustworthy
+
+Example:
+
+```bash
+cam doctor audit --limit 10
+```
+
 Example use case:
 You want to confirm CAM is configured and the database is reachable.
 

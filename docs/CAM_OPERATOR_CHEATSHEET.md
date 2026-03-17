@@ -198,8 +198,17 @@ Use this when:
 
 ```bash
 .venv/bin/cam evaluate /path/to/repo --mode quick
+.venv/bin/cam doctor audit --limit 10
 .venv/bin/cam enhance /path/to/repo --dry-run
 ```
+
+### Evidence audit after learning or execution
+
+```bash
+.venv/bin/cam doctor audit --limit 10
+```
+
+Use this when you need to know whether CAM's highest-trust methodologies are actually backed by attributed, expectation-matched outcomes instead of legacy/raw-success counters.
 
 ## Rules Of Thumb
 

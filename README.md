@@ -182,10 +182,12 @@ export GOOGLE_API_KEY=...
 ```bash
 .venv/bin/cam evaluate /path/to/repo --mode quick
 .venv/bin/cam doctor expectations
+.venv/bin/cam doctor audit --limit 10
 .venv/bin/cam enhance /path/to/repo --dry-run
 ```
 
 Use this when you want CAM to tell you what it would change before it tries to change anything.
+`doctor audit` shows whether CAM's highest-trust methodologies are backed by attributed, expectation-matched evidence or are still relying on legacy/raw-success counters.
 
 ### 2. Learn from outside repos
 

@@ -79,6 +79,8 @@ These are current code-level guardrails backing this charter:
 
 - `cam doctor expectations`
   - reports whether current runtime satisfies core product expectations
+- `cam doctor audit`
+  - reports whether high-trust methodologies are backed by attributed expectation-matched evidence
 - `cam create --execute`
   - refuses execution when no executable build path exists
 - `cam quickstart --execute`
@@ -98,3 +100,15 @@ Before treating a workflow as real builder behavior, CAM must satisfy both:
 2. validation proves the repo actually changed and checks passed
 
 If either is false, the workflow must be treated as planning/spec-only.
+
+## Evidence Rule
+
+CAM must not treat a methodology as high-trust merely because it has raw success counters.
+
+High-trust promotion and operator trust should prefer:
+
+1. attributed usage evidence
+2. expectation-match evidence
+3. validated outcomes
+
+`cam doctor audit` is the operator-facing check for this rule.
