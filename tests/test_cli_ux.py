@@ -36,9 +36,9 @@ def _group_map():
     return mapping
 
 
-async def _seed_doctor_audit_db(db_path: str, *, flagged: bool) -> None:
+async def _seed_doctor_audit_db(db_path: str, *, flagged: bool, attributed_success: bool = False) -> None:
     from claw.core.config import DatabaseConfig
-    from claw.core.models import Methodology
+    from claw.core.models import Methodology, MethodologyUsageEntry, Project, Task
     from claw.db.engine import DatabaseEngine
     from claw.db.repository import Repository
 
@@ -47,14 +47,32 @@ async def _seed_doctor_audit_db(db_path: str, *, flagged: bool) -> None:
     await engine.initialize_schema()
     repository = Repository(engine)
 
+    project = Project(name="doctor-audit-project", repo_path="/tmp/doctor-audit")
+    await repository.create_project(project)
+    task = Task(project_id=project.id, title="doctor audit task", description="seed audit usage")
+    await repository.create_task(task)
+
     method = Methodology(
         problem_description="Promotion-sensitive methodology",
         solution_code="apply_fix()",
         lifecycle_state="thriving" if flagged else "viable",
         scope="global" if flagged else "project",
         success_count=4 if flagged else 0,
+        source_task_id=task.id,
     )
     await repository.save_methodology(method)
+    if attributed_success:
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=task.id,
+                methodology_id=method.id,
+                project_id=project.id,
+                stage="outcome_attributed",
+                success=True,
+                expectation_match_score=0.92,
+                quality_score=0.88,
+            )
+        )
     await engine.close()
 
 
@@ -316,3 +334,34 @@ class TestCLIUXSurface:
         assert payload["summary"]["flagged_total"] == 1
         assert payload["flagged"][0]["evidence_source"] == "legacy"
         assert "legacy_evidence" in payload["flagged"][0]["flags"]
+
+    def test_doctor_audit_fail_on_flags_allows_attributed_high_trust(self, monkeypatch, tmp_path, claw_config):
+        from claw.cli import app
+        import claw.core.config as config_module
+
+        db_path = tmp_path / "audit_healthy.db"
+        out_path = tmp_path / "doctor_audit_healthy.json"
+        asyncio.run(_seed_doctor_audit_db(str(db_path), flagged=True, attributed_success=True))
+
+        cfg = deepcopy(claw_config)
+        cfg.database.db_path = str(db_path)
+        monkeypatch.setattr(config_module, "load_config", lambda config_path=None: cfg)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "audit",
+                "--json-out",
+                str(out_path),
+                "--fail-on-flags",
+            ],
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        assert payload["summary"]["total_reviewed"] == 1
+        assert payload["summary"]["attribution_backed_total"] == 1
+        assert payload["summary"]["flagged_total"] == 0
+        assert payload["flagged"] == []
