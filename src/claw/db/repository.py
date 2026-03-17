@@ -438,7 +438,7 @@ class Repository:
                 LEFT JOIN methodology_usage_log mul ON mul.methodology_id = m.id
                 WHERE (
                     m.lifecycle_state = 'thriving'
-                    OR (m.scope = 'global' AND (m.success_count > 0 OR m.retrieval_count > 0))
+                    OR (m.scope = 'global' AND m.success_count > 0)
                 )
                   {project_filter}
                 GROUP BY m.id, m.problem_description, m.lifecycle_state, m.scope, m.success_count, m.retrieval_count

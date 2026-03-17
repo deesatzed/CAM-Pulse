@@ -390,6 +390,36 @@ class TestRepository:
         assert "low_expectation_match" in flagged[attributed.id]["flags"]
         assert "demotion_candidate" in flagged[demotion.id]["flags"]
 
+    async def test_methodology_evidence_audit_ignores_global_retrieval_only_items(
+        self,
+        repository,
+        sample_project,
+        sample_task,
+    ):
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        retrieval_only = Methodology(
+            problem_description="Retrieved but unproven global method",
+            solution_code="inspect()",
+            problem_embedding=[0.6] * 384,
+            source_task_id=sample_task.id,
+            lifecycle_state="embryonic",
+            scope="global",
+            success_count=0,
+            retrieval_count=5,
+        )
+        await repository.save_methodology(retrieval_only)
+
+        audit = await repository.get_methodology_evidence_audit(
+            project_id=sample_project.id,
+            expectation_threshold=0.65,
+        )
+
+        assert audit["summary"]["total_reviewed"] == 0
+        assert audit["summary"]["flagged_total"] == 0
+        assert audit["flagged"] == []
+
     async def test_methodology_save_and_search(self, repository, sample_project, sample_task):
         await repository.create_project(sample_project)
         await repository.create_task(sample_task)
