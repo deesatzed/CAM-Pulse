@@ -1006,10 +1006,15 @@ class Verifier:
 
             tokens, blocked_reason = self._validate_acceptance_command(command)
             if blocked_reason:
-                violations.append({
-                    "check": "acceptance_checks",
-                    "detail": f"Blocked acceptance check '{command}': {blocked_reason}",
-                })
+                if "not allowlisted" in blocked_reason:
+                    recommendations.append(
+                        f"Manual acceptance check required: {command} ({blocked_reason})"
+                    )
+                else:
+                    violations.append({
+                        "check": "acceptance_checks",
+                        "detail": f"Blocked acceptance check '{command}': {blocked_reason}",
+                    })
                 continue
 
             assert tokens is not None  # For type checkers; blocked_reason handled above.

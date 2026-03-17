@@ -168,6 +168,54 @@ class TestMicroClaw:
         assert outcome.files_changed == ["app.py"]
         assert (workspace / "app.py").read_text(encoding="utf-8") == 'print("hello")\n'
 
+    async def test_act_applies_balanced_json_object_with_trailing_prose(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+        tmp_path,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+
+        class StructuredAgent:
+            mode = AgentMode.OPENROUTER
+            workspace_dir = str(workspace)
+
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return True
+
+            async def run(self, task_ctx):
+                return TaskOutcome(
+                    approach_summary="Emit structured file operations with commentary",
+                    tests_passed=False,
+                    raw_output=(
+                        '{'
+                        '"summary":"create app",'
+                        '"file_operations":[{"path":"app.py","action":"write","content":"print(\\"hello\\")\\n"}]'
+                        '}'
+                        "\n\nThis satisfies the requested app."
+                    ),
+                )
+
+        ctx.agents["codex"] = StructuredAgent()
+
+        micro = MicroClaw(ctx, sample_project.id)
+        task_ctx = TaskContext(task=sample_task)
+        agent_id, _, outcome = await micro.act(("codex", task_ctx))
+
+        assert agent_id == "codex"
+        assert outcome.failure_reason is None
+        assert outcome.files_changed == ["app.py"]
+        assert (workspace / "app.py").read_text(encoding="utf-8") == 'print("hello")\n'
+
     async def test_grab_returns_task(self, claw_context, sample_project, sample_task):
         ctx = claw_context
         await ctx.repository.create_project(sample_project)

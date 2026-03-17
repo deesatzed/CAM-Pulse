@@ -186,6 +186,10 @@ def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, 
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
 
+    for candidate in _extract_balanced_json_objects(raw_output):
+        if candidate not in candidates:
+            candidates.append(candidate)
+
     for candidate in candidates:
         try:
             parsed = _parse_json_response(candidate)
@@ -194,6 +198,45 @@ def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, 
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _extract_balanced_json_objects(text: str) -> list[str]:
+    """Extract balanced top-level JSON objects from arbitrary model output."""
+    results: list[str] = []
+    start: Optional[int] = None
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx, ch in enumerate(text):
+        if start is None:
+            if ch == "{":
+                start = idx
+                depth = 1
+                in_string = False
+                escaped = False
+            continue
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                results.append(text[start : idx + 1].strip())
+                start = None
+
+    return results
 
 
 def _counts_as_methodology_success(verification: VerificationResult) -> bool:

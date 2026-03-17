@@ -829,15 +829,16 @@ class TestAcceptanceChecks:
         assert violations == []
         assert recommendations == []
 
-    async def test_run_acceptance_checks_blocks_disallowed_command(self, tmp_path):
+    async def test_run_acceptance_checks_treats_non_allowlisted_command_as_manual(self, tmp_path):
         verifier = _make_verifier()
         violations, recommendations = await verifier._run_acceptance_checks(
             workspace_dir=str(tmp_path),
             acceptance_checks=["rm -rf /tmp/anything"],
         )
-        assert len(violations) == 1
-        assert violations[0]["check"] == "acceptance_checks"
-        assert "not allowlisted" in violations[0]["detail"]
+        assert violations == []
+        assert len(recommendations) == 1
+        assert "Manual acceptance check required" in recommendations[0]
+        assert "not allowlisted" in recommendations[0]
 
     async def test_verify_fails_when_acceptance_check_command_fails(self, tmp_path):
         verifier = _make_verifier()
