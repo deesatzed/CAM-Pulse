@@ -1786,6 +1786,20 @@ class TestDashboardPatternSummary:
         output = await dashboard.render_pattern_summary()
         assert "BUG_FIX" in output or "PATTERN" in output
 
+    @pytest.mark.asyncio
+    async def test_render_pattern_summary_includes_evidence_quality(self, dashboard, repository):
+        """Pattern summary surfaces evidence quality for high-trust methodologies."""
+        m = _make_methodology(
+            lifecycle_state="thriving",
+            scope="global",
+            success_count=4,
+        )
+        await repository.save_methodology(m)
+
+        output = await dashboard.render_pattern_summary()
+        assert "Evidence Quality" in output
+        assert "Legacy-backed" in output or "legacy-backed" in output
+
 
 class TestDashboardFleetStatus:
     """Tests for render_fleet_status."""

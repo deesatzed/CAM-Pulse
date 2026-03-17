@@ -299,6 +299,63 @@ class TestRepository:
         assert len(per_method_rows) == 3
         assert per_method_rows[0].stage == "outcome_attributed"
 
+    async def test_methodology_evidence_audit_flags_legacy_and_low_expectation(
+        self,
+        repository,
+        sample_project,
+        sample_task,
+    ):
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        legacy = Methodology(
+            problem_description="Legacy promoted method",
+            solution_code="fix()",
+            problem_embedding=[0.3] * 384,
+            source_task_id=sample_task.id,
+            lifecycle_state="thriving",
+            scope="global",
+            success_count=5,
+        )
+        await repository.save_methodology(legacy)
+
+        attributed = Methodology(
+            problem_description="Weak expectation method",
+            solution_code="improve()",
+            problem_embedding=[0.4] * 384,
+            source_task_id=sample_task.id,
+            lifecycle_state="thriving",
+            scope="project",
+            success_count=3,
+        )
+        await repository.save_methodology(attributed)
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=sample_task.id,
+                methodology_id=attributed.id,
+                project_id=sample_project.id,
+                stage="outcome_attributed",
+                success=True,
+                expectation_match_score=0.42,
+                quality_score=0.7,
+            )
+        )
+
+        audit = await repository.get_methodology_evidence_audit(
+            project_id=sample_project.id,
+            expectation_threshold=0.65,
+        )
+        assert audit["summary"]["total_reviewed"] == 2
+        assert audit["summary"]["legacy_backed_total"] == 1
+        assert audit["summary"]["attribution_backed_total"] == 1
+        assert audit["summary"]["low_expectation_total"] == 1
+        assert audit["summary"]["flagged_total"] == 2
+
+        flagged = {item["id"]: item for item in audit["flagged"]}
+        assert "legacy_evidence" in flagged[legacy.id]["flags"]
+        assert "global_without_attributed_success" in flagged[legacy.id]["flags"]
+        assert "low_expectation_match" in flagged[attributed.id]["flags"]
+
     async def test_methodology_save_and_search(self, repository, sample_project, sample_task):
         await repository.create_project(sample_project)
         await repository.create_task(sample_task)

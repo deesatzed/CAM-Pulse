@@ -115,7 +115,7 @@ class TestCLIUXSurface:
             cmd.name or (cmd.callback.__name__ if cmd.callback else "")
             for cmd in groups["doctor"].registered_commands
         }
-        assert {"keycheck", "status", "expectations"} <= doctor_names
+        assert {"keycheck", "status", "expectations", "audit"} <= doctor_names
 
         kb_names = {
             cmd.name or (cmd.callback.__name__ if cmd.callback else "")

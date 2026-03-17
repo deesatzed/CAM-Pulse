@@ -407,6 +407,123 @@ class Repository:
             if row.get("task_id")
         }
 
+    async def get_methodology_evidence_audit(
+        self,
+        project_id: Optional[str] = None,
+        limit: int = 20,
+        expectation_threshold: float = 0.65,
+    ) -> dict[str, Any]:
+        """Audit high-trust methodologies for attribution-backed evidence quality."""
+        params: list[Any] = []
+        project_filter = ""
+        if project_id is not None:
+            project_filter = "AND t.project_id = ?"
+            params.append(project_id)
+
+        rows = await self.engine.fetch_all(
+            f"""SELECT m.id,
+                       m.problem_description,
+                       m.lifecycle_state,
+                       m.scope,
+                       m.success_count,
+                       m.retrieval_count,
+                       SUM(CASE WHEN mul.stage = 'outcome_attributed' THEN 1 ELSE 0 END) AS attributed_count,
+                       SUM(CASE WHEN mul.stage = 'outcome_attributed' AND mul.success = 1 THEN 1 ELSE 0 END) AS attributed_success_count,
+                       SUM(CASE WHEN mul.stage = 'outcome_attributed' AND mul.success = 0 THEN 1 ELSE 0 END) AS attributed_failure_count,
+                       AVG(CASE WHEN mul.stage = 'outcome_attributed' THEN mul.expectation_match_score END) AS avg_expectation_match_score,
+                       AVG(CASE WHEN mul.stage = 'outcome_attributed' THEN mul.quality_score END) AS avg_quality_score,
+                       MAX(mul.created_at) AS last_used_at
+                FROM methodologies m
+                LEFT JOIN tasks t ON m.source_task_id = t.id
+                LEFT JOIN methodology_usage_log mul ON mul.methodology_id = m.id
+                WHERE (
+                    m.lifecycle_state = 'thriving'
+                    OR (m.scope = 'global' AND (m.success_count > 0 OR m.retrieval_count > 0))
+                )
+                  {project_filter}
+                GROUP BY m.id, m.problem_description, m.lifecycle_state, m.scope, m.success_count, m.retrieval_count
+                ORDER BY
+                  CASE WHEN m.scope = 'global' THEN 0 ELSE 1 END,
+                  CASE WHEN m.lifecycle_state = 'thriving' THEN 0 ELSE 1 END,
+                  COALESCE(attributed_success_count, 0) DESC,
+                  m.success_count DESC,
+                  m.retrieval_count DESC,
+                  m.problem_description ASC""",
+            params,
+        )
+
+        items: list[dict[str, Any]] = []
+        summary = {
+            "total_reviewed": 0,
+            "thriving_total": 0,
+            "global_total": 0,
+            "attribution_backed_total": 0,
+            "legacy_backed_total": 0,
+            "low_expectation_total": 0,
+            "flagged_total": 0,
+        }
+
+        for row in rows:
+            attributed_count = int(row["attributed_count"] or 0)
+            attributed_success_count = int(row["attributed_success_count"] or 0)
+            attributed_failure_count = int(row["attributed_failure_count"] or 0)
+            success_count = int(row["success_count"] or 0)
+            avg_expectation_match_score = row["avg_expectation_match_score"]
+            evidence_source = "attribution" if attributed_count > 0 else "legacy"
+            flags: list[str] = []
+
+            if evidence_source != "attribution":
+                flags.append("legacy_evidence")
+            if (
+                avg_expectation_match_score is not None
+                and float(avg_expectation_match_score) < expectation_threshold
+            ):
+                flags.append("low_expectation_match")
+            if row["scope"] == "global" and attributed_success_count == 0:
+                flags.append("global_without_attributed_success")
+            elif row["lifecycle_state"] == "thriving" and attributed_success_count == 0:
+                flags.append("thriving_without_attributed_success")
+
+            item = {
+                "id": str(row["id"]),
+                "problem_description": str(row["problem_description"] or ""),
+                "lifecycle_state": str(row["lifecycle_state"] or ""),
+                "scope": str(row["scope"] or ""),
+                "success_count": success_count,
+                "retrieval_count": int(row["retrieval_count"] or 0),
+                "attributed_count": attributed_count,
+                "attributed_success_count": attributed_success_count,
+                "attributed_failure_count": attributed_failure_count,
+                "avg_expectation_match_score": avg_expectation_match_score,
+                "avg_quality_score": row["avg_quality_score"],
+                "last_used_at": row["last_used_at"],
+                "evidence_source": evidence_source,
+                "flags": flags,
+            }
+            items.append(item)
+
+            summary["total_reviewed"] += 1
+            if item["lifecycle_state"] == "thriving":
+                summary["thriving_total"] += 1
+            if item["scope"] == "global":
+                summary["global_total"] += 1
+            if evidence_source == "attribution":
+                summary["attribution_backed_total"] += 1
+            elif evidence_source == "legacy":
+                summary["legacy_backed_total"] += 1
+            if "low_expectation_match" in flags:
+                summary["low_expectation_total"] += 1
+            if flags:
+                summary["flagged_total"] += 1
+
+        flagged = [item for item in items if item["flags"]][: max(limit, 0)]
+        return {
+            "summary": summary,
+            "flagged": flagged,
+            "items": items,
+            "expectation_threshold": expectation_threshold,
+        }
+
     # -------------------------------------------------------------------
     # Action Templates
     # -------------------------------------------------------------------

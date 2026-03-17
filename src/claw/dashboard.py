@@ -519,6 +519,9 @@ class Dashboard:
             "SELECT COUNT(*) as cnt FROM methodologies",
         )
         total_count = total_row["cnt"] if total_row else 0
+        evidence_audit = await self.repository.get_methodology_evidence_audit(limit=5)
+        evidence_summary = evidence_audit["summary"]
+        flagged_items = evidence_audit["flagged"]
 
         if total_count == 0:
             return self._wrap_panel("No methodologies extracted yet.", "Pattern Summary")
@@ -544,6 +547,45 @@ class Dashboard:
             self._console.print(lifecycle_table)
             output_parts.append(self._console.export_text())
             self._console._record_buffer.clear()
+
+            if evidence_summary["total_reviewed"] > 0:
+                evidence_table = Table(title="Evidence Quality", show_lines=True)
+                evidence_table.add_column("Metric", style="magenta")
+                evidence_table.add_column("Count", justify="right", style="bold")
+                evidence_table.add_row("High-trust reviewed", str(evidence_summary["total_reviewed"]))
+                evidence_table.add_row("Attribution-backed", str(evidence_summary["attribution_backed_total"]))
+                evidence_table.add_row("Legacy-backed", str(evidence_summary["legacy_backed_total"]))
+                evidence_table.add_row("Low expectation", str(evidence_summary["low_expectation_total"]))
+                evidence_table.add_row("Flagged for audit", str(evidence_summary["flagged_total"]))
+                self._console.print(evidence_table)
+                output_parts.append(self._console.export_text())
+                self._console._record_buffer.clear()
+
+            if flagged_items:
+                flagged_table = Table(title="Flagged High-Trust Methods", show_lines=True)
+                flagged_table.add_column("ID", style="cyan", width=8)
+                flagged_table.add_column("State", width=10)
+                flagged_table.add_column("Scope", width=8)
+                flagged_table.add_column("Evidence", width=11)
+                flagged_table.add_column("Attr Succ", justify="right", width=9)
+                flagged_table.add_column("Exp", justify="right", width=6)
+                flagged_table.add_column("Problem", max_width=46)
+
+                for item in flagged_items:
+                    expectation_score = item.get("avg_expectation_match_score")
+                    flagged_table.add_row(
+                        item["id"][:8],
+                        item["lifecycle_state"],
+                        item["scope"],
+                        item["evidence_source"],
+                        str(item["attributed_success_count"]),
+                        "-" if expectation_score is None else f"{float(expectation_score):.2f}",
+                        item["problem_description"][:46],
+                    )
+
+                self._console.print(flagged_table)
+                output_parts.append(self._console.export_text())
+                self._console._record_buffer.clear()
 
             # Type distribution
             if type_rows:
@@ -603,6 +645,26 @@ class Dashboard:
                 pct = (count / total_count * 100) if total_count > 0 else 0.0
                 if count > 0:
                     lines.append(f"  {state}: {count} ({pct:.1f}%)")
+
+            if evidence_summary["total_reviewed"] > 0:
+                lines.append("")
+                lines.append("Evidence Quality:")
+                lines.append(f"  high-trust reviewed: {evidence_summary['total_reviewed']}")
+                lines.append(f"  attribution-backed: {evidence_summary['attribution_backed_total']}")
+                lines.append(f"  legacy-backed: {evidence_summary['legacy_backed_total']}")
+                lines.append(f"  low expectation: {evidence_summary['low_expectation_total']}")
+                lines.append(f"  flagged for audit: {evidence_summary['flagged_total']}")
+
+            if flagged_items:
+                lines.append("")
+                lines.append("Flagged High-Trust Methods:")
+                for item in flagged_items:
+                    expectation_score = item.get("avg_expectation_match_score")
+                    exp = "-" if expectation_score is None else f"{float(expectation_score):.2f}"
+                    lines.append(
+                        f"  [{item['lifecycle_state']}/{item['scope']}] {item['problem_description'][:50]} "
+                        f"(evidence={item['evidence_source']}, attributed_success={item['attributed_success_count']}, exp={exp})"
+                    )
 
             if type_rows:
                 lines.append("")

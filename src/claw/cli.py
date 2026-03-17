@@ -2957,6 +2957,79 @@ async def _expectations_async(config_path: Optional[str]) -> None:
         await ctx.close()
 
 
+async def _doctor_audit_async(
+    limit: int,
+    expectation_threshold: float,
+    config_path: Optional[str],
+) -> None:
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.db.repository import Repository
+
+    cfg = load_config(Path(config_path) if config_path else None)
+    engine = DatabaseEngine(cfg.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+    repository = Repository(engine)
+
+    try:
+        audit = await repository.get_methodology_evidence_audit(
+            limit=limit,
+            expectation_threshold=expectation_threshold,
+        )
+        summary = audit["summary"]
+        flagged = audit["flagged"]
+
+        console.print("\n[bold]CAM Evidence Audit[/bold]")
+        console.print(
+            "  Purpose: flag thriving/global methodologies that still rely on weak or legacy evidence"
+        )
+
+        summary_table = Table(title="Evidence Summary")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Count", justify="right", style="bold")
+        summary_table.add_row("High-trust reviewed", str(summary["total_reviewed"]))
+        summary_table.add_row("Thriving", str(summary["thriving_total"]))
+        summary_table.add_row("Global", str(summary["global_total"]))
+        summary_table.add_row("Attribution-backed", str(summary["attribution_backed_total"]))
+        summary_table.add_row("Legacy-backed", str(summary["legacy_backed_total"]))
+        summary_table.add_row("Low expectation", str(summary["low_expectation_total"]))
+        summary_table.add_row("Flagged", str(summary["flagged_total"]))
+        console.print(summary_table)
+
+        if not flagged:
+            console.print(
+                f"\n[green]No flagged high-trust methodologies found at threshold {expectation_threshold:.2f}.[/green]"
+            )
+            return
+
+        table = Table(title="Flagged High-Trust Methodologies")
+        table.add_column("ID", style="cyan", width=8)
+        table.add_column("State", width=10)
+        table.add_column("Scope", width=8)
+        table.add_column("Evidence", width=11)
+        table.add_column("Attr Succ", justify="right", width=9)
+        table.add_column("Exp", justify="right", width=6)
+        table.add_column("Flags", max_width=38)
+        table.add_column("Problem", max_width=44)
+        for item in flagged:
+            expectation_score = item.get("avg_expectation_match_score")
+            table.add_row(
+                item["id"][:8],
+                item["lifecycle_state"],
+                item["scope"],
+                item["evidence_source"],
+                str(item["attributed_success_count"]),
+                "-" if expectation_score is None else f"{float(expectation_score):.2f}",
+                ", ".join(item["flags"]),
+                item["problem_description"][:44],
+            )
+        console.print(table)
+    finally:
+        await engine.close()
+
+
 def _display_runbook_details(task, project_name: str, action_template=None, usage_entries: Optional[list[Any]] = None) -> None:
     """Render runbook sections for a task with optional template fallback."""
     execution_steps = list(task.execution_steps)
@@ -5710,6 +5783,29 @@ def doctor_expectations(
     """Show whether the current runtime satisfies CAM's core product expectations."""
     _setup_logging(False)
     asyncio.run(_expectations_async(config))
+
+
+@doctor_app.command(name="audit")
+def doctor_audit(
+    limit: int = typer.Option(10, "--limit", min=1, help="Max flagged methodologies to show"),
+    expectation_threshold: float = typer.Option(
+        0.65,
+        "--expectation-threshold",
+        min=0.0,
+        max=1.0,
+        help="Minimum expectation-match score for high-trust methodologies",
+    ),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Audit high-trust methodologies for attribution-backed evidence quality."""
+    _setup_logging(False)
+    asyncio.run(
+        _doctor_audit_async(
+            limit=limit,
+            expectation_threshold=expectation_threshold,
+            config_path=config,
+        )
+    )
 
 
 @app.command(name="prism-demo", hidden=True)

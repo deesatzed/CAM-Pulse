@@ -1204,6 +1204,10 @@ class TestPatternLearnerSummary:
         assert summary["thriving_methodologies"] == 2  # meth_thriving + meth_global
         assert summary["patterns_available"] is True  # 7 >= 5
         assert summary["error_signature_clusters"] >= 1
+        assert summary["attribution_backed_methodologies"] == 0
+        assert summary["legacy_evidence_methodologies"] == 2
+        assert summary["low_expectation_methodologies"] == 0
+        assert summary["flagged_methodologies"] == 2
 
     async def test_get_pattern_summary_empty_project(self, repository):
         pl = PatternLearner(repository)
@@ -1213,6 +1217,10 @@ class TestPatternLearnerSummary:
         assert summary["completed_tasks"] == 0
         assert summary["total_methodologies"] == 0
         assert summary["global_methodologies"] == 0
+        assert summary["attribution_backed_methodologies"] == 0
+        assert summary["legacy_evidence_methodologies"] == 0
+        assert summary["low_expectation_methodologies"] == 0
+        assert summary["flagged_methodologies"] == 0
         assert summary["thriving_methodologies"] == 0
         assert summary["patterns_available"] is False
         assert summary["error_signature_clusters"] == 0

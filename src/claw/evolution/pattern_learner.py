@@ -466,6 +466,13 @@ class PatternLearner:
         - ``patterns_available``: whether enough data exists for extraction
         - ``error_signature_clusters``: number of distinct error signatures
           resolved successfully 2+ times
+        - ``attribution_backed_methodologies``: high-trust methodologies with
+          attributed evidence
+        - ``legacy_evidence_methodologies``: high-trust methodologies still
+          relying on legacy/raw-success evidence
+        - ``low_expectation_methodologies``: high-trust methodologies with
+          weak expectation-match evidence
+        - ``flagged_methodologies``: total high-trust methodologies needing audit
         """
         # Completed tasks
         completed_row = await self.repository.engine.fetch_one(
@@ -516,6 +523,11 @@ class PatternLearner:
             [project_id],
         )
         error_signature_clusters = int(error_cluster_row["cnt"]) if error_cluster_row else 0
+        evidence_audit = await self.repository.get_methodology_evidence_audit(
+            project_id=project_id,
+            expectation_threshold=self._promotion_expectation_threshold,
+        )
+        audit_summary = evidence_audit["summary"]
 
         return {
             "project_id": project_id,
@@ -525,4 +537,8 @@ class PatternLearner:
             "thriving_methodologies": thriving_methodologies,
             "patterns_available": completed_tasks >= 5,
             "error_signature_clusters": error_signature_clusters,
+            "attribution_backed_methodologies": audit_summary["attribution_backed_total"],
+            "legacy_evidence_methodologies": audit_summary["legacy_backed_total"],
+            "low_expectation_methodologies": audit_summary["low_expectation_total"],
+            "flagged_methodologies": audit_summary["flagged_total"],
         }
