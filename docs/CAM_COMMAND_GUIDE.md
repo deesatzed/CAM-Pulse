@@ -44,6 +44,24 @@ CAM can mine folders of repos, store reusable patterns, and let you search that 
 4. Validate and benchmark
 CAM can check whether a created repo matches its requested spec and whether a Forge-style output performs acceptably.
 
+## Best Front Door
+
+If you do not already know which command and flags you need, start with:
+
+```bash
+cam chat
+```
+
+`cam chat` is the guided entry point. It asks the follow-up questions, builds the underlying command, and lets you review it before running.
+
+If you already know you want a build or repair workflow but the request is still ambiguous, start with:
+
+```bash
+cam preflight <repo> --request "..."
+```
+
+`cam preflight` is the structured task clarifier. It turns a vague request into an explicit contract before execution.
+
 ## Quick Workflow Map
 
 ### If you want CAM to study a repo and improve it
@@ -75,10 +93,12 @@ cam kb search "test generation"
 
 Use the flat top-level verbs for the main product workflows:
 
+- `cam chat`
 - `cam evaluate`
 - `cam enhance`
 - `cam mine`
 - `cam ideate`
+- `cam preflight`
 - `cam create`
 - `cam validate`
 
@@ -102,6 +122,71 @@ Use grouped commands for advanced or supporting workflows:
 The older flat commands still work. The grouped paths are the preferred UX.
 
 ## Top-Level Commands
+
+## `cam chat`
+
+Purpose:
+Provide a conversational front door for common CAM workflows.
+
+What it does:
+- starts an interactive REPL
+- detects workflow intent from plain language
+- asks the minimum high-value follow-up questions
+- prints the concrete `cam ...` command it recommends
+- can run the generated command immediately
+
+Current scope:
+- mining workflow is wired end-to-end
+- create/preflight guidance is present, but full guided execution for every workflow is not yet wired
+
+Syntax:
+
+```bash
+cam chat
+```
+
+Example use case:
+You want to mine a folder but do not want to remember the flag set.
+
+```text
+cam chat
+cam> I want to mine the folder ./folderx
+```
+
+## `cam preflight`
+
+Purpose:
+Examine a requested task before build execution and produce a reusable task contract.
+
+What it does:
+- restates the task in concrete engineering terms
+- identifies likely deliverable and definition of done
+- surfaces hard blockers and unresolved assumptions
+- asks clarifying questions, separated by importance
+- estimates time, budget, and execution shape
+- writes a reusable artifact under `data/preflights/`
+
+Syntax:
+
+```bash
+cam preflight <repo> --request "..." [--repo-mode fixed|augment|new] [--spec "..."] [--answer "..."] [--preflight-file path.json] [--live]
+```
+
+Key options:
+- `--answer`: record operator answers directly into the preflight artifact
+- `--preflight-file`: reuse a prior preflight artifact and merge its answers
+- `--live`: allow LLM-enriched preflight output instead of heuristic-only output
+
+Example use case:
+You want CAM to apply patterns from another repo but need the contract tightened before execution.
+
+```bash
+cam preflight /Users/o2satz/projects/health-intake \
+  --repo-mode new \
+  --request "Apply everything repo-A does to a related healthcare intake workflow" \
+  --answer "Delivery surface: web app" \
+  --answer "Compliance: no PHI or PII, standard security only"
+```
 
 ## `cam evaluate`
 
@@ -372,22 +457,32 @@ Purpose:
 Create a fixed repo, augmented repo, or brand-new repo from a requested outcome.
 
 What it does:
+- can auto-run preflight for risky, ambiguous, or expensive tasks
 - writes a creation spec JSON under `data/create_specs/`
 - creates a real CAM task tied to the target repo
 - can preview the runbook
 - can execute the task immediately
 - can use prior mined CAM knowledge when relevant
+- blocks `--execute` if hard blockers remain or if must-clarify questions are unresolved
+- supports explicit operator override via `--accept-preflight-defaults`
 
 Syntax:
 
 ```bash
-cam create <repo> --request "..." [--repo-mode fixed|augment|new] [--spec "..."] [--step "..."] [--check "..."] [--execute] [--max-minutes N]
+cam create <repo> --request "..." [--repo-mode fixed|augment|new] [--spec "..."] [--step "..."] [--check "..."] [--preflight] [--preflight-live] [--answer "..."] [--preflight-file path.json] [--accept-preflight-defaults] [--execute] [--max-minutes N]
 ```
 
 Repo modes:
 - `fixed`: repair an existing repo
 - `augment`: add capabilities to an existing repo
 - `new`: create a new repo/project outcome
+
+Important execution behavior:
+- `--auto-preflight` is on by default
+- risky `create --execute` requests will preflight first even if you do not pass `--preflight`
+- if preflight finds unresolved must-clarify questions, execution stops until you answer them or explicitly pass `--accept-preflight-defaults`
+- if preflight finds hard blockers, execution does not proceed
+- in `repo-mode fixed`, CAM now rejects runs that introduce a new top-level source namespace unless that was explicitly requested
 
 Example use case:
 You want CAM to build a new standalone app using prior mined knowledge.
@@ -400,6 +495,17 @@ cam create /Users/o2satz/projects/embedding-worker \
   --spec "Must not import CAM runtime code" \
   --check "pytest -q" \
   --max-minutes 20
+```
+
+Example with reusable preflight answers:
+
+```bash
+cam create /Users/o2satz/projects/health-intake \
+  --repo-mode new \
+  --request "Apply everything repo-A does to a related healthcare intake workflow" \
+  --preflight-file data/preflights/<prior-artifact>.json \
+  --answer "Acceptance checks: pytest -q and python -m app.cli --help" \
+  --execute
 ```
 
 ## `cam add-goal`
@@ -1062,6 +1168,16 @@ cam kb synergies --limit 15
 
 ## Recommended Workflows
 
+## Workflow 0: Let CAM guide you to the right command
+
+```bash
+cam chat
+```
+
+Use this when:
+- you know the goal but not the right flags
+- you want CAM to ask the missing high-value questions first
+
 ## Workflow A: Review a repo before asking CAM to change it
 
 ```bash
@@ -1084,6 +1200,7 @@ cam synergies
 ```bash
 cam mine /path/to/repo-folder --target /path/to/new-app --max-repos 4
 cam ideate /path/to/repo-folder --ideas 3
+cam preflight /path/to/new-app --repo-mode new --request "Build the selected concept"
 cam create /path/to/new-app --repo-mode new --request "Build the selected concept"
 cam validate --spec-file data/create_specs/<spec-file>.json
 ```
@@ -1099,6 +1216,7 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 
 - `cam mine` is for learning from repos. It does not itself create the new app.
 - `cam ideate` is for proposing new app concepts from learned knowledge plus repo inputs.
+- `cam preflight` is the contract-clarifier for ambiguous or expensive tasks.
 - `cam create` is the command that turns a requested outcome into a task/spec and optional execution.
 - `cam validate` should happen before `cam benchmark`.
 - `cam benchmark` is about quality/performance measurement, not first-pass correctness.
@@ -1106,6 +1224,7 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 
 ## One-Line Summary Per Command
 
+- `chat`: guided conversational entry point
 - `evaluate`: inspect one repo and score it
 - `enhance`: run CAM’s improvement loop on one repo
 - `fleet-enhance`: run enhancement across many repos
@@ -1113,6 +1232,7 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 - `status`: show system health/status
 - `runbook`: inspect a task’s execution plan
 - `quickstart`: create a goal and optionally run it fast
+- `preflight`: clarify a task, estimate work, and save the task contract
 - `create`: define and optionally execute a requested repo outcome
 - `add-goal`: manually add a task to a repo
 - `ideate`: invent app concepts from CAM memory plus candidate repos

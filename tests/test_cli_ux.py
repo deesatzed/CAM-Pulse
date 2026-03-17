@@ -124,6 +124,10 @@ class TestCLIUXSurface:
         commands = _command_map()
         assert "preflight" in commands
 
+    def test_chat_command_registered(self):
+        commands = _command_map()
+        assert "chat" in commands
+
     def test_ideate_command_registered(self):
         commands = _command_map()
         assert "ideate" in commands
@@ -241,6 +245,34 @@ class TestCLIUXSurface:
         assert "preflight_live" in sig.parameters
         assert "accept_preflight_defaults" in sig.parameters
         assert "max_minutes" in sig.parameters
+
+    def test_chat_guides_mine_request(self):
+        from claw.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["chat"],
+            input=(
+                "I want to mine the folder ./tests/fixtures/embedding_forge\n"
+                "\n"
+                "cam\n"
+                "y\n"
+                "y\n"
+                "4\n"
+                "3\n"
+                "n\n"
+                "n\n"
+                "exit\n"
+            ),
+        )
+
+        assert result.exit_code == 0
+        assert "Purpose: type `cam` to improve CAM itself" in result.output
+        assert "Suggested command" in result.output
+        assert ".venv/bin/cam mine ./tests/fixtures/embedding_forge" in result.output
+        assert "--scan-only" in result.output
+        assert "--changed-only" in result.output
 
     def test_ideate_has_focus_promote_and_time_guardrail(self):
         commands = _command_map()

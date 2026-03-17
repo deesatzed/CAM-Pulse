@@ -6,12 +6,20 @@ Use this when the main question is simple:
 
 ## Fast Rule
 
+- `chat` = let CAM ask the missing questions and build the right command
 - `mine` = learn from outside repos
 - `evaluate` = inspect a repo
+- `preflight` = clarify a build/repair contract before execution
 - `enhance` = improve an existing repo
 - `ideate` = invent a new app concept
 - `create` = turn a request into a spec-backed build task
 - `validate` = verify the result
+
+If you are unsure where to start, start with:
+
+```bash
+cam chat
+```
 
 ## Decision Tree
 
@@ -95,6 +103,7 @@ cam doctor keycheck --for mine --live
 cam mine /path/to/repo-folder --target /path/to/new-app --max-repos 10 --depth 4 --max-minutes 30
 cam doctor keycheck --for ideate --live
 cam ideate /path/to/repo-folder --ideas 3 --max-repos 4
+cam preflight /path/to/new-app --repo-mode new --request "Build the selected concept"
 cam create /path/to/new-app --repo-mode new --request "Build the selected concept" --max-minutes 20
 cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
 ```
@@ -135,7 +144,9 @@ cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
 
 ## Final Mental Model
 
+- If you are not sure which flags you need: start with `chat`
 - If the target already exists: start with `evaluate`
+- If the task is ambiguous or expensive: run `preflight` before execution
 - If the target does not exist yet: start with `mine` + `ideate` + `create`
 - If the target is CAM itself: `mine` into CAM first, then `enhance` CAM if you want code changes
 - Use `cam doctor ...`, `cam learn ...`, `cam task ...`, and `cam forge ...` as the preferred advanced grouped paths

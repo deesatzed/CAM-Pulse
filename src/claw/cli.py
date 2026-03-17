@@ -1365,6 +1365,191 @@ def _display_preflight_report(report: dict[str, Any]) -> None:
     console.print(f"  {report.get('proposed_first_milestone', '')}")
 
 
+def _detect_chat_intent(text: str) -> str:
+    lowered = text.strip().lower()
+    if not lowered:
+        return "empty"
+    if lowered in {"exit", "quit", ":q"}:
+        return "exit"
+    if "mine" in lowered:
+        return "mine"
+    if any(word in lowered for word in ("create", "build", "make", "generate")):
+        return "create"
+    if any(word in lowered for word in ("fix", "repair", "improve", "enhance")):
+        return "enhance"
+    return "unknown"
+
+
+def _extract_chat_path(text: str) -> Optional[str]:
+    match = re.search(r"(\./[^\s]+|\.\.[^\s]*|/[^\s]+)", text)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?:folder|directory|repo|path)\s+([^\s]+)", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _chat_prompt(message: str, default: Optional[str] = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{message}{suffix}: ").strip()
+    if not value and default is not None:
+        return default
+    return value
+
+
+def _chat_confirm(message: str, default: bool = True) -> bool:
+    prompt = "Y/n" if default else "y/N"
+    while True:
+        value = input(f"{message} [{prompt}]: ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes"}:
+            return True
+        if value in {"n", "no"}:
+            return False
+        console.print("[yellow]Please answer yes or no.[/yellow]")
+
+
+def _build_mine_command_preview(
+    *,
+    directory: str,
+    target: str,
+    max_repos: int,
+    depth: int,
+    scan_only: bool,
+    tasks: bool,
+    changed_only: bool,
+) -> str:
+    parts = [
+        ".venv/bin/cam",
+        "mine",
+        directory,
+        "--target",
+        target,
+        "--max-repos",
+        str(max_repos),
+        "--depth",
+        str(depth),
+    ]
+    if scan_only:
+        parts.append("--scan-only")
+    if not tasks:
+        parts.append("--no-tasks")
+    if changed_only:
+        parts.append("--changed-only")
+    return " ".join(parts)
+
+
+def _chat_handle_mine(initial_text: str, config: Optional[str]) -> None:
+    suggested_dir = _extract_chat_path(initial_text) or "."
+    directory = _chat_prompt("Folder to mine", suggested_dir)
+
+    purpose = _chat_prompt(
+        "Purpose: type `cam` to improve CAM itself, or enter another target repo/task path",
+        "cam",
+    ).strip()
+    if purpose.lower() == "cam":
+        target = str(ROOT_DIR)
+        console.print(f"[cyan]Target repo set to CAM itself:[/cyan] {target}")
+    else:
+        target = purpose
+
+    preview_first = _chat_confirm("Start with preview-only scan before live mining", default=True)
+    changed_only = _chat_confirm("Only include repos that are new or changed", default=True)
+    max_repos_raw = _chat_prompt("Maximum repos to inspect", "4")
+    depth_raw = _chat_prompt("Directory depth", "3")
+    task_generation = _chat_confirm("Generate enhancement tasks from mined findings", default=(not preview_first))
+
+    try:
+        max_repos = max(1, int(max_repos_raw))
+    except ValueError:
+        max_repos = 4
+    try:
+        depth = max(1, int(depth_raw))
+    except ValueError:
+        depth = 3
+
+    preview_command = _build_mine_command_preview(
+        directory=directory,
+        target=target,
+        max_repos=max_repos,
+        depth=depth,
+        scan_only=preview_first,
+        tasks=task_generation,
+        changed_only=changed_only,
+    )
+
+    console.print("\n[bold]CAM Chat Plan[/bold]")
+    console.print("  Intent: mine")
+    console.print(f"  Directory: {directory}")
+    console.print(f"  Target: {target}")
+    console.print(f"  Preview first: {preview_first}")
+    console.print(f"  Changed only: {changed_only}")
+    console.print(f"  Max repos: {max_repos}")
+    console.print(f"  Depth: {depth}")
+    console.print(f"  Generate tasks: {task_generation}")
+    console.print("\n[cyan]Suggested command[/cyan]")
+    console.print(f"  {preview_command}")
+
+    if _chat_confirm("Run this now", default=False):
+        mine(
+            directory=directory,
+            target=target,
+            max_repos=max_repos,
+            min_relevance=0.6,
+            tasks=task_generation,
+            depth=depth,
+            dedup=True,
+            skip_known=True,
+            force_rescan=False,
+            changed_only=changed_only,
+            scan_only=preview_first,
+            live_keycheck=True,
+            max_minutes=15,
+            verbose=False,
+            config=config,
+        )
+
+
+@app.command()
+def chat(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Interactive conversational guide for CAM workflows."""
+    _setup_logging(False)
+
+    console.print("\n[bold]CAM Chat[/bold]")
+    console.print("Describe what you want in plain English. Type `exit` to leave.")
+
+    while True:
+        try:
+            user_text = input("cam> ").strip()
+        except EOFError:
+            console.print("\n[dim]Exiting CAM Chat.[/dim]")
+            return
+
+        intent = _detect_chat_intent(user_text)
+        if intent == "exit":
+            console.print("[dim]Exiting CAM Chat.[/dim]")
+            return
+        if intent == "empty":
+            continue
+        if intent == "mine":
+            _chat_handle_mine(user_text, config)
+            continue
+
+        if intent in {"create", "enhance"}:
+            console.print(
+                "[yellow]Chat support for that workflow is not wired yet. Use `cam preflight` or `cam create` directly for now.[/yellow]"
+            )
+            continue
+
+        console.print(
+            "[yellow]I could not map that request yet. Try something like: `I want to mine the folder ./folderx`.[/yellow]"
+        )
+
+
 def _select_ideation_model(config: Any, preferred_agent: Optional[str] = None) -> str:
     agent_order = [preferred_agent] if preferred_agent else ["claude", "gemini", "codex", "grok"]
     if not preferred_agent:

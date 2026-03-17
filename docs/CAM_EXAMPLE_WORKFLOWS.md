@@ -4,7 +4,31 @@ This document shows real command examples and representative outputs.
 
 The goal is to make CAM concrete.
 
-## Workflow 1: Fresh Clone Smoke Test
+## Workflow 1: Guided Front Door
+
+Command:
+
+```bash
+.venv/bin/cam chat
+```
+
+Representative interaction:
+
+```text
+cam> I want to mine the folder ./tests/fixtures/embedding_forge
+Folder to mine [./tests/fixtures/embedding_forge]:
+Purpose: type `cam` to improve CAM itself, or enter another target repo/task path [cam]:
+Start with preview-only scan before live mining [Y/n]:
+...
+Suggested command
+  .venv/bin/cam mine ./tests/fixtures/embedding_forge --target /Users/o2satz/multiclaw --max-repos 4 --depth 3 --scan-only --no-tasks --changed-only
+```
+
+What this shows:
+- CAM can guide an operator from plain language to an executable command
+- the user does not need to memorize the mine flags to get started
+
+## Workflow 2: Fresh Clone Smoke Test
 
 Command:
 
@@ -29,7 +53,7 @@ What this shows:
 - DB initialized
 - runtime healthy enough to proceed
 
-## Workflow 2: Preview Repo Mining Without Spending Model Calls
+## Workflow 3: Preview Repo Mining Without Spending Model Calls
 
 Command:
 
@@ -59,7 +83,7 @@ What this shows:
 - CAM can discover a source-tree style repo
 - you can preview repo selection before making model calls
 
-## Workflow 3: Preflight Live Mining Credentials
+## Workflow 4: Preflight Live Mining Credentials
 
 Command:
 
@@ -81,7 +105,35 @@ What this shows:
 - CAM can fail fast on missing or invalid provider credentials before a real mine run starts
 - the same live validation is now built into `cam mine` by default
 
-## Workflow 4: Export CAM Knowledge For Standalone Use
+## Workflow 5: Clarify A Build Before Execution
+
+Command:
+
+```bash
+.venv/bin/cam preflight tmp/doc-example-app \
+  --repo-mode new \
+  --request "Apply everything repo-A does to a related healthcare intake workflow" \
+  --answer "Delivery surface: web app" \
+  --answer "Compliance: no PHI or PII, standard security only"
+```
+
+Observed output excerpt:
+
+```text
+CAM Preflight
+  Repo: /Users/o2satz/multiclaw/tmp/doc-example-app
+  Mode: new
+  Kind: feature_build
+  Complexity: high
+  Confidence: medium
+  Artifact: /Users/o2satz/multiclaw/data/preflights/...
+```
+
+What this shows:
+- CAM can tighten the task contract before spending a build run
+- operator answers are recorded for reuse across reruns
+
+## Workflow 6: Export CAM Knowledge For Standalone Use
 
 Command:
 
@@ -131,7 +183,7 @@ What this means in practice:
 - CAM is not only storing knowledge inside its own DB
 - it can hand that knowledge to a separate application
 
-## Workflow 5: Create A Spec-Backed Task
+## Workflow 7: Create A Spec-Backed Task
 
 Command:
 
@@ -166,8 +218,9 @@ What this shows:
 - `create` writes a real spec file
 - `create` also creates a real task in CAM’s database
 - CAM has now recorded the requested outcome in a form that can be validated later
+- create/preflight can be split so contract review happens before execution
 
-## Workflow 5: Validate Against The Saved Spec
+## Workflow 8: Validate Against The Saved Spec
 
 After the `create` step above, a `README.md` file was added to the repo and validation was run.
 
@@ -196,7 +249,7 @@ What this shows:
 - validation runs acceptance checks
 - a repo can move from requested state to validated state with a concrete check result
 
-## Workflow 6: Standalone Forge Benchmark
+## Workflow 9: Standalone Forge Benchmark
 
 Command:
 

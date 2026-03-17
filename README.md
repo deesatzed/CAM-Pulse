@@ -16,9 +16,12 @@ CAM is not just a wrapper around a chat model. The distinctive parts are the wor
 - `mine` turns outside repos into reusable CAM memory instead of one-off notes.
 - `ideate` combines stored CAM knowledge with candidate repos to propose new standalone app concepts.
 - `create` writes a real creation spec, not just a prompt, so the requested outcome is explicit and reviewable.
+- `preflight` examines a requested task before build execution, asks the missing high-value questions, and writes a reusable task contract with time/budget estimates.
 - `validate` checks the created repo against the saved spec and acceptance rules.
 - `create --execute` no longer trusts an agent saying "I changed files". CAM now checks the actual workspace diff and marks the run as failed if nothing changed.
+- `create` now auto-runs preflight for risky or ambiguous work, blocks unsafe execution when must-clarify questions remain, and lets the operator reuse recorded answers across reruns.
 - execution workflows now refuse to pretend they can build when no executable build path exists in the current runtime.
+- `chat` provides a guided conversational front door for common workflows instead of forcing the operator to memorize flags.
 - `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM’s knowledge without importing CAM itself.
 - `mine` can detect extracted source trees even when they are not full `.git` clones, which matters when you are evaluating zip-downloaded repos.
 - `mine` now keeps a persistent scan ledger, so unchanged repos are skipped by default and only changed repos are rescanned unless you force a refresh.
@@ -37,9 +40,12 @@ Today CAM can:
 - report where a methodology sits on the learning continuum: stored, enriched, retrieved, operationalized, or proven
 - actively reassess old methodologies against a new task and recommend which ones should be reactivated now
 - ideate novel app concepts using both stored CAM knowledge and candidate repos
+- preflight a task, estimate what it will take, and ask for the missing contract details before execution
 - create a spec-backed task for a fixed repo, augmented repo, or new repo
+- reuse prior preflight answers so repeated create runs do not start from scratch
 - report whether the current runtime actually satisfies CAM's builder expectations
 - validate whether a created repo actually changed and whether executable checks passed
+- reject `repo-mode fixed` executions that introduce a new top-level source namespace unless explicitly requested
 - export CAM knowledge into a standalone knowledge pack
 - run a deterministic standalone Forge benchmark on fixture data
 
@@ -85,6 +91,26 @@ That test slice covers:
 - rejection of unchanged repo executions
 - standalone Forge regression benchmark
 - resilient JSON parsing for `cam ideate`
+
+Additional targeted verification passed on March 17, 2026:
+
+```bash
+pytest -q tests/test_create_benchmark_spec.py tests/test_cycle.py tests/test_openrouter.py tests/test_cli_ux.py tests/test_preflight_cli.py
+```
+
+Result:
+
+```text
+130 passed in 0.64s
+```
+
+That slice covers:
+
+- `cam preflight` artifact generation and answer capture
+- `cam create` auto-preflight and execution gating
+- reusable `--preflight-file` behavior
+- `cam chat` mining workflow guidance
+- fixed-mode namespace guardrails
 
 ## What CAM Has Explicitly Been Hardened Against
 
@@ -140,6 +166,7 @@ Use these exact commands first:
 ```bash
 .venv/bin/cam --help
 .venv/bin/cam govern stats
+.venv/bin/cam chat
 ```
 
 What this proves:
@@ -147,6 +174,7 @@ What this proves:
 - the CLI is installed
 - the database can initialize on a fresh clone
 - the local runtime is basically healthy
+- the conversational front door starts cleanly
 
 Example output from `cam govern stats`:
 
@@ -179,6 +207,20 @@ export GOOGLE_API_KEY=...
 ```
 
 ## First Practical Workflows
+
+### 0. Start with guided chat if you do not want to memorize flags
+
+```bash
+.venv/bin/cam chat
+```
+
+Example prompt inside chat:
+
+```text
+I want to mine the folder ./folderx
+```
+
+CAM chat then asks the missing workflow questions, builds the underlying command, and offers to run it.
 
 ### 1. Review one repo before touching it
 
