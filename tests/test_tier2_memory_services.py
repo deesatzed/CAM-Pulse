@@ -384,6 +384,52 @@ class TestPeriodicSweepExtended:
         assert reloaded is not None
         assert reloaded.lifecycle_state == "declining"
 
+    @pytest.mark.asyncio
+    async def test_apply_transition_blocks_rehabilitation_when_attributed_failures_dominate(
+        self, repository, sample_project, sample_task
+    ):
+        await repository.create_project(sample_project)
+        await repository.create_task(sample_task)
+
+        m = _make_methodology(
+            source_task_id=sample_task.id,
+            lifecycle_state="declining",
+            fitness_vector={"total": REHABILITATION_FITNESS_THRESHOLD + 0.1},
+            success_count=1,
+            failure_count=2,
+        )
+        await repository.save_methodology(m)
+        await repository.log_methodology_usage(
+            MethodologyUsageEntry(
+                task_id=sample_task.id,
+                methodology_id=m.id,
+                project_id=sample_project.id,
+                stage="outcome_attributed",
+                success=True,
+                expectation_match_score=0.95,
+                quality_score=0.9,
+            )
+        )
+        for _ in range(2):
+            await repository.log_methodology_usage(
+                MethodologyUsageEntry(
+                    task_id=sample_task.id,
+                    methodology_id=m.id,
+                    project_id=sample_project.id,
+                    stage="outcome_attributed",
+                    success=False,
+                    expectation_match_score=0.25,
+                    quality_score=0.2,
+                )
+            )
+
+        result = await apply_transition(m, repository)
+
+        assert result is None
+        reloaded = await repository.get_methodology(m.id)
+        assert reloaded is not None
+        assert reloaded.lifecycle_state == "declining"
+
 
 class TestCheckNicheCollision:
     """Tests for check_niche_collision().

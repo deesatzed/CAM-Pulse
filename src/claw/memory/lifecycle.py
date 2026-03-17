@@ -139,11 +139,17 @@ async def apply_transition(
     Returns:
         The new state if transitioned, or None.
     """
+    usage_stats = await repository.get_methodology_usage_stats_for_methodology(
+        methodology.id
+    )
     attributed_transition = await _evaluate_attributed_transition(
         methodology,
-        repository,
+        usage_stats=usage_stats,
     )
-    new_state = attributed_transition or evaluate_transition(methodology, now=now)
+    candidate_state = evaluate_transition(methodology, now=now)
+    if _should_block_rehabilitation(methodology, candidate_state, usage_stats):
+        candidate_state = None
+    new_state = attributed_transition or candidate_state
     if new_state is None:
         return None
 
@@ -178,7 +184,7 @@ async def apply_transition(
 
 async def _evaluate_attributed_transition(
     methodology: Methodology,
-    repository: Repository,
+    usage_stats: dict[str, object],
 ) -> Optional[str]:
     """Apply high-trust demotion based on attributed evidence.
 
@@ -196,9 +202,6 @@ async def _evaluate_attributed_transition(
     if current != LifecycleState.THRIVING.value and methodology.scope != "global":
         return None
 
-    usage_stats = await repository.get_methodology_usage_stats_for_methodology(
-        methodology.id
-    )
     attributed_failures = int(usage_stats.get("attributed_failure_count", 0) or 0)
     attributed_successes = int(usage_stats.get("attributed_success_count", 0) or 0)
 
@@ -209,6 +212,23 @@ async def _evaluate_attributed_transition(
         return LifecycleState.DECLINING.value
 
     return None
+
+
+def _should_block_rehabilitation(
+    methodology: Methodology,
+    candidate_state: Optional[str],
+    usage_stats: dict[str, object],
+) -> bool:
+    """Prevent real-world evidence from immediately overriding recent decline."""
+    if (
+        methodology.lifecycle_state != LifecycleState.DECLINING.value
+        or candidate_state != LifecycleState.VIABLE.value
+    ):
+        return False
+
+    attributed_failures = int(usage_stats.get("attributed_failure_count", 0) or 0)
+    attributed_successes = int(usage_stats.get("attributed_success_count", 0) or 0)
+    return attributed_failures > attributed_successes
 
 
 async def run_periodic_sweep(
