@@ -51,6 +51,21 @@ class TestCreateBenchmarkSpecHelpers:
         assert len(spec["acceptance_checks"]) >= 4
         assert any("cam runtime" in item.lower() for item in spec["acceptance_checks"])
         assert any("cli" in item.lower() or "entrypoint" in item.lower() for item in spec["acceptance_checks"])
+        assert any("return 0" in item.lower() for item in spec["execution_steps"])
+        assert any("exit code 0" in item.lower() for item in spec["acceptance_checks"])
+
+    def test_build_expectation_contract_adds_cli_exit_code_requirements(self):
+        from claw import cli
+
+        contract = cli._build_expectation_contract(
+            request="Create a standalone CLI app.",
+            repo_mode="new",
+            task_type="architecture",
+            spec_items=["Must expose python -m app.cli."],
+            acceptance_checks=["python -m app.cli --help", "pytest -q"],
+        )
+
+        assert "CLI help and version return a zero exit code" in contract["expected_outcome"]
 
     def test_agent_supports_workspace_execution_only_for_writable_agent(self):
         from claw import cli

@@ -320,7 +320,8 @@ class AgentInterface(ABC):
         if "python -m app.cli" in task_text or "cli" in task_text or "entrypoint" in task_text:
             parts.append("\n## CLI Guardrails")
             parts.append("- If you add --version, resolve version metadata from the package module, not from __main__.")
-            parts.append("- If using argparse, make main(argv) return a nonzero code on invalid arguments instead of leaking uncaught SystemExit.")
+            parts.append("- If using argparse, preserve argparse exit code semantics: --help and --version should return 0, invalid arguments should return nonzero.")
+            parts.append("- If you catch SystemExit around parser.parse_args(argv), return int(exc.code) so help/version keep exit code 0 while invalid arguments stay nonzero.")
             parts.append("- Include tests for help/version behavior and invalid-argument handling.")
 
         if task.forbidden_approaches:

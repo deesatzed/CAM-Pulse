@@ -456,6 +456,7 @@ def _build_expectation_contract(
     if "cli" in text or "command" in text or "entrypoint" in text:
         expected_ux.append("A user-facing CLI entrypoint exists and exposes help or usage")
         expected_outcome.append("Invalid CLI arguments return a nonzero code without uncaught SystemExit")
+        expected_outcome.append("CLI help and version return a zero exit code")
         constraints.append(
             "CLI help and version must work under python -m app.cli without relying on __main__.__version__"
         )
@@ -638,7 +639,8 @@ def _seed_create_runbook(
     if ("cli" in combined_text or "command" in combined_text or "entrypoint" in combined_text):
         cli_steps = [
             "For Python CLIs, keep version metadata in the package module and reference it from the CLI without relying on __main__.__version__.",
-            "If using argparse, make main(argv) return a nonzero code on invalid arguments instead of leaking an uncaught SystemExit into tests.",
+            "If using argparse, preserve exit code semantics: --help and --version should return 0, invalid arguments should return nonzero.",
+            "If wrapping parser.parse_args(argv), return int(exc.code) from caught SystemExit so argparse help/version behavior stays correct in tests.",
             "Add CLI tests for help/version behavior and invalid-argument handling before claiming success.",
         ]
         for step in cli_steps:
@@ -657,6 +659,7 @@ def _seed_create_runbook(
         if "cli" in combined_text or "command" in combined_text or "entrypoint" in combined_text:
             seeded_checks.append("A user-facing CLI entrypoint exists and shows a help or usage screen")
             seeded_checks.append("CLI tests cover invalid-argument handling and version/help behavior")
+            seeded_checks.append("CLI help and version return exit code 0 while invalid arguments return nonzero")
         if task_type in {"architecture", "bug_fix", "testing", "refactoring"}:
             seeded_checks.append("Automated tests exist for the primary changed behavior")
 

@@ -369,7 +369,10 @@ class TestBuildOpenRouterPrompt:
             task=task,
             expectation_contract={
                 "goal": "Build CLI",
-                "expected_outcome": ["Invalid CLI arguments return a nonzero code without uncaught SystemExit"],
+                "expected_outcome": [
+                    "Invalid CLI arguments return a nonzero code without uncaught SystemExit",
+                    "CLI help and version return a zero exit code",
+                ],
                 "expected_ux": ["A user-facing CLI entrypoint exists and exposes help or usage"],
                 "constraints": ["CLI help and version must work under python -m app.cli without relying on __main__.__version__"],
                 "non_goals": ["Do not return analysis-only output"],
@@ -382,6 +385,7 @@ class TestBuildOpenRouterPrompt:
         assert "CLI Guardrails" in prompt
         assert "__main__" in prompt
         assert "SystemExit" in prompt
+        assert "return 0" in prompt
 
 
 # ===========================================================================
