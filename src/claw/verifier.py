@@ -78,6 +78,21 @@ CLAIM_PATTERNS = [
     {"claims": ["backward compatible", "backwards compatible"], "evidence": "API compatibility test"},
 ]
 
+
+def _scan_for_cam_runtime_imports(workspace_dir: Path) -> list[str]:
+    hits: list[str] = []
+    for path in workspace_dir.rglob("*.py"):
+        try:
+            rel = path.relative_to(workspace_dir)
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "import claw" in text or "from claw" in text:
+            hits.append(str(rel))
+            if len(hits) >= 10:
+                break
+    return hits
+
 # ---------------------------------------------------------------------------
 # Placeholder patterns
 # ---------------------------------------------------------------------------
@@ -240,6 +255,17 @@ class Verifier:
                 all_violations.extend(acc_violations)
                 all_recommendations.extend(acc_recommendations)
 
+        expectation_checks_ok = len([v for v in all_violations if v.get("check") in {"test_execution", "acceptance_checks"}]) == 0
+        expectation_score, expectation_findings, expectation_violations, expectation_recommendations = (
+            self._assess_expectation_match(
+                task_context,
+                workspace_dir=workspace_dir,
+                acceptance_checks_ok=expectation_checks_ok,
+            )
+        )
+        all_violations.extend(expectation_violations)
+        all_recommendations.extend(expectation_recommendations)
+
         approved = len(all_violations) == 0
 
         # Compute a quality score (0.0-1.0) based on violations and recommendations
@@ -250,9 +276,90 @@ class Verifier:
             violations=all_violations,
             recommendations=all_recommendations,
             quality_score=quality_score,
+            expectation_match_score=expectation_score,
+            expectation_findings=expectation_findings,
             tests_before=tests_before,
             tests_after=tests_after,
         )
+
+    def _assess_expectation_match(
+        self,
+        task_context: TaskContext,
+        workspace_dir: Optional[str],
+        acceptance_checks_ok: bool,
+    ) -> tuple[Optional[float], list[str], list[dict[str, str]], list[str]]:
+        contract = task_context.expectation_contract
+        if contract is None:
+            return None, [], [], []
+
+        findings: list[str] = []
+        violations: list[dict[str, str]] = []
+        recommendations: list[str] = []
+        matched = 0
+        total = 0
+
+        workspace = Path(workspace_dir) if workspace_dir else None
+        repo_exists = bool(workspace and workspace.exists())
+        repo_nonempty = bool(repo_exists and any(p.is_file() for p in workspace.rglob("*")))
+        has_readme = bool(
+            repo_exists and any((workspace / name).exists() for name in ("README.md", "README.rst", "README.txt", "README"))
+        )
+        has_cli = bool(
+            repo_exists and (
+                (workspace / "app" / "cli.py").exists()
+                or (workspace / "src" / "app" / "cli.py").exists()
+                or (workspace / "main.py").exists()
+            )
+        )
+        cam_runtime_hits = _scan_for_cam_runtime_imports(workspace) if repo_exists and workspace else []
+
+        def mark(clause: str, ok: bool, hard: bool = False) -> None:
+            nonlocal matched, total
+            total += 1
+            if ok:
+                matched += 1
+                findings.append(f"MATCH {clause}")
+            else:
+                findings.append(f"GAP {clause}")
+                if hard:
+                    violations.append({"check": "expectation_contract", "detail": clause})
+                else:
+                    recommendations.append(f"Expectation gap: {clause}")
+
+        for clause in contract.expected_outcome:
+            text = clause.lower()
+            if "acceptance checks pass" in text or "verifiable" in text:
+                mark(clause, acceptance_checks_ok)
+            elif "repository change" in text or "runnable standalone repository" in text or "requested capability" in text:
+                mark(clause, repo_nonempty)
+            else:
+                mark(clause, repo_exists)
+
+        for clause in contract.expected_ux:
+            text = clause.lower()
+            if "cli" in text or "help or usage" in text:
+                mark(clause, has_cli)
+            elif "documentation" in text or "operator" in text:
+                mark(clause, has_readme)
+            elif "preserved" in text:
+                mark(clause, acceptance_checks_ok)
+            else:
+                mark(clause, repo_nonempty)
+
+        for clause in contract.constraints:
+            text = clause.lower()
+            if "cam runtime" in text:
+                mark(clause, len(cam_runtime_hits) == 0, hard=True)
+            elif "materially change" in text:
+                mark(clause, repo_nonempty, hard=True)
+            else:
+                mark(clause, True)
+
+        if cam_runtime_hits:
+            findings.append("GAP CAM runtime imports found in: " + ", ".join(cam_runtime_hits[:5]))
+
+        score = round(matched / total, 3) if total else None
+        return score, findings, violations, recommendations
 
     # ===================================================================
     # Check 1: Dependency Jail

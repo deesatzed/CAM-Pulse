@@ -11,6 +11,8 @@ from claw.core.models import (
     ContextBrief,
     CycleResult,
     EscalationDiagnosis,
+    ExpectationAssessment,
+    ExpectationContract,
     ExecutionState,
     FleetTask,
     HypothesisEntry,
@@ -119,12 +121,42 @@ class TestVerificationResult:
         vr = VerificationResult(
             approved=True,
             quality_score=0.95,
+            expectation_match_score=0.9,
+            expectation_findings=["MATCH A user-facing CLI entrypoint exists"],
             violations=[],
         )
         j = vr.model_dump_json()
         vr2 = VerificationResult.model_validate_json(j)
         assert vr2.approved is True
         assert vr2.quality_score == 0.95
+        assert vr2.expectation_match_score == 0.9
+        assert vr2.expectation_findings == ["MATCH A user-facing CLI entrypoint exists"]
+
+
+class TestExpectationModels:
+    def test_expectation_contract_roundtrip(self):
+        contract = ExpectationContract(
+            goal="Create a standalone CLI app",
+            expected_outcome=["A runnable standalone repository is created"],
+            expected_ux=["A user-facing CLI entrypoint exists and exposes help or usage"],
+            constraints=["Result must not require CAM runtime imports"],
+        )
+        payload = contract.model_dump_json()
+        contract_2 = ExpectationContract.model_validate_json(payload)
+        assert contract_2.goal == contract.goal
+        assert contract_2.constraints == contract.constraints
+
+    def test_expectation_assessment_roundtrip(self):
+        assessment = ExpectationAssessment(
+            score=0.8,
+            matched=["requested workflow exists"],
+            unmet=["usage docs missing"],
+            summary="matched 4/5 expectation clauses",
+        )
+        payload = assessment.model_dump_json()
+        assessment_2 = ExpectationAssessment.model_validate_json(payload)
+        assert assessment_2.score == 0.8
+        assert assessment_2.unmet == ["usage docs missing"]
 
 
 class TestAgentHealth:

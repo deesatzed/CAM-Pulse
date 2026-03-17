@@ -30,6 +30,8 @@ class TestCreateBenchmarkSpecHelpers:
         assert written["validation"]["require_repo_exists"] is True
         assert written["benchmark"]["catastrophic_floor_pct"] == -35.0
         assert written["spec_items"][0] == "Use Gemini embeddings"
+        assert written["expectation_contract"]["goal"] == "Build a new repo for multimodal retrieval."
+        assert written["expectation_contract"]["expected_outcome"]
 
     def test_build_create_spec_seeds_runbook_when_missing(self, tmp_path):
         from claw import cli
@@ -122,10 +124,12 @@ class TestCreateBenchmarkSpecHelpers:
         repo_path = tmp_path / "app"
         repo_path.mkdir()
         (repo_path / "README.md").write_text("hello\n", encoding="utf-8")
+        (repo_path / "app").mkdir()
+        (repo_path / "app" / "cli.py").write_text("print('cli')\n", encoding="utf-8")
 
         spec = cli._build_create_spec(
             repo_path=repo_path,
-            request="Create a tiny app.",
+            request="Create a standalone CLI tiny app.",
             repo_mode="new",
             title="Tiny app",
             task_type="architecture",
@@ -139,6 +143,8 @@ class TestCreateBenchmarkSpecHelpers:
         assert passed is True
         assert summary["checks_run"] == 1
         assert summary["checks"][0]["ok"] is True
+        assert summary["expectation_assessment"]["score"] is not None
+        assert summary["expectation_assessment"]["score"] >= 0.7
 
     def test_validate_create_spec_reports_failed_check(self, tmp_path):
         from claw import cli
@@ -207,6 +213,31 @@ class TestCreateBenchmarkSpecHelpers:
         passed, summary = cli._validate_create_spec(spec, max_minutes=1)
         assert passed is False
         assert any("unchanged" in item for item in summary["findings"])
+
+    def test_validate_create_spec_flags_cam_runtime_import_gap(self, tmp_path):
+        from claw import cli
+
+        repo_path = tmp_path / "app"
+        repo_path.mkdir()
+        (repo_path / "README.md").write_text("hello\n", encoding="utf-8")
+        (repo_path / "main.py").write_text("from claw.cli import app\n", encoding="utf-8")
+
+        spec = cli._build_create_spec(
+            repo_path=repo_path,
+            request="Create a standalone app.",
+            repo_mode="new",
+            title="Tiny app",
+            task_type="architecture",
+            execution_steps=[],
+            acceptance_checks=[],
+            spec_items=["Must be standalone"],
+        )
+        (repo_path / "README.md").write_text("hello changed\n", encoding="utf-8")
+
+        passed, summary = cli._validate_create_spec(spec, max_minutes=1)
+        assert passed is False
+        assert any("expectation mismatch" in item for item in summary["findings"])
+        assert any("CAM runtime" in item for item in summary["expectation_assessment"]["unmet"])
 
     def test_validate_benchmark_against_spec(self):
         from claw import cli

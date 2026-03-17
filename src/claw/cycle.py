@@ -12,6 +12,7 @@ operating at four nested scales:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -74,6 +75,44 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
         else:
             lines.append(f"*** {path}")
     return files_changed, "\n".join(lines)
+
+
+_SPEC_FILE_PATTERN = re.compile(r"^Spec file:\s*(.+)$", re.MULTILINE)
+
+
+def _build_generic_expectation_contract(task: Task) -> dict[str, Any]:
+    expected_outcome = ["Task produces a material repository change"]
+    expected_ux = ["Result is concrete enough for operator use"]
+    constraints = []
+    if task.acceptance_checks:
+        expected_outcome.append("Acceptance checks pass")
+    if task.task_type in {"architecture", "refactoring"}:
+        expected_ux.append("Structure is clearer and easier to extend")
+    if task.task_type in {"testing", "bug_fix"}:
+        expected_outcome.append("Changed behavior is verifiable")
+    return {
+        "goal": task.title,
+        "expected_outcome": expected_outcome,
+        "expected_ux": expected_ux,
+        "constraints": constraints,
+        "non_goals": ["Do not return analysis-only output"],
+        "validation_signals": list(task.acceptance_checks),
+    }
+
+
+def _load_expectation_contract_for_task(task: Task) -> Optional[dict[str, Any]]:
+    match = _SPEC_FILE_PATTERN.search(task.description or "")
+    if match:
+        spec_path = Path(match.group(1).strip())
+        if spec_path.exists():
+            try:
+                payload = json.loads(spec_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            contract = payload.get("expectation_contract")
+            if isinstance(contract, dict) and contract.get("goal"):
+                return contract
+    return _build_generic_expectation_contract(task)
 
 
 def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, Any]]:
@@ -410,6 +449,7 @@ class MicroClaw(ClawCycle):
             forbidden_approaches=forbidden,
             hints=hints,
             action_template=action_template,
+            expectation_contract=_load_expectation_contract_for_task(task),
         )
 
         logger.info(

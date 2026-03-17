@@ -724,6 +724,34 @@ class TestVerifyMain:
         assert bad_result.quality_score is not None
         assert bad_result.quality_score < result.quality_score
 
+    async def test_expectation_match_scored_for_standalone_cli(self, tmp_path):
+        verifier = _make_verifier()
+        workspace = tmp_path / "app"
+        workspace.mkdir()
+        (workspace / "README.md").write_text("usage\n", encoding="utf-8")
+        (workspace / "app").mkdir()
+        (workspace / "app" / "cli.py").write_text("print('cli')\n", encoding="utf-8")
+
+        task = _make_task(title="Create standalone CLI", description="Build standalone CLI app")
+        task_context = TaskContext(
+            task=task,
+            expectation_contract={
+                "goal": "Create standalone CLI",
+                "expected_outcome": ["A runnable standalone repository is created"],
+                "expected_ux": ["A user-facing CLI entrypoint exists and exposes help or usage"],
+                "constraints": ["Result must not require CAM runtime imports"],
+                "non_goals": [],
+                "validation_signals": [],
+            },
+        )
+        outcome = _make_outcome(diff=CLEAN_DIFF, tests_passed=True)
+
+        result = await verifier.verify(outcome, task_context, workspace_dir=str(workspace))
+
+        assert result.expectation_match_score is not None
+        assert result.expectation_match_score >= 0.9
+        assert not any(v["check"] == "expectation_contract" for v in result.violations)
+
     async def test_multiple_violations_accumulated(self):
         """Multiple checks can fail simultaneously, accumulating violations."""
         verifier = _make_verifier(banned_dependencies=["flask"])

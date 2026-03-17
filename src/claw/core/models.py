@@ -245,6 +245,24 @@ class ActionTemplate(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class ExpectationContract(BaseModel):
+    """User-visible contract for what counts as a useful result."""
+    goal: str
+    expected_outcome: list[str] = Field(default_factory=list)
+    expected_ux: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    non_goals: list[str] = Field(default_factory=list)
+    validation_signals: list[str] = Field(default_factory=list)
+
+
+class ExpectationAssessment(BaseModel):
+    """Assessment of how closely a result matched the expectation contract."""
+    score: float = 0.0
+    matched: list[str] = Field(default_factory=list)
+    unmet: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
 class PeerReview(BaseModel):
     id: str = Field(default_factory=_new_id)
     task_id: str
@@ -329,6 +347,8 @@ class VerificationResult(BaseModel):
     violations: list[dict[str, str]] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     quality_score: Optional[float] = None
+    expectation_match_score: Optional[float] = None
+    expectation_findings: list[str] = Field(default_factory=list)
     tests_before: Optional[int] = None
     tests_after: Optional[int] = None
 
@@ -390,6 +410,7 @@ class TaskContext(BaseModel):
     forbidden_approaches: list[str] = Field(default_factory=list)
     hints: list[str] = Field(default_factory=list)
     action_template: Optional[ActionTemplate] = None
+    expectation_contract: Optional[ExpectationContract] = None
     checkpoint_ref: Optional[str] = None
     previous_escalation_diagnosis: Optional[str] = None
 

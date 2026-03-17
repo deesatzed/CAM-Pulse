@@ -396,6 +396,13 @@ def _build_create_spec(
         acceptance_checks=acceptance_checks,
     )
     baseline_snapshot = _snapshot_repo_state(repo_path)
+    expectation_contract = _build_expectation_contract(
+        request=request,
+        repo_mode=repo_mode,
+        task_type=task_type,
+        spec_items=spec_items,
+        acceptance_checks=seeded_checks,
+    )
     return {
         "version": 1,
         "title": title,
@@ -407,6 +414,7 @@ def _build_create_spec(
         "baseline_snapshot": baseline_snapshot,
         "execution_steps": seeded_steps,
         "acceptance_checks": seeded_checks,
+        "expectation_contract": expectation_contract,
         "validation": {
             "require_repo_exists": True,
             "require_nonempty_repo": True,
@@ -416,6 +424,168 @@ def _build_create_spec(
             "require_non_negative_lift": False,
         },
         "created_at_epoch": int(_time.time()),
+    }
+
+
+def _build_expectation_contract(
+    *,
+    request: str,
+    repo_mode: str,
+    task_type: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+) -> dict[str, Any]:
+    text = " ".join([request, *spec_items]).lower()
+    expected_outcome = ["Requested workflow exists and is demonstrable"]
+    expected_ux = ["Result is understandable and usable by an operator"]
+    constraints = ["Result must materially change the target repository"]
+    non_goals = ["Do not stop at analysis-only output"]
+    validation_signals = [check.strip() for check in acceptance_checks if check.strip()]
+
+    if repo_mode == "new":
+        expected_outcome.append("A runnable standalone repository is created")
+    elif repo_mode == "augment":
+        expected_outcome.append("The existing repository gains the requested capability")
+        expected_ux.append("Existing working behavior is preserved")
+    else:
+        expected_outcome.append("The broken or weak repo path is repaired")
+        expected_ux.append("The repaired path is verifiable with focused checks")
+
+    if "standalone" in text:
+        constraints.append("Result must not require CAM runtime imports")
+    if "cli" in text or "command" in text or "entrypoint" in text:
+        expected_ux.append("A user-facing CLI entrypoint exists and exposes help or usage")
+    if task_type in {"architecture", "bug_fix", "testing", "refactoring"}:
+        expected_outcome.append("Automated verification exists for the primary changed behavior")
+    if any("readme" in item.lower() or "doc" in item.lower() or "usage" in item.lower() for item in spec_items):
+        expected_ux.append("Usage documentation explains how to run the result")
+
+    for item in spec_items:
+        lowered = item.strip().lower()
+        if not lowered:
+            continue
+        if lowered.startswith("must not"):
+            constraints.append(item.strip())
+        elif lowered.startswith("must"):
+            expected_outcome.append(item.strip())
+        elif lowered.startswith("should"):
+            expected_ux.append(item.strip())
+        elif lowered.startswith("do not") or lowered.startswith("avoid"):
+            non_goals.append(item.strip())
+
+    return {
+        "goal": request.strip(),
+        "expected_outcome": sorted(set(expected_outcome)),
+        "expected_ux": sorted(set(expected_ux)),
+        "constraints": sorted(set(constraints)),
+        "non_goals": sorted(set(non_goals)),
+        "validation_signals": sorted(set(validation_signals)),
+    }
+
+
+def _scan_for_cam_runtime_imports(repo_path: Path) -> list[str]:
+    hits: list[str] = []
+    for path in repo_path.rglob("*.py"):
+        try:
+            rel = path.relative_to(repo_path)
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "import claw" in text or "from claw" in text:
+            hits.append(str(rel))
+            if len(hits) >= 10:
+                break
+    return hits
+
+
+def _assess_expectation_contract(
+    spec: dict[str, Any],
+    *,
+    repo_path: Path,
+    findings: list[str],
+    checks: list[dict[str, Any]],
+    manual_checks: list[str],
+) -> dict[str, Any]:
+    contract = spec.get("expectation_contract", {}) if isinstance(spec.get("expectation_contract"), dict) else {}
+    if not contract:
+        return {"score": None, "matched": [], "unmet": [], "summary": ""}
+
+    matched: list[str] = []
+    unmet: list[str] = []
+    hard_failures: list[str] = []
+    scored = 0
+    total = 0
+
+    def score_clause(clause: str, ok: bool, hard: bool = False) -> None:
+        nonlocal scored, total
+        total += 1
+        if ok:
+            scored += 1
+            matched.append(clause)
+        else:
+            unmet.append(clause)
+            if hard:
+                hard_failures.append(clause)
+
+    repo_exists = repo_path.exists()
+    repo_nonempty = repo_exists and any(p.is_file() for p in repo_path.rglob("*"))
+    repo_changed = not any("unchanged" in item.lower() for item in findings)
+    checks_ok = all(item.get("ok") for item in checks) if checks else True
+    has_readme = repo_exists and any((repo_path / name).exists() for name in ("README.md", "README.rst", "README.txt", "README"))
+    has_cli = repo_exists and (
+        (repo_path / "app" / "cli.py").exists()
+        or (repo_path / "src" / "app" / "cli.py").exists()
+        or (repo_path / "main.py").exists()
+    )
+    cam_runtime_hits = _scan_for_cam_runtime_imports(repo_path) if repo_exists else []
+
+    for clause in contract.get("expected_outcome", []) or []:
+        text = str(clause).lower()
+        if "standalone repository" in text or "runnable standalone" in text:
+            score_clause(str(clause), repo_exists and repo_nonempty)
+        elif "materially change" in text:
+            score_clause(str(clause), repo_changed)
+        elif "automated verification" in text:
+            score_clause(str(clause), checks_ok)
+        elif "requested workflow exists" in text or "requested capability" in text or "repaired" in text:
+            score_clause(str(clause), repo_exists and repo_nonempty and checks_ok)
+        else:
+            score_clause(str(clause), repo_exists and repo_nonempty)
+
+    for clause in contract.get("expected_ux", []) or []:
+        text = str(clause).lower()
+        if "cli entrypoint" in text or "help or usage" in text:
+            score_clause(str(clause), has_cli)
+        elif "documentation" in text or "operator" in text:
+            score_clause(str(clause), has_readme)
+        elif "preserved" in text:
+            score_clause(str(clause), checks_ok)
+        else:
+            score_clause(str(clause), repo_exists and repo_nonempty)
+
+    for clause in contract.get("constraints", []) or []:
+        text = str(clause).lower()
+        if "cam runtime" in text:
+            score_clause(str(clause), len(cam_runtime_hits) == 0, hard=True)
+        elif "materially change" in text:
+            score_clause(str(clause), repo_changed, hard=True)
+        else:
+            score_clause(str(clause), True)
+
+    score = round(scored / total, 3) if total else None
+    if manual_checks:
+        unmet.extend([f"manual validation still required: {item}" for item in manual_checks[:5]])
+    summary = ""
+    if score is not None:
+        summary = f"matched {scored}/{total} expectation clauses"
+    if cam_runtime_hits:
+        unmet.append("CAM runtime imports found in: " + ", ".join(cam_runtime_hits[:5]))
+    return {
+        "score": score,
+        "matched": matched,
+        "unmet": unmet,
+        "hard_failures": hard_failures,
+        "summary": summary,
     }
 
 
@@ -649,6 +819,28 @@ def _tokenize_reassessment_text(text: str) -> set[str]:
     return {t for t in tokens if t not in _STOPWORDS}
 
 
+def _build_reassessment_expectation_contract(task: str, repo_summary: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    expected_outcome = ["recommend methodologies that materially help the requested task"]
+    expected_ux = ["recommendations should fit the intended operator workflow"]
+    constraints = ["avoid methodologies that only loosely match the task"]
+
+    task_lower = task.lower()
+    if any(word in task_lower for word in ("future-proof", "modernize", "upgrade")):
+        expected_outcome.append("prioritize maintainability and modernization patterns")
+    if any(word in task_lower for word in ("security", "harden", "secure")):
+        expected_outcome.append("prioritize security and verification patterns")
+    if any(word in task_lower for word in ("cli", "operator", "ux", "workflow")):
+        expected_ux.append("favor operator-facing usability and clear execution flow")
+    if repo_summary:
+        expected_outcome.append(f"fit the repo context of {repo_summary.get('name', 'target repo')}")
+    return {
+        "goal": task.strip(),
+        "expected_outcome": expected_outcome,
+        "expected_ux": expected_ux,
+        "constraints": constraints,
+    }
+
+
 def _derive_activation_triggers(meth: Any, *, template_count: int = 0) -> list[str]:
     """Derive lightweight trigger metadata from existing methodology fields."""
     text_parts = [
@@ -693,6 +885,7 @@ def _score_methodology_for_task(
     *,
     task_tokens: set[str],
     repo_tokens: set[str],
+    expectation_tokens: Optional[set[str]] = None,
     template_count: int = 0,
     template_successes: int = 0,
 ) -> tuple[float, list[str], list[str]]:
@@ -714,6 +907,7 @@ def _score_methodology_for_task(
     )
 
     overlap_tokens = sorted((task_tokens | repo_tokens) & text_tokens)
+    expectation_overlap = sorted((expectation_tokens or set()) & text_tokens)
     score = 0.0
     reasons: list[str] = []
 
@@ -721,6 +915,10 @@ def _score_methodology_for_task(
         overlap_score = min(0.45, 0.06 * len(overlap_tokens))
         score += overlap_score
         reasons.append("task/repo overlap: " + ", ".join(overlap_tokens[:5]))
+
+    if expectation_overlap:
+        score += min(0.2, 0.05 * len(expectation_overlap))
+        reasons.append("expectation fit: " + ", ".join(expectation_overlap[:4]))
 
     potential = getattr(meth, "potential_score", None)
     if potential is not None:
@@ -1104,6 +1302,16 @@ def _validate_create_spec(spec: dict[str, Any], max_minutes: int) -> tuple[bool,
         if not check_result["ok"]:
             findings.append(f"acceptance check failed: {command}")
 
+    expectation_assessment = _assess_expectation_contract(
+        spec,
+        repo_path=repo_path,
+        findings=findings,
+        checks=checks,
+        manual_checks=manual_checks,
+    )
+    for item in expectation_assessment.get("hard_failures", []) or []:
+        findings.append(f"expectation mismatch: {item}")
+
     summary = {
         "repo": str(repo_path),
         "title": spec.get("title", ""),
@@ -1113,6 +1321,7 @@ def _validate_create_spec(spec: dict[str, Any], max_minutes: int) -> tuple[bool,
         "checks": checks,
         "manual_checks": manual_checks,
         "findings": findings,
+        "expectation_assessment": expectation_assessment,
     }
     return len(findings) == 0, summary
 
@@ -1226,6 +1435,11 @@ async def _evaluate_async(repo_path: Path, config_path: Optional[str], mode: str
 
         # Display structural results
         _display_analysis(analysis, repo_path.name)
+        expectation_baseline = _assess_repo_expectation_baseline(analysis)
+        console.print(f"\n[bold]Expectation Baseline[/bold]")
+        console.print(f"  Match score: {expectation_baseline['score']:.3f}")
+        for item in expectation_baseline["unmet"][:5]:
+            console.print(f"  [yellow]GAP[/yellow] {item}")
 
         # Store structural results
         await ctx.repository.log_episode(
@@ -1478,6 +1692,25 @@ def _display_analysis(analysis: dict, name: str) -> None:
         console.print(ft)
 
 
+def _assess_repo_expectation_baseline(analysis: dict[str, Any]) -> dict[str, Any]:
+    clauses = [
+        ("Repository has version-control context", bool(analysis.get("has_git"))),
+        ("Repository includes usage or orientation docs", bool(analysis.get("has_readme"))),
+        ("Repository includes automated tests", bool(analysis.get("has_tests"))),
+        ("Repository includes recognizable build/config files", bool(analysis.get("config_files"))),
+        ("Repository structure is concrete enough to improve safely", bool(analysis.get("total_files", 0) > 0)),
+    ]
+    matched = [text for text, ok in clauses if ok]
+    unmet = [text for text, ok in clauses if not ok]
+    score = round(len(matched) / len(clauses), 3) if clauses else 0.0
+    return {
+        "score": score,
+        "matched": matched,
+        "unmet": unmet,
+        "summary": f"repo baseline matched {len(matched)}/{len(clauses)} expectation clauses",
+    }
+
+
 @app.command()
 def enhance(
     repo: str = typer.Argument(..., help="Path to the repository to enhance"),
@@ -1549,6 +1782,11 @@ async def _enhance_async(
         console.print("\n[cyan]Phase 1: Evaluating repository...[/cyan]")
         analysis = await _analyze_repo(repo_path)
         _display_analysis(analysis, repo_path.name)
+        expectation_baseline = _assess_repo_expectation_baseline(analysis)
+        console.print(f"\n[bold]Expectation Baseline[/bold]")
+        console.print(f"  Match score: {expectation_baseline['score']:.3f}")
+        for item in expectation_baseline["unmet"][:5]:
+            console.print(f"  [yellow]GAP[/yellow] {item}")
 
         # Phase 2: Plan — convert analysis into tasks
         console.print("\n[cyan]Phase 2: Planning enhancements...[/cyan]")
@@ -3947,6 +4185,9 @@ def validate(
     console.print(f"  Checks run: {summary['checks_run']}")
     if summary["manual_checks"]:
         console.print(f"  Manual checks: {len(summary['manual_checks'])}")
+    expectation = summary.get("expectation_assessment", {}) or {}
+    if expectation.get("score") is not None:
+        console.print(f"  Expectation match: {expectation['score']:.3f}")
 
     if passed:
         console.print("\n[green]Validation passed.[/green]")
@@ -3961,6 +4202,14 @@ def validate(
 
     for check in summary["manual_checks"]:
         console.print(f"  [yellow]MANUAL[/yellow] {check}")
+
+    if expectation.get("summary"):
+        console.print(f"\n[bold]Expectation Assessment[/bold]")
+        console.print(f"  {expectation['summary']}")
+        for item in expectation.get("matched", [])[:5]:
+            console.print(f"  [green]MATCH[/green] {item}")
+        for item in expectation.get("unmet", [])[:8]:
+            console.print(f"  [yellow]GAP[/yellow] {item}")
 
     if not passed:
         raise typer.Exit(2)
@@ -4770,6 +5019,15 @@ async def _reassess_async(
     if not task_tokens and not repo_tokens:
         console.print("[red]Task is too vague for reassessment. Provide a more specific --task.[/red]")
         raise typer.Exit(1)
+    expectation_contract = _build_reassessment_expectation_contract(task, repo_summary)
+    expectation_tokens = _tokenize_reassessment_text(
+        " ".join(
+            [expectation_contract.get("goal", "")]
+            + list(expectation_contract.get("expected_outcome", []) or [])
+            + list(expectation_contract.get("expected_ux", []) or [])
+            + list(expectation_contract.get("constraints", []) or [])
+        )
+    )
 
     engine, repository = await _kb_engine()
 
@@ -4806,6 +5064,7 @@ async def _reassess_async(
                 meth,
                 task_tokens=task_tokens,
                 repo_tokens=repo_tokens,
+                expectation_tokens=expectation_tokens,
                 template_count=template_count,
                 template_successes=template_successes,
             )
@@ -4851,6 +5110,10 @@ async def _reassess_async(
             f"Repo context: {repo_summary['name'] if repo_summary else 'none'}",
             border_style="cyan",
         ))
+        console.print(
+            f"[dim]Expectation focus:[/dim] "
+            f"{'; '.join(expectation_contract.get('expected_outcome', [])[:2] + expectation_contract.get('expected_ux', [])[:1])}"
+        )
 
         if repo_summary:
             console.print(
