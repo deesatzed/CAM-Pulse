@@ -286,6 +286,43 @@ class AgentInterface(ABC):
             for check in acceptance_checks:
                 parts.append(f"- `{check}`")
 
+        if task.expectation_contract is not None:
+            contract = task.expectation_contract
+            expected_outcome = list(getattr(contract, "expected_outcome", []) or [])
+            expected_ux = list(getattr(contract, "expected_ux", []) or [])
+            constraints = list(getattr(contract, "constraints", []) or [])
+            non_goals = list(getattr(contract, "non_goals", []) or [])
+
+            if expected_outcome:
+                parts.append("\n## Expected Outcome")
+                for item in expected_outcome:
+                    parts.append(f"- {item}")
+            if expected_ux:
+                parts.append("\n## Expected UX")
+                for item in expected_ux:
+                    parts.append(f"- {item}")
+            if constraints:
+                parts.append("\n## Constraints")
+                for item in constraints:
+                    parts.append(f"- {item}")
+            if non_goals:
+                parts.append("\n## Non-Goals")
+                for item in non_goals:
+                    parts.append(f"- {item}")
+
+        task_text = " ".join(
+            [
+                task.task.title or "",
+                task.task.description or "",
+                " ".join(task.task.acceptance_checks or []),
+            ]
+        ).lower()
+        if "python -m app.cli" in task_text or "cli" in task_text or "entrypoint" in task_text:
+            parts.append("\n## CLI Guardrails")
+            parts.append("- If you add --version, resolve version metadata from the package module, not from __main__.")
+            parts.append("- If using argparse, make main(argv) return a nonzero code on invalid arguments instead of leaking uncaught SystemExit.")
+            parts.append("- Include tests for help/version behavior and invalid-argument handling.")
+
         if task.forbidden_approaches:
             parts.append("\n## Forbidden Approaches (already tried, failed)")
             for fa in task.forbidden_approaches:

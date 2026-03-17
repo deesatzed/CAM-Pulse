@@ -455,6 +455,10 @@ def _build_expectation_contract(
         constraints.append("Result must not require CAM runtime imports")
     if "cli" in text or "command" in text or "entrypoint" in text:
         expected_ux.append("A user-facing CLI entrypoint exists and exposes help or usage")
+        expected_outcome.append("Invalid CLI arguments return a nonzero code without uncaught SystemExit")
+        constraints.append(
+            "CLI help and version must work under python -m app.cli without relying on __main__.__version__"
+        )
     if task_type in {"architecture", "bug_fix", "testing", "refactoring"}:
         expected_outcome.append("Automated verification exists for the primary changed behavior")
     if any("readme" in item.lower() or "doc" in item.lower() or "usage" in item.lower() for item in spec_items):
@@ -631,6 +635,16 @@ def _seed_create_runbook(
                 "Run the acceptance checks and confirm the target repo materially changed.",
             ])
 
+    if ("cli" in combined_text or "command" in combined_text or "entrypoint" in combined_text):
+        cli_steps = [
+            "For Python CLIs, keep version metadata in the package module and reference it from the CLI without relying on __main__.__version__.",
+            "If using argparse, make main(argv) return a nonzero code on invalid arguments instead of leaking an uncaught SystemExit into tests.",
+            "Add CLI tests for help/version behavior and invalid-argument handling before claiming success.",
+        ]
+        for step in cli_steps:
+            if step not in seeded_steps:
+                seeded_steps.append(step)
+
     seeded_checks = list(clean_checks)
     if not seeded_checks:
         seeded_checks.extend([
@@ -642,10 +656,25 @@ def _seed_create_runbook(
             seeded_checks.append("Result does not require CAM runtime imports")
         if "cli" in combined_text or "command" in combined_text or "entrypoint" in combined_text:
             seeded_checks.append("A user-facing CLI entrypoint exists and shows a help or usage screen")
+            seeded_checks.append("CLI tests cover invalid-argument handling and version/help behavior")
         if task_type in {"architecture", "bug_fix", "testing", "refactoring"}:
             seeded_checks.append("Automated tests exist for the primary changed behavior")
 
     return seeded_steps, seeded_checks
+
+
+def _display_task_status(status_val: str, hypothesis_outcome: str) -> str:
+    if status_val == "DONE":
+        return "[green]DONE[/green]"
+    if status_val == "PENDING" and hypothesis_outcome == "FAILURE":
+        return "[yellow]RETRY_READY[/yellow]"
+    if status_val == "PENDING":
+        return "[yellow]PENDING[/yellow]"
+    if status_val in ("CODING", "REVIEWING", "DISPATCHED"):
+        return f"[cyan]{status_val}[/cyan]"
+    if status_val == "STUCK":
+        return "[red]STUCK[/red]"
+    return status_val
 
 
 def _write_create_spec(spec: dict[str, Any]) -> Path:
@@ -2810,15 +2839,7 @@ async def _results_async(config_path: Optional[str], limit: int, project_id: Opt
             summary = (row.get("approach_summary") or "")[:50]
             usage = usage_summary.get(str(row.get("task_id")), {})
 
-            # Color status
-            if status_val == "DONE":
-                status_display = "[green]DONE[/green]"
-            elif status_val == "PENDING":
-                status_display = "[yellow]PENDING[/yellow]"
-            elif status_val in ("CODING", "REVIEWING", "DISPATCHED"):
-                status_display = f"[cyan]{status_val}[/cyan]"
-            else:
-                status_display = status_val
+            status_display = _display_task_status(str(status_val), str(hypothesis_outcome))
 
             # Color outcome
             if hypothesis_outcome == "SUCCESS":

@@ -281,6 +281,12 @@ class TestCLIUXSurface:
         assert "json_out" in sig.parameters
         assert "fail_on_flags" in sig.parameters
 
+    def test_display_task_status_marks_failed_pending_as_retry_ready(self):
+        from claw.cli import _display_task_status
+
+        assert _display_task_status("PENDING", "FAILURE") == "[yellow]RETRY_READY[/yellow]"
+        assert _display_task_status("PENDING", "-") == "[yellow]PENDING[/yellow]"
+
     def test_doctor_audit_writes_json_payload(self, monkeypatch, tmp_path, claw_config):
         from claw.cli import app
         import claw.core.config as config_module

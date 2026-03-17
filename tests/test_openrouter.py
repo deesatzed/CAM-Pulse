@@ -357,6 +357,32 @@ class TestBuildOpenRouterPrompt:
         assert "file_operations" in prompt
         assert "Return only valid JSON" in prompt
 
+    def test_prompt_includes_expectation_contract_and_cli_guardrails(self):
+        agent = ClaudeCodeAgent(mode=AgentMode.OPENROUTER, model="m")
+        task = Task(
+            project_id="proj-1",
+            title="Build CLI",
+            description="Create a standalone CLI app with python -m app.cli",
+            acceptance_checks=["python -m app.cli --help", "pytest -q"],
+        )
+        ctx = TaskContext(
+            task=task,
+            expectation_contract={
+                "goal": "Build CLI",
+                "expected_outcome": ["Invalid CLI arguments return a nonzero code without uncaught SystemExit"],
+                "expected_ux": ["A user-facing CLI entrypoint exists and exposes help or usage"],
+                "constraints": ["CLI help and version must work under python -m app.cli without relying on __main__.__version__"],
+                "non_goals": ["Do not return analysis-only output"],
+            },
+        )
+        prompt = agent._build_openrouter_prompt(ctx)
+        assert "Expected Outcome" in prompt
+        assert "Expected UX" in prompt
+        assert "Constraints" in prompt
+        assert "CLI Guardrails" in prompt
+        assert "__main__" in prompt
+        assert "SystemExit" in prompt
+
 
 # ===========================================================================
 # 5. execute_openrouter() — full method tests
