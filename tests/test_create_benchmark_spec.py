@@ -207,6 +207,30 @@ class TestCreateBenchmarkSpecHelpers:
         assert summary["checks_run"] == 0
         assert len(summary["manual_checks"]) == 2
 
+    def test_validate_create_spec_executes_test_and_rg_commands(self, tmp_path):
+        from claw import cli
+
+        repo_path = tmp_path / "app"
+        repo_path.mkdir()
+        (repo_path / "README.md").write_text("hello modernizer\n", encoding="utf-8")
+
+        spec = cli._build_create_spec(
+            repo_path=repo_path,
+            request="Create a tiny app.",
+            repo_mode="new",
+            title="Tiny app",
+            task_type="architecture",
+            execution_steps=[],
+            acceptance_checks=["test -f README.md", "rg -q 'modernizer' README.md"],
+            spec_items=[],
+        )
+        (repo_path / "README.md").write_text("hello modernizer changed\n", encoding="utf-8")
+
+        passed, summary = cli._validate_create_spec(spec, max_minutes=1)
+        assert passed is True
+        assert summary["checks_run"] == 2
+        assert summary["manual_checks"] == []
+
     def test_validate_create_spec_detects_unchanged_repo(self, tmp_path):
         from claw import cli
 

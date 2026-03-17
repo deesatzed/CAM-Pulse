@@ -607,6 +607,91 @@ class TestExecuteOpenRouter:
         assert result.tokens_used == 0
         assert result.raw_output == "Answer"
 
+    async def test_response_with_null_message_content_does_not_crash(self):
+        agent = CodexAgent(mode=AgentMode.OPENROUTER, model="test/model")
+        ctx = _make_task_context()
+
+        response_data = {
+            "id": "gen-null-content",
+            "model": "test/model",
+            "choices": [{"message": {"content": None}, "index": 0}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+        }
+        fake_response = _make_httpx_response(200, response_data)
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
+                result = await agent.execute_openrouter(ctx)
+
+        assert result.tests_passed is True
+        assert result.failure_reason is None
+        assert result.raw_output == ""
+        assert result.approach_summary == ""
+        assert result.tokens_used == 15
+
+    async def test_response_with_content_list_is_coerced_to_text(self):
+        agent = ClaudeCodeAgent(mode=AgentMode.OPENROUTER, model="test/model")
+        ctx = _make_task_context()
+
+        response_data = {
+            "id": "gen-content-list",
+            "model": "test/model",
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Line one"},
+                        {"type": "text", "text": "Line two"},
+                    ]
+                },
+                "index": 0,
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+        }
+        fake_response = _make_httpx_response(200, response_data)
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
+                result = await agent.execute_openrouter(ctx)
+
+        assert result.tests_passed is True
+        assert result.failure_reason is None
+        assert result.raw_output == "Line one\nLine two"
+        assert result.approach_summary == "Line one\nLine two"
+
+    async def test_response_with_tool_call_arguments_used_as_output(self):
+        agent = GrokAgent(mode=AgentMode.OPENROUTER, model="test/model")
+        ctx = _make_task_context()
+
+        response_data = {
+            "id": "gen-tool-call",
+            "model": "test/model",
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "emit_result",
+                                "arguments": "{\"summary\":\"ok\",\"file_operations\":[]}",
+                            },
+                        }
+                    ],
+                },
+                "index": 0,
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+        }
+        fake_response = _make_httpx_response(200, response_data)
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
+                result = await agent.execute_openrouter(ctx)
+
+        assert result.tests_passed is True
+        assert result.failure_reason is None
+        assert result.raw_output == "{\"summary\":\"ok\",\"file_operations\":[]}"
+
     async def test_response_model_field_overrides_agent_model(self):
         """The model in the response should be used, not the agent's config model."""
         agent = GrokAgent(mode=AgentMode.OPENROUTER, model="requested/model")

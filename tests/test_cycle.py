@@ -216,6 +216,101 @@ class TestMicroClaw:
         assert outcome.files_changed == ["app.py"]
         assert (workspace / "app.py").read_text(encoding="utf-8") == 'print("hello")\n'
 
+    async def test_act_applies_structured_ops_with_alternate_keys_and_actions(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+        tmp_path,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+
+        class StructuredAgent:
+            mode = AgentMode.OPENROUTER
+            workspace_dir = str(workspace)
+
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return True
+
+            async def run(self, task_ctx):
+                return TaskOutcome(
+                    approach_summary="Emit alternate operation schema",
+                    tests_passed=False,
+                    raw_output=(
+                        '{'
+                        '"summary":"create files",'
+                        '"operations":['
+                        '{"file_path":"index.html","operation":"create","text":"<h1>Hello</h1>\\n"},'
+                        '{"path":"index.html","operation":"append","content":"<p>World</p>\\n"}'
+                        "]"
+                        "}"
+                    ),
+                )
+
+        ctx.agents["codex"] = StructuredAgent()
+
+        micro = MicroClaw(ctx, sample_project.id)
+        task_ctx = TaskContext(task=sample_task)
+        agent_id, _, outcome = await micro.act(("codex", task_ctx))
+
+        assert agent_id == "codex"
+        assert outcome.failure_reason is None
+        assert outcome.files_changed == ["index.html"]
+        assert (workspace / "index.html").read_text(encoding="utf-8") == "<h1>Hello</h1>\n<p>World</p>\n"
+
+    async def test_act_applies_python_literal_structured_payload(
+        self,
+        claw_context,
+        sample_project,
+        sample_task,
+        tmp_path,
+    ):
+        ctx = claw_context
+        await ctx.repository.create_project(sample_project)
+        await ctx.repository.create_task(sample_task)
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+
+        class StructuredAgent:
+            mode = AgentMode.OPENROUTER
+            workspace_dir = str(workspace)
+
+            def can_modify_workspace(self):
+                return False
+
+            def can_use_internal_workspace_executor(self):
+                return True
+
+            async def run(self, task_ctx):
+                return TaskOutcome(
+                    approach_summary="Emit python-literal payload",
+                    tests_passed=False,
+                    raw_output=(
+                        "{'summary': 'ok', 'file_operations': "
+                        "[{'path': 'README.md', 'action': 'write', 'content': '# Demo\\n'}]}"
+                    ),
+                )
+
+        ctx.agents["codex"] = StructuredAgent()
+
+        micro = MicroClaw(ctx, sample_project.id)
+        task_ctx = TaskContext(task=sample_task)
+        agent_id, _, outcome = await micro.act(("codex", task_ctx))
+
+        assert agent_id == "codex"
+        assert outcome.failure_reason is None
+        assert outcome.files_changed == ["README.md"]
+        assert (workspace / "README.md").read_text(encoding="utf-8") == "# Demo\n"
+
     async def test_grab_returns_task(self, claw_context, sample_project, sample_task):
         ctx = claw_context
         await ctx.repository.create_project(sample_project)

@@ -11,6 +11,7 @@ operating at four nested scales:
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -170,33 +171,61 @@ def _load_expectation_contract_for_task(task: Task) -> Optional[dict[str, Any]]:
     return _build_generic_expectation_contract(task)
 
 
-def _extract_structured_output(raw_output: Optional[str]) -> Optional[dict[str, Any]]:
+def _extract_structured_output(raw_output: Optional[Any]) -> Optional[dict[str, Any]]:
     if not raw_output:
         return None
 
-    candidates = [raw_output.strip()]
+    if isinstance(raw_output, dict):
+        normalized = _extract_structured_payload(raw_output)
+        if normalized is not None:
+            return normalized
+        raw_text = json.dumps(raw_output)
+    elif isinstance(raw_output, list):
+        text_parts: list[str] = []
+        for item in raw_output:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif isinstance(item, dict):
+                for key in ("text", "content", "value", "output_text"):
+                    value = item.get(key)
+                    if isinstance(value, str):
+                        text_parts.append(value)
+                        break
+        raw_text = "\n".join(text_parts) if text_parts else str(raw_output)
+    else:
+        raw_text = str(raw_output)
+
+    candidates = [raw_text.strip()]
     patterns = [
         r"```json\s*(.*?)\s*```",
         r"```\s*(.*?)\s*```",
         r"(\{[\s\S]*\})",
     ]
     for pattern in patterns:
-        for match in re.finditer(pattern, raw_output, re.IGNORECASE):
+        for match in re.finditer(pattern, raw_text, re.IGNORECASE):
             candidate = match.group(1).strip()
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
 
-    for candidate in _extract_balanced_json_objects(raw_output):
+    for candidate in _extract_balanced_json_objects(raw_text):
         if candidate not in candidates:
             candidates.append(candidate)
 
     for candidate in candidates:
-        try:
-            parsed = _parse_json_response(candidate)
-        except Exception:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
+        parsers = (
+            lambda text: _parse_json_response(text),
+            lambda text: json.loads(text),
+            lambda text: ast.literal_eval(text),
+        )
+        for parser in parsers:
+            try:
+                parsed = parser(candidate)
+            except Exception:
+                continue
+            payload = _extract_structured_payload(parsed)
+            if payload is not None:
+                return payload
+
     return None
 
 
@@ -239,6 +268,30 @@ def _extract_balanced_json_objects(text: str) -> list[str]:
     return results
 
 
+def _extract_structured_payload(parsed: Any) -> Optional[dict[str, Any]]:
+    """Find a dict containing structured file operations in parsed model output."""
+    if isinstance(parsed, dict):
+        for key in ("file_operations", "operations", "files", "changes", "edits"):
+            value = parsed.get(key)
+            if isinstance(value, list):
+                return parsed
+        for value in parsed.values():
+            nested = _extract_structured_payload(value)
+            if nested is not None:
+                return nested
+        return None
+
+    if isinstance(parsed, list):
+        # Some agents emit a bare list of operations.
+        if parsed and all(isinstance(item, dict) for item in parsed):
+            return {"file_operations": parsed}
+        for item in parsed:
+            nested = _extract_structured_payload(item)
+            if nested is not None:
+                return nested
+    return None
+
+
 def _counts_as_methodology_success(verification: VerificationResult) -> bool:
     """Only promote methodologies when the result met the expected quality bar."""
     if not verification.approved:
@@ -262,6 +315,12 @@ def _apply_structured_file_operations(
         return False, "structured_output_missing"
 
     operations = payload.get("file_operations")
+    if not isinstance(operations, list):
+        for key in ("operations", "files", "changes", "edits"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                operations = candidate
+                break
     if not isinstance(operations, list) or not operations:
         return False, "file_operations_missing"
 
@@ -270,8 +329,23 @@ def _apply_structured_file_operations(
         if not isinstance(op, dict):
             return False, "file_operation_invalid"
 
-        rel_path = str(op.get("path", "")).strip()
-        action = str(op.get("action", "write")).strip().lower()
+        rel_path = ""
+        for key in ("path", "file_path", "filepath", "filename", "target"):
+            value = op.get(key)
+            if isinstance(value, str) and value.strip():
+                rel_path = value.strip()
+                break
+        action = str(op.get("action") or op.get("operation") or op.get("op") or "write").strip().lower()
+        action_aliases = {
+            "create": "write",
+            "update": "write",
+            "replace": "write",
+            "overwrite": "write",
+            "append": "append",
+            "remove": "delete",
+            "unlink": "delete",
+        }
+        action = action_aliases.get(action, action)
         if not rel_path:
             return False, "file_path_missing"
 
@@ -287,10 +361,29 @@ def _apply_structured_file_operations(
 
         if action == "write":
             content = op.get("content")
+            if content is None:
+                for key in ("text", "data", "body", "value", "code"):
+                    alt = op.get(key)
+                    if alt is not None:
+                        content = alt
+                        break
             if not isinstance(content, str):
                 return False, f"content_missing:{rel_path}"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+        elif action == "append":
+            content = op.get("content")
+            if content is None:
+                for key in ("text", "data", "body", "value", "code"):
+                    alt = op.get(key)
+                    if alt is not None:
+                        content = alt
+                        break
+            if not isinstance(content, str):
+                return False, f"content_missing:{rel_path}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as f:
+                f.write(content)
         elif action == "delete":
             if target.exists():
                 target.unlink()

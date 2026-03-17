@@ -24,6 +24,60 @@ import httpx
 from claw.core.models import AgentHealth, AgentMode, AgentResult, TaskContext, TaskOutcome
 
 
+def _coerce_openrouter_content(choice: dict[str, Any]) -> str:
+    """Normalize OpenRouter choice payloads into a plain text string."""
+    if not isinstance(choice, dict):
+        return ""
+
+    message = choice.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                text_val = item.get("text")
+                if isinstance(text_val, str):
+                    parts.append(text_val)
+                    continue
+                for key in ("content", "value", "output_text"):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str):
+                        parts.append(candidate)
+                        break
+            return "\n".join(part for part in parts if part)
+
+        # Tool-calling style payloads can put generated JSON into function arguments.
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            chunks: list[str] = []
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                function_obj = tc.get("function")
+                if not isinstance(function_obj, dict):
+                    continue
+                args = function_obj.get("arguments")
+                if isinstance(args, str):
+                    chunks.append(args)
+            if chunks:
+                return "\n".join(chunks)
+
+    # Some providers expose text directly at choice level.
+    for key in ("text", "content", "output_text"):
+        candidate = choice.get(key)
+        if isinstance(candidate, str):
+            return candidate
+
+    return ""
+
+
 class AgentInterface(ABC):
     """Base class for all CLAW agents.
 
@@ -201,7 +255,7 @@ class AgentInterface(ABC):
                     json={
                         "model": model,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 4096,
+                        "max_tokens": max(4096, int(getattr(self, "max_tokens", 4096) or 4096)),
                     },
                 )
                 response.raise_for_status()
@@ -213,7 +267,9 @@ class AgentInterface(ABC):
             choices = data.get("choices", [])
             content = ""
             if choices:
-                content = choices[0].get("message", {}).get("content", "")
+                content = _coerce_openrouter_content(choices[0])
+                if not isinstance(content, str):
+                    content = str(content or "")
 
             usage = data.get("usage", {})
             tokens_used = (usage.get("prompt_tokens", 0) or 0) + (usage.get("completion_tokens", 0) or 0)

@@ -1395,7 +1395,7 @@ def _looks_like_shell_command(value: str) -> bool:
     known_commands = {
         "python", "python3", "pytest", "uv", "npm", "npx", "node",
         "cargo", "go", "make", "ruff", "mypy", "bash", "sh", "git",
-        "ls", "cat", "echo",
+        "ls", "cat", "echo", "test", "rg", "grep", "find",
     }
     return first in known_commands
 
