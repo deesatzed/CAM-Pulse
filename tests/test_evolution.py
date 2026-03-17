@@ -1207,6 +1207,7 @@ class TestPatternLearnerSummary:
         assert summary["attribution_backed_methodologies"] == 0
         assert summary["legacy_evidence_methodologies"] == 2
         assert summary["low_expectation_methodologies"] == 0
+        assert summary["demotion_candidate_methodologies"] == 0
         assert summary["flagged_methodologies"] == 2
 
     async def test_get_pattern_summary_empty_project(self, repository):

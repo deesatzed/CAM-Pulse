@@ -877,6 +877,12 @@ class Repository:
             except (json.JSONDecodeError, KeyError):
                 pass  # Corrupt prism_data — leave as-is
 
+    async def update_methodology_scope(self, methodology_id: str, new_scope: str) -> None:
+        await self.engine.execute(
+            "UPDATE methodologies SET scope = ? WHERE id = ?",
+            [new_scope, methodology_id],
+        )
+
     async def update_methodology_prism_data(self, methodology_id: str, prism_data: dict) -> None:
         """Store or replace the PRISM embedding for an existing methodology."""
         await self.engine.execute(

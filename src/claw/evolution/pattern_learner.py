@@ -472,6 +472,8 @@ class PatternLearner:
           relying on legacy/raw-success evidence
         - ``low_expectation_methodologies``: high-trust methodologies with
           weak expectation-match evidence
+        - ``demotion_candidate_methodologies``: high-trust methodologies with
+          repeated attributed failures and no attributed success
         - ``flagged_methodologies``: total high-trust methodologies needing audit
         """
         # Completed tasks
@@ -540,5 +542,6 @@ class PatternLearner:
             "attribution_backed_methodologies": audit_summary["attribution_backed_total"],
             "legacy_evidence_methodologies": audit_summary["legacy_backed_total"],
             "low_expectation_methodologies": audit_summary["low_expectation_total"],
+            "demotion_candidate_methodologies": audit_summary["demotion_candidate_total"],
             "flagged_methodologies": audit_summary["flagged_total"],
         }

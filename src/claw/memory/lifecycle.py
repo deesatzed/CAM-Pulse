@@ -154,6 +154,24 @@ async def apply_transition(
         methodology.id,
     )
     await repository.update_methodology_lifecycle(methodology.id, new_state)
+    if (
+        methodology.scope == "global"
+        and new_state == LifecycleState.DECLINING.value
+    ):
+        usage_stats = await repository.get_methodology_usage_stats_for_methodology(
+            methodology.id
+        )
+        attributed_failures = int(usage_stats.get("attributed_failure_count", 0) or 0)
+        attributed_successes = int(usage_stats.get("attributed_success_count", 0) or 0)
+        if (
+            attributed_failures >= ATTRIBUTED_FAILURE_DECLINE_MINIMUM
+            and attributed_successes == 0
+        ):
+            await repository.update_methodology_scope(
+                methodology.id,
+                "project",
+            )
+            methodology.scope = "project"
     methodology.lifecycle_state = new_state
     return new_state
 

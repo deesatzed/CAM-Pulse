@@ -556,6 +556,7 @@ class Dashboard:
                 evidence_table.add_row("Attribution-backed", str(evidence_summary["attribution_backed_total"]))
                 evidence_table.add_row("Legacy-backed", str(evidence_summary["legacy_backed_total"]))
                 evidence_table.add_row("Low expectation", str(evidence_summary["low_expectation_total"]))
+                evidence_table.add_row("Demotion candidates", str(evidence_summary["demotion_candidate_total"]))
                 evidence_table.add_row("Flagged for audit", str(evidence_summary["flagged_total"]))
                 self._console.print(evidence_table)
                 output_parts.append(self._console.export_text())
@@ -653,6 +654,7 @@ class Dashboard:
                 lines.append(f"  attribution-backed: {evidence_summary['attribution_backed_total']}")
                 lines.append(f"  legacy-backed: {evidence_summary['legacy_backed_total']}")
                 lines.append(f"  low expectation: {evidence_summary['low_expectation_total']}")
+                lines.append(f"  demotion candidates: {evidence_summary['demotion_candidate_total']}")
                 lines.append(f"  flagged for audit: {evidence_summary['flagged_total']}")
 
             if flagged_items:

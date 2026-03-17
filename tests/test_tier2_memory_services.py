@@ -322,6 +322,7 @@ class TestPeriodicSweepExtended:
         reloaded = await repository.get_methodology(m.id)
         assert reloaded is not None
         assert reloaded.lifecycle_state == "declining"
+        assert reloaded.scope == "project"
 
     @pytest.mark.asyncio
     async def test_sweep_viable_to_declining(self, repository):
