@@ -120,6 +120,10 @@ class TestCLIUXSurface:
         commands = _command_map()
         assert "create" in commands
 
+    def test_preflight_command_registered(self):
+        commands = _command_map()
+        assert "preflight" in commands
+
     def test_ideate_command_registered(self):
         commands = _command_map()
         assert "ideate" in commands
@@ -230,6 +234,12 @@ class TestCLIUXSurface:
         cb = commands["create"]
         sig = inspect.signature(cb)
         assert "repo_mode" in sig.parameters
+        assert "answer" in sig.parameters
+        assert "preflight_file" in sig.parameters
+        assert "preflight" in sig.parameters
+        assert "auto_preflight" in sig.parameters
+        assert "preflight_live" in sig.parameters
+        assert "accept_preflight_defaults" in sig.parameters
         assert "max_minutes" in sig.parameters
 
     def test_ideate_has_focus_promote_and_time_guardrail(self):

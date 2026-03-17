@@ -5,6 +5,7 @@ Primary workflows:
   enhance <repo>         — improve one existing repo in a bounded loop
   mine <dir>             — learn from outside repos into CAM memory
   ideate <dir>           — invent standalone app concepts from mined knowledge
+  preflight <repo>       — clarify a requested task before execution starts
   create <repo>          — create or augment a repo from a requested outcome
   validate               — verify a created repo against its saved spec/checks
 
@@ -46,6 +47,7 @@ console = Console()
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 _IDEA_DIR = ROOT_DIR / "data" / "ideation"
+_PREFLIGHT_DIR = ROOT_DIR / "data" / "preflights"
 
 learn_app = typer.Typer(
     name="learn",
@@ -386,6 +388,7 @@ def _build_create_spec(
     execution_steps: list[str],
     acceptance_checks: list[str],
     spec_items: list[str],
+    preflight_report: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     seeded_steps, seeded_checks = _seed_create_runbook(
         repo_mode=repo_mode,
@@ -403,7 +406,7 @@ def _build_create_spec(
         spec_items=spec_items,
         acceptance_checks=seeded_checks,
     )
-    return {
+    spec_payload = {
         "version": 1,
         "title": title,
         "request": request,
@@ -425,6 +428,18 @@ def _build_create_spec(
         },
         "created_at_epoch": int(_time.time()),
     }
+    if preflight_report:
+        spec_payload["preflight"] = {
+            "artifact_path": preflight_report.get("artifact_path"),
+            "recommended_mode": preflight_report.get("recommended_mode"),
+            "complexity": preflight_report.get("complexity"),
+            "task_kind": preflight_report.get("task_kind"),
+            "hard_blockers": list(preflight_report.get("hard_blockers", []) or []),
+            "clarifying_questions": list(preflight_report.get("clarifying_questions", []) or []),
+            "operator_answers": list(preflight_report.get("operator_answers", []) or []),
+            "answered_questions": list(preflight_report.get("answered_questions", []) or []),
+        }
+    return spec_payload
 
 
 def _build_expectation_contract(
@@ -450,6 +465,7 @@ def _build_expectation_contract(
     else:
         expected_outcome.append("The broken or weak repo path is repaired")
         expected_ux.append("The repaired path is verifiable with focused checks")
+        constraints.append("Do not introduce a new top-level source namespace unless explicitly requested")
 
     if "standalone" in text:
         constraints.append("Result must not require CAM runtime imports")
@@ -503,6 +519,28 @@ def _scan_for_cam_runtime_imports(repo_path: Path) -> list[str]:
     return hits
 
 
+def _extract_source_namespaces_from_snapshot(snapshot: dict[str, Any]) -> set[str]:
+    namespaces: set[str] = set()
+    if not isinstance(snapshot, dict):
+        return namespaces
+    for rel_path in snapshot.keys():
+        rel = Path(str(rel_path))
+        parts = rel.parts
+        if len(parts) >= 2 and parts[0] == "src":
+            namespaces.add(parts[1])
+        elif parts and parts[0] not in {".git", "tests", "docs", "data", "tmp"}:
+            if rel.suffix == ".py" and len(parts) >= 1:
+                namespaces.add(parts[0].replace(".py", ""))
+    return namespaces
+
+
+def _scan_for_new_source_namespaces(repo_path: Path, baseline_snapshot: dict[str, Any]) -> list[str]:
+    current_snapshot = _snapshot_repo_state(repo_path)
+    baseline_namespaces = _extract_source_namespaces_from_snapshot(baseline_snapshot)
+    current_namespaces = _extract_source_namespaces_from_snapshot(current_snapshot)
+    return sorted(ns for ns in current_namespaces - baseline_namespaces if ns)
+
+
 def _assess_expectation_contract(
     spec: dict[str, Any],
     *,
@@ -543,6 +581,8 @@ def _assess_expectation_contract(
         or (repo_path / "main.py").exists()
     )
     cam_runtime_hits = _scan_for_cam_runtime_imports(repo_path) if repo_exists else []
+    baseline_snapshot = spec.get("baseline_snapshot", {}) if isinstance(spec.get("baseline_snapshot"), dict) else {}
+    new_source_namespaces = _scan_for_new_source_namespaces(repo_path, baseline_snapshot) if repo_exists and baseline_snapshot else []
 
     for clause in contract.get("expected_outcome", []) or []:
         text = str(clause).lower()
@@ -572,6 +612,8 @@ def _assess_expectation_contract(
         text = str(clause).lower()
         if "cam runtime" in text:
             score_clause(str(clause), len(cam_runtime_hits) == 0, hard=True)
+        elif "new top-level source namespace" in text:
+            score_clause(str(clause), len(new_source_namespaces) == 0, hard=True)
         elif "materially change" in text:
             score_clause(str(clause), repo_changed, hard=True)
         else:
@@ -585,6 +627,8 @@ def _assess_expectation_contract(
         summary = f"matched {scored}/{total} expectation clauses"
     if cam_runtime_hits:
         unmet.append("CAM runtime imports found in: " + ", ".join(cam_runtime_hits[:5]))
+    if new_source_namespaces:
+        unmet.append("New source namespaces introduced: " + ", ".join(new_source_namespaces[:5]))
     return {
         "score": score,
         "matched": matched,
@@ -632,6 +676,7 @@ def _seed_create_runbook(
             seeded_steps.extend([
                 "Read the create spec and isolate the files or flows that must change to satisfy the request.",
                 "Implement the requested repair or refinement with focused edits rather than broad rewrites.",
+                "Avoid introducing new top-level source namespaces or parallel subsystems unless the spec explicitly requires them.",
                 "Add or update regression tests for the changed behavior.",
                 "Run the acceptance checks and confirm the target repo materially changed.",
             ])
@@ -691,6 +736,34 @@ def _write_create_spec(spec: dict[str, Any]) -> Path:
     return out_path
 
 
+def _write_preflight_artifact(report: dict[str, Any]) -> Path:
+    _PREFLIGHT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = _time.strftime("%Y%m%d-%H%M%S", _time.localtime(report["created_at_epoch"]))
+    repo_slug = Path(report["target_repo"]).name or "repo"
+    filename = f"{timestamp}-{repo_slug}-preflight.json"
+    out_path = _PREFLIGHT_DIR / filename
+    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return out_path
+
+
+def _load_preflight_artifact(preflight_file: Optional[str]) -> Optional[dict[str, Any]]:
+    if not preflight_file:
+        return None
+    path = Path(preflight_file)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists():
+        raise typer.BadParameter(f"Preflight artifact not found: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"Invalid preflight artifact JSON: {path} ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter(f"Preflight artifact must contain a JSON object: {path}")
+    payload["artifact_path"] = str(path)
+    return payload
+
+
 def _build_create_description(request: str, repo_mode: str, spec_path: Path, spec_items: list[str]) -> str:
     lines = [
         f"Creation mode: {repo_mode}",
@@ -711,6 +784,585 @@ def _build_create_description(request: str, repo_mode: str, spec_path: Path, spe
         ]
     )
     return "\n".join(lines)
+
+
+def _infer_preflight_task_kind(request: str, repo_mode: str, spec_items: list[str]) -> str:
+    text = " ".join([request, *spec_items]).lower()
+    if "apply everything" in text or "like repo-a" in text or "repo-a" in text or "transfer" in text:
+        return "pattern_transfer"
+    if repo_mode == "new":
+        return "greenfield_app_creation"
+    if any(word in text for word in ("bug", "fix", "repair", "broken", "failing")):
+        return "bugfix"
+    if any(word in text for word in ("redesign", "modernize", "ux", "ui", "website")):
+        return "repo_transformation"
+    if any(word in text for word in ("refactor", "restructure", "future proof", "future-proof")):
+        return "repo_transformation"
+    if any(word in text for word in ("research", "explore", "spike", "investigate")):
+        return "research_spike"
+    if any(word in text for word in ("design", "architecture", "system")):
+        return "architecture_design"
+    return "feature_build"
+
+
+def _estimate_preflight_complexity(
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+) -> str:
+    text = " ".join([request, *spec_items]).lower()
+    score = 0
+    if repo_mode == "new":
+        score += 2
+    if len(spec_items) >= 4:
+        score += 1
+    if len(acceptance_checks) >= 3:
+        score += 1
+    if any(word in text for word in ("integrate", "migration", "security", "auth", "database", "deploy", "api")):
+        score += 2
+    if any(word in text for word in ("repo-a", "transfer", "replicate", "apply everything", "assimilated")):
+        score += 2
+    if any(word in text for word in ("production", "showpiece", "end-to-end", "autonomous")):
+        score += 1
+    if any(word in text for word in ("web app", "website", "frontend", "backend", "full stack", "full-stack")):
+        score += 1
+
+    if score <= 1:
+        return "low"
+    if score <= 3:
+        return "medium"
+    if score <= 5:
+        return "high"
+    return "very_high"
+
+
+def _time_estimate_for_complexity(complexity: str) -> dict[str, str]:
+    mapping = {
+        "low": {
+            "elapsed": "15-45 minutes",
+            "active": "10-30 minutes",
+            "phases": "1-2 phases",
+        },
+        "medium": {
+            "elapsed": "45-120 minutes",
+            "active": "30-90 minutes",
+            "phases": "2-4 phases",
+        },
+        "high": {
+            "elapsed": "2-6 hours",
+            "active": "90-240 minutes",
+            "phases": "4-6 phases",
+        },
+        "very_high": {
+            "elapsed": "1-3 days",
+            "active": "4-12 hours",
+            "phases": "6+ phases",
+        },
+    }
+    return mapping[complexity]
+
+
+def _budget_estimate_for_complexity(config: Any, complexity: str) -> dict[str, Any]:
+    ranges = {
+        "low": (0.25, 0.75),
+        "medium": (0.75, 2.5),
+        "high": (2.5, 8.0),
+        "very_high": (8.0, 20.0),
+    }
+    low, high = ranges[complexity]
+    caps = {
+        "per_repo_default_usd": round(float(getattr(config.fleet, "max_cost_per_repo_usd", 5.0)), 2),
+        "per_day_default_usd": round(float(getattr(config.fleet, "max_cost_per_day_usd", 50.0)), 2),
+        "per_agent_max_usd": round(
+            max((float(getattr(agent_cfg, "max_budget_usd", 0.0)) for agent_cfg in getattr(config, "agents", {}).values()), default=0.0),
+            2,
+        ),
+    }
+    return {
+        "usd_range": f"${low:.2f}-${high:.2f}",
+        "assumption": "Assumes a normal create/validate loop with 1-3 execution attempts.",
+        "config_caps": caps,
+    }
+
+
+def _build_preflight_questions(
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+) -> list[dict[str, str]]:
+    text = " ".join([request, *spec_items]).lower()
+    questions: list[dict[str, str]] = []
+
+    def add(priority: str, question: str, why: str, default: str) -> None:
+        if len(questions) >= 7:
+            return
+        questions.append({
+            "priority": priority,
+            "question": question,
+            "why_it_matters": why,
+            "default_if_unanswered": default,
+        })
+
+    if not acceptance_checks:
+        add(
+            "must",
+            "What exact acceptance checks or demo outcomes will count as success?",
+            "Without explicit checks, CAM can only prove basic repo change, not task completion.",
+            "CAM will infer generic checks from the request, which may miss the real quality bar.",
+        )
+    if repo_mode == "new":
+        add(
+            "must",
+            "What is the required delivery surface: CLI, web app, API, library, or mixed?",
+            "The architecture, files, and verification plan depend on the interface contract.",
+            "CAM will choose the smallest plausible delivery surface implied by the request.",
+        )
+    if any(word in text for word in ("repo-a", "transfer", "apply everything", "replicate")):
+        add(
+            "must",
+            "Which parts of the source repo must transfer: UX, architecture, workflows, data model, integrations, or all of them?",
+            "Pattern transfer fails when source scope is implied but not enumerated.",
+            "CAM will transfer only the most visible behavior and architecture patterns.",
+        )
+    if any(word in text for word in ("api", "integration", "oauth", "auth", "database", "scrape")):
+        add(
+            "must",
+            "What external systems, credentials, or runtime dependencies are available right now?",
+            "Execution can stall immediately if CAM plans around dependencies that do not exist.",
+            "CAM will assume no privileged credentials and no external system write access.",
+        )
+    if any(word in text for word in ("health", "medical", "finance", "legal", "security", "compliance", "privacy", "phi", "pii")):
+        add(
+            "must",
+            "Are there domain constraints such as privacy, compliance, security, or auditability requirements?",
+            "These constraints change architecture, logging, storage, and validation.",
+            "CAM will assume normal engineering standards but no special regulated-domain guarantees.",
+        )
+    add(
+        "should",
+        "What is the time ceiling and how much autonomy should CAM use before stopping for human review?",
+        "This determines whether CAM should aim for a single pass, milestone slicing, or bounded retries.",
+        "CAM will use a bounded supervised loop with milestone-oriented checkpoints.",
+    )
+    add(
+        "should",
+        "What budget ceiling should CAM respect for model/tool usage on this task?",
+        "Budget limits affect model choice, retry strategy, and whether broader exploration is justified.",
+        "CAM will assume the default configured budget caps in claw.toml.",
+    )
+    return questions
+
+
+def _normalize_preflight_answers(answers: list[str]) -> list[str]:
+    return [item.strip() for item in answers if item and item.strip()]
+
+
+def _merge_preflight_answers(
+    prior_report: Optional[dict[str, Any]],
+    answers: list[str],
+) -> list[str]:
+    prior_answers = []
+    if isinstance(prior_report, dict):
+        prior_answers = [str(item).strip() for item in prior_report.get("operator_answers", []) or [] if str(item).strip()]
+    merged: list[str] = []
+    for item in [*prior_answers, *_normalize_preflight_answers(answers)]:
+        if item and item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _answer_covers_question(question: str, answers: list[str]) -> bool:
+    q = question.lower()
+    answer_blob = " ".join(answers).lower()
+    topic_groups = [
+        (("acceptance", "demo", "success"), ("acceptance", "demo", "test", "success", "done")),
+        (("delivery surface", "cli", "web app", "api", "library"), ("cli", "web", "website", "api", "library", "surface")),
+        (("source repo", "must transfer", "architecture", "workflows"), ("transfer", "ux", "architecture", "workflow", "data model", "integration", "source")),
+        (("external systems", "credentials", "dependencies"), ("credential", "dependency", "database", "oauth", "api key", "integration")),
+        (("privacy", "compliance", "security", "auditability"), ("privacy", "compliance", "security", "audit", "phi", "pii", "hipaa")),
+        (("time ceiling", "autonomy"), ("time", "hours", "minutes", "autonomy", "review", "checkpoint")),
+        (("budget ceiling",), ("budget", "$", "usd", "cost")),
+    ]
+    for q_terms, a_terms in topic_groups:
+        if any(term in q for term in q_terms):
+            return any(term in answer_blob for term in a_terms)
+    return False
+
+
+def _apply_answers_to_preflight(
+    report: dict[str, Any],
+    answers: list[str],
+) -> dict[str, Any]:
+    normalized_answers = _normalize_preflight_answers(answers)
+    if not normalized_answers:
+        report["operator_answers"] = []
+        report["answered_questions"] = []
+        return report
+
+    remaining_questions: list[dict[str, str]] = []
+    answered_questions: list[dict[str, str]] = []
+    for item in list(report.get("clarifying_questions", []) or []):
+        question = str(item.get("question", "")).strip()
+        if question and _answer_covers_question(question, normalized_answers):
+            answered_questions.append(item)
+        else:
+            remaining_questions.append(item)
+    report["clarifying_questions"] = remaining_questions
+    report["operator_answers"] = normalized_answers
+    report["answered_questions"] = answered_questions
+
+    answer_blob = " ".join(normalized_answers).lower()
+    blockers = list(report.get("hard_blockers", []) or [])
+    filtered_blockers: list[str] = []
+    for blocker in blockers:
+        lowered = blocker.lower()
+        if "credentials" in lowered or "external systems" in lowered:
+            if any(term in answer_blob for term in ("credential", "available", "database", "oauth", "api key", "no external")):
+                continue
+        if "compliance" in lowered or "privacy" in lowered or "audit" in lowered:
+            if any(term in answer_blob for term in ("hipaa", "privacy", "compliance", "no special", "standard security", "no phi", "no pii")):
+                continue
+        filtered_blockers.append(blocker)
+    report["hard_blockers"] = filtered_blockers
+
+    if normalized_answers:
+        report["assumptions"] = list(report.get("assumptions", []) or []) + [
+            "Operator-provided preflight answers were incorporated into the task contract."
+        ]
+    return report
+
+
+def _should_auto_preflight(
+    *,
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+    execute: bool,
+) -> bool:
+    complexity = _estimate_preflight_complexity(request, repo_mode, spec_items, acceptance_checks)
+    text = " ".join([request, *spec_items]).lower()
+
+    if execute:
+        return True
+    if not acceptance_checks:
+        return True
+    if complexity in {"high", "very_high"}:
+        return True
+    if any(word in text for word in (
+        "repo-a", "transfer", "replicate", "apply everything", "inspired by",
+        "medical", "health", "finance", "legal", "security", "privacy",
+        "oauth", "database", "integration", "production", "showpiece",
+    )):
+        return True
+    return False
+
+
+def _build_preflight_prompt(
+    *,
+    repo_path: Path,
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+    answers: list[str],
+    heuristic: dict[str, Any],
+) -> str:
+    payload = {
+        "target_repo": str(repo_path),
+        "repo_mode": repo_mode,
+        "request": request,
+        "spec_items": spec_items,
+        "acceptance_checks": acceptance_checks,
+        "operator_answers": answers,
+        "heuristic_baseline": heuristic,
+    }
+    return (
+        "You are CAM Preflight, a task-scoping and execution-readiness agent.\n"
+        "Examine the requested task before implementation begins.\n"
+        "Do not code. Do not claim progress on the build.\n"
+        "Return strict JSON with these keys only:\n"
+        "{\n"
+        '  "task_restatement": string,\n'
+        '  "likely_deliverable": string,\n'
+        '  "definition_of_done": [string],\n'
+        '  "assumptions": [string],\n'
+        '  "hard_blockers": [string],\n'
+        '  "clarifying_questions": [{"priority":"must|should","question":string,"why_it_matters":string,"default_if_unanswered":string}],\n'
+        '  "estimated_phases": [string],\n'
+        '  "time_estimate": {"elapsed": string, "active": string, "phases": string},\n'
+        '  "budget_estimate": {"usd_range": string, "assumption": string},\n'
+        '  "recommended_mode": "proceed_now|proceed_after_answers|split_into_milestone_1|not_ready",\n'
+        '  "proposed_first_milestone": string,\n'
+        '  "confidence": "low|medium|high"\n'
+        "}\n"
+        "Rules:\n"
+        "- Ask at most 7 clarifying questions.\n"
+        "- Distinguish must-know blockers from nice-to-have preferences.\n"
+        "- Prefer defaults only when they are defensible.\n"
+        "- If the task is underspecified, say so directly.\n"
+        "- Stay concise and operator-facing.\n\n"
+        f"Task payload:\n{json.dumps(payload, indent=2)}"
+    )
+
+
+def _normalize_preflight_report(report: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(fallback)
+    for key in (
+        "task_restatement",
+        "likely_deliverable",
+        "recommended_mode",
+        "proposed_first_milestone",
+        "confidence",
+    ):
+        value = report.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+
+    for key in ("definition_of_done", "assumptions", "hard_blockers", "estimated_phases"):
+        value = report.get(key)
+        if isinstance(value, list):
+            normalized[key] = [str(item).strip() for item in value if str(item).strip()]
+
+    raw_questions = report.get("clarifying_questions")
+    if isinstance(raw_questions, list):
+        questions: list[dict[str, str]] = []
+        for item in raw_questions[:7]:
+            if not isinstance(item, dict):
+                continue
+            priority = str(item.get("priority", "should")).strip().lower()
+            if priority not in {"must", "should"}:
+                priority = "should"
+            question = str(item.get("question", "")).strip()
+            if not question:
+                continue
+            questions.append({
+                "priority": priority,
+                "question": question,
+                "why_it_matters": str(item.get("why_it_matters", "")).strip(),
+                "default_if_unanswered": str(item.get("default_if_unanswered", "")).strip(),
+            })
+        if questions:
+            normalized["clarifying_questions"] = questions
+
+    for key in ("time_estimate", "budget_estimate"):
+        value = report.get(key)
+        if isinstance(value, dict):
+            normalized[key] = {**normalized.get(key, {}), **value}
+    return normalized
+
+
+async def _generate_llm_preflight_report(
+    *,
+    config: Any,
+    repo_path: Path,
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+    answers: list[str],
+    heuristic_report: dict[str, Any],
+    preferred_agent: Optional[str],
+) -> dict[str, Any]:
+    from claw.llm.client import LLMClient, LLMMessage
+
+    model = _select_ideation_model(config, preferred_agent=preferred_agent)
+    prompt = _build_preflight_prompt(
+        repo_path=repo_path,
+        request=request,
+        repo_mode=repo_mode,
+        spec_items=spec_items,
+        acceptance_checks=acceptance_checks,
+        answers=answers,
+        heuristic=heuristic_report,
+    )
+    client = LLMClient(config.llm)
+    try:
+        response = await client.complete_json(
+            [LLMMessage("user", prompt)],
+            model=model,
+            temperature=0.2,
+        )
+    finally:
+        await client.close()
+    return _normalize_preflight_report(response, heuristic_report)
+
+
+async def _run_preflight_async(
+    *,
+    repo_path: Path,
+    request: str,
+    repo_mode: str,
+    spec_items: list[str],
+    acceptance_checks: list[str],
+    answers: list[str],
+    prior_report: Optional[dict[str, Any]],
+    preferred_agent: Optional[str],
+    config_path: Optional[str],
+    live: bool,
+) -> tuple[dict[str, Any], Optional[Path]]:
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config_path) if config_path else None)
+    complexity = _estimate_preflight_complexity(request, repo_mode, spec_items, acceptance_checks)
+    task_kind = _infer_preflight_task_kind(request, repo_mode, spec_items)
+    merged_answers = _merge_preflight_answers(prior_report, answers)
+    heuristic_report: dict[str, Any] = {
+        "version": 1,
+        "target_repo": str(repo_path),
+        "repo_mode": repo_mode,
+        "task_kind": task_kind,
+        "complexity": complexity,
+        "confidence": "medium" if complexity in {"low", "medium"} else "low",
+        "task_restatement": request.strip(),
+        "likely_deliverable": (
+            "A standalone repository outcome" if repo_mode == "new"
+            else "A modified target repository with the requested capability"
+        ),
+        "definition_of_done": [
+            "Requested outcome is implemented in the target repository",
+            "Acceptance checks pass or are concretely specified",
+            "Result is understandable enough for an operator to run or review",
+        ],
+        "assumptions": [
+            "CAM may use mined/assimilated knowledge where relevant",
+            "The target repo path is the correct workspace for this task",
+        ],
+        "hard_blockers": [],
+        "clarifying_questions": _build_preflight_questions(request, repo_mode, spec_items, acceptance_checks),
+        "estimated_phases": [
+            "Clarify scope and acceptance criteria",
+            "Plan architecture and implementation steps",
+            "Execute changes in the target repo",
+            "Run validation and repair any failures",
+        ],
+        "time_estimate": _time_estimate_for_complexity(complexity),
+        "budget_estimate": _budget_estimate_for_complexity(cfg, complexity),
+        "recommended_mode": "proceed_after_answers",
+        "proposed_first_milestone": "Lock the task contract, acceptance checks, and execution surface before implementation.",
+        "created_at_epoch": int(_time.time()),
+        "live_model_used": None,
+        "llm_enhanced": False,
+        "operator_answers": merged_answers,
+        "answered_questions": [],
+        "reused_preflight_artifact": prior_report.get("artifact_path") if isinstance(prior_report, dict) else None,
+    }
+
+    must_questions = [q for q in heuristic_report["clarifying_questions"] if q.get("priority") == "must"]
+    if not must_questions:
+        heuristic_report["recommended_mode"] = "proceed_now" if complexity in {"low", "medium"} else "split_into_milestone_1"
+    elif complexity in {"high", "very_high"}:
+        heuristic_report["recommended_mode"] = "split_into_milestone_1"
+
+    if any(word in request.lower() for word in ("api", "database", "oauth", "integration")):
+        heuristic_report["hard_blockers"].append("Execution may require external systems or credentials that are not yet confirmed.")
+    if any(word in request.lower() for word in ("health", "medical", "finance", "legal", "phi", "pii")):
+        heuristic_report["hard_blockers"].append("Domain constraints may require explicit compliance, privacy, or audit decisions before execution.")
+
+    report = heuristic_report
+    if live:
+        try:
+            report = await _generate_llm_preflight_report(
+                config=cfg,
+                repo_path=repo_path,
+                request=request,
+                repo_mode=repo_mode,
+                spec_items=spec_items,
+                acceptance_checks=acceptance_checks,
+                answers=merged_answers,
+                heuristic_report=heuristic_report,
+                preferred_agent=preferred_agent,
+            )
+            report["llm_enhanced"] = True
+            report["live_model_used"] = _select_ideation_model(cfg, preferred_agent=preferred_agent)
+        except Exception as exc:
+            report = dict(heuristic_report)
+            report["assumptions"] = list(report["assumptions"]) + [f"Live preflight enrichment failed: {type(exc).__name__}"]
+
+    report = _apply_answers_to_preflight(report, merged_answers)
+    report["created_at_epoch"] = heuristic_report["created_at_epoch"]
+    artifact_path = _write_preflight_artifact(report)
+    report["artifact_path"] = str(artifact_path)
+    artifact_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report, artifact_path
+
+
+def _display_preflight_report(report: dict[str, Any]) -> None:
+    console.print("\n[bold]CAM Preflight[/bold]")
+    console.print(f"  Repo: {report.get('target_repo', '')}")
+    console.print(f"  Mode: {report.get('repo_mode', '')}")
+    console.print(f"  Kind: {report.get('task_kind', '')}")
+    console.print(f"  Complexity: {report.get('complexity', '')}")
+    console.print(f"  Confidence: {report.get('confidence', '')}")
+    if report.get("artifact_path"):
+        console.print(f"  Artifact: {report['artifact_path']}")
+    if report.get("reused_preflight_artifact"):
+        console.print(f"  Reused artifact: {report['reused_preflight_artifact']}")
+    if report.get("live_model_used"):
+        console.print(f"  Model: {report['live_model_used']}")
+
+    console.print("\n[cyan]Task Restatement[/cyan]")
+    console.print(f"  {report.get('task_restatement', '')}")
+    console.print("\n[cyan]Likely Deliverable[/cyan]")
+    console.print(f"  {report.get('likely_deliverable', '')}")
+
+    done_items = report.get("definition_of_done", []) or []
+    if done_items:
+        console.print("\n[cyan]Definition Of Done[/cyan]")
+        for item in done_items:
+            console.print(f"  - {item}")
+
+    blockers = report.get("hard_blockers", []) or []
+    if blockers:
+        console.print("\n[red]Hard Blockers[/red]")
+        for item in blockers:
+            console.print(f"  - {item}")
+
+    assumptions = report.get("assumptions", []) or []
+    if assumptions:
+        console.print("\n[cyan]Assumptions[/cyan]")
+        for item in assumptions[:6]:
+            console.print(f"  - {item}")
+
+    answers = report.get("operator_answers", []) or []
+    if answers:
+        console.print("\n[cyan]Recorded Answers[/cyan]")
+        for item in answers:
+            console.print(f"  - {item}")
+
+    questions = report.get("clarifying_questions", []) or []
+    if questions:
+        console.print("\n[yellow]Clarifying Questions[/yellow]")
+        for item in questions:
+            priority = str(item.get("priority", "should")).upper()
+            console.print(f"  - [{priority}] {item.get('question', '')}")
+            why = str(item.get("why_it_matters", "")).strip()
+            default = str(item.get("default_if_unanswered", "")).strip()
+            if why:
+                console.print(f"      why: {why}")
+            if default:
+                console.print(f"      default: {default}")
+
+    console.print("\n[cyan]Time Estimate[/cyan]")
+    for key, value in (report.get("time_estimate", {}) or {}).items():
+        console.print(f"  {key}: {value}")
+
+    console.print("\n[cyan]Budget Estimate[/cyan]")
+    budget = report.get("budget_estimate", {}) or {}
+    if budget.get("usd_range"):
+        console.print(f"  usd_range: {budget['usd_range']}")
+    if budget.get("assumption"):
+        console.print(f"  assumption: {budget['assumption']}")
+    caps = budget.get("config_caps", {}) or {}
+    for key, value in caps.items():
+        console.print(f"  {key}: {value}")
+
+    console.print("\n[bold]Recommended Execution Mode[/bold]")
+    console.print(f"  {report.get('recommended_mode', '')}")
+    console.print("\n[bold]Proposed First Milestone[/bold]")
+    console.print(f"  {report.get('proposed_first_milestone', '')}")
 
 
 def _select_ideation_model(config: Any, preferred_agent: Optional[str] = None) -> str:
@@ -3445,6 +4097,50 @@ async def _quickstart_async(
 
 
 @app.command()
+def preflight(
+    repo: str = typer.Argument(..., help="Target repository path to scope, fix, augment, or create"),
+    request: str = typer.Option(..., "--request", "-r", prompt="What should CAM preflight?", help="Plain-language task request"),
+    repo_mode: str = typer.Option("augment", "--repo-mode", help="Repo mode: fixed, augment, new"),
+    spec: list[str] = typer.Option([], "--spec", help="Requirement/spec line (repeatable)"),
+    check: list[str] = typer.Option([], "--check", help="Acceptance check / validation rule (repeatable)"),
+    answer: list[str] = typer.Option([], "--answer", help="Operator answer to a preflight clarification item (repeatable)"),
+    preflight_file: Optional[str] = typer.Option(None, "--preflight-file", help="Reuse a prior preflight artifact and its recorded answers"),
+    agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Preferred agent/model family for live preflight"),
+    live: bool = typer.Option(False, "--live/--no-live", help="Use an LLM to enrich the preflight artifact"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Pre-examine a requested task, ask clarifying questions, and estimate time/budget."""
+    _setup_logging(False)
+
+    repo_path = Path(repo).resolve()
+    if repo_mode not in ("fixed", "augment", "new"):
+        console.print("[red]--repo-mode must be one of: fixed, augment, new[/red]")
+        raise typer.Exit(1)
+
+    if repo_mode != "new" and not repo_path.exists():
+        console.print(f"[red]Repository path does not exist: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    if repo_mode == "new":
+        repo_path.mkdir(parents=True, exist_ok=True)
+
+    prior_report = _load_preflight_artifact(preflight_file)
+    report, _ = asyncio.run(_run_preflight_async(
+        repo_path=repo_path,
+        request=request,
+        repo_mode=repo_mode,
+        spec_items=[s.strip() for s in spec if s.strip()],
+        acceptance_checks=[c.strip() for c in check if c.strip()],
+        answers=[a.strip() for a in answer if a.strip()],
+        prior_report=prior_report,
+        preferred_agent=agent,
+        config_path=config,
+        live=live,
+    ))
+    _display_preflight_report(report)
+
+
+@app.command()
 def create(
     repo: str = typer.Argument(..., help="Target repository path to fix, augment, or create"),
     request: str = typer.Option(..., "--request", "-r", prompt="What should CAM create?", help="Plain-language outcome request"),
@@ -3456,6 +4152,12 @@ def create(
     spec: list[str] = typer.Option([], "--spec", help="Initial requirement/spec line (repeatable)"),
     step: list[str] = typer.Option([], "--step", help="Suggested execution step (repeatable)"),
     check: list[str] = typer.Option([], "--check", help="Acceptance check / validation rule (repeatable)"),
+    answer: list[str] = typer.Option([], "--answer", help="Operator answer to a preflight clarification item (repeatable)"),
+    preflight_file: Optional[str] = typer.Option(None, "--preflight-file", help="Reuse a prior preflight artifact and its recorded answers"),
+    preflight: bool = typer.Option(False, "--preflight/--no-preflight", help="Force structured task preflight before creating the task"),
+    auto_preflight: bool = typer.Option(True, "--auto-preflight/--no-auto-preflight", help="Automatically run preflight for risky or ambiguous create tasks"),
+    preflight_live: bool = typer.Option(False, "--preflight-live/--no-preflight-live", help="Use an LLM to enrich the create preflight"),
+    accept_preflight_defaults: bool = typer.Option(False, "--accept-preflight-defaults", help="Allow execution to continue using CAM's stated defaults even if must-clarify questions remain"),
     preview: bool = typer.Option(True, "--preview/--no-preview", help="Preview runbook after creating the task"),
     execute: bool = typer.Option(False, "--execute", help="Immediately execute the created task"),
     max_minutes: int = typer.Option(20, "--max-minutes", help="Wall-clock time guardrail for creation/execution"),
@@ -3494,6 +4196,12 @@ def create(
                 spec_items=spec,
                 execution_steps=step,
                 acceptance_checks=check,
+                answers=answer,
+                preflight_file=preflight_file,
+                preflight=preflight,
+                auto_preflight=auto_preflight,
+                preflight_live=preflight_live,
+                accept_preflight_defaults=accept_preflight_defaults,
                 preview=preview,
                 execute=execute,
                 config_path=config,
@@ -3516,10 +4224,70 @@ async def _create_async(
     spec_items: list[str],
     execution_steps: list[str],
     acceptance_checks: list[str],
+    answers: list[str],
+    preflight_file: Optional[str],
+    preflight: bool,
+    auto_preflight: bool,
+    preflight_live: bool,
+    accept_preflight_defaults: bool,
     preview: bool,
     execute: bool,
     config_path: Optional[str],
 ) -> None:
+    preflight_report: Optional[dict[str, Any]] = None
+    prior_report = _load_preflight_artifact(preflight_file)
+    run_preflight = preflight or (
+        auto_preflight and _should_auto_preflight(
+            request=request,
+            repo_mode=repo_mode,
+            spec_items=[s.strip() for s in spec_items if s.strip()],
+            acceptance_checks=[c.strip() for c in acceptance_checks if c.strip()],
+            execute=execute,
+        )
+    )
+    if run_preflight:
+        preflight_report, _ = await _run_preflight_async(
+            repo_path=repo_path,
+            request=request,
+            repo_mode=repo_mode,
+            spec_items=[s.strip() for s in spec_items if s.strip()],
+            acceptance_checks=[c.strip() for c in acceptance_checks if c.strip()],
+            answers=[a.strip() for a in answers if a.strip()],
+            prior_report=prior_report,
+            preferred_agent=agent,
+            config_path=config_path,
+            live=preflight_live,
+        )
+        if not preflight:
+            console.print(
+                "\n[dim]Auto-preflight triggered because the create request looks risky, ambiguous, or expensive.[/dim]"
+            )
+        _display_preflight_report(preflight_report)
+        must_questions = [
+            q for q in (preflight_report.get("clarifying_questions", []) or [])
+            if q.get("priority") == "must"
+        ]
+        if execute and preflight_report.get("hard_blockers"):
+            console.print(
+                "\n[red]Preflight found hard blockers.[/red]"
+            )
+            console.print(
+                "[red]Resolve the blockers first, or rerun create without --execute if you only want the spec/task created.[/red]"
+            )
+            raise typer.Exit(2)
+        if execute and must_questions and not accept_preflight_defaults:
+            console.print(
+                "\n[red]Preflight found unresolved must-clarify questions.[/red]"
+            )
+            console.print(
+                "[red]Execution is blocked until you answer them or rerun with --accept-preflight-defaults to explicitly accept CAM's stated defaults.[/red]"
+            )
+            raise typer.Exit(2)
+        if execute and must_questions and accept_preflight_defaults:
+            console.print(
+                "\n[yellow]Proceeding with execution using CAM's preflight defaults for unresolved must-clarify questions.[/yellow]"
+            )
+
     spec_payload = _build_create_spec(
         repo_path=repo_path,
         request=request,
@@ -3529,6 +4297,7 @@ async def _create_async(
         execution_steps=[s.strip() for s in execution_steps if s.strip()],
         acceptance_checks=[c.strip() for c in acceptance_checks if c.strip()],
         spec_items=[s.strip() for s in spec_items if s.strip()],
+        preflight_report=preflight_report,
     )
     spec_path = _write_create_spec(spec_payload)
     description = _build_create_description(
@@ -3537,6 +4306,11 @@ async def _create_async(
         spec_path=spec_path,
         spec_items=spec_payload["spec_items"],
     )
+    if preflight_report and preflight_report.get("artifact_path"):
+        description = description + (
+            f"\n\nPreflight artifact: {preflight_report['artifact_path']}\n"
+            f"Preflight recommended mode: {preflight_report.get('recommended_mode', '')}"
+        )
 
     console.print("\n[bold]CAM Create[/bold]")
     console.print(f"  Repo: {repo_path}")

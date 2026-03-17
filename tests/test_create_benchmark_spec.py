@@ -278,6 +278,32 @@ class TestCreateBenchmarkSpecHelpers:
         assert any("expectation mismatch" in item for item in summary["findings"])
         assert any("CAM runtime" in item for item in summary["expectation_assessment"]["unmet"])
 
+    def test_validate_create_spec_flags_new_source_namespace_in_fixed_mode(self, tmp_path):
+        from claw import cli
+
+        repo_path = tmp_path / "app"
+        (repo_path / "src" / "claw").mkdir(parents=True)
+        (repo_path / "src" / "claw" / "__init__.py").write_text("", encoding="utf-8")
+
+        spec = cli._build_create_spec(
+            repo_path=repo_path,
+            request="Repair the existing repo behavior.",
+            repo_mode="fixed",
+            title="Repair repo",
+            task_type="architecture",
+            execution_steps=[],
+            acceptance_checks=[],
+            spec_items=[],
+        )
+
+        (repo_path / "src" / "cam").mkdir(parents=True)
+        (repo_path / "src" / "cam" / "__init__.py").write_text("", encoding="utf-8")
+
+        passed, summary = cli._validate_create_spec(spec, max_minutes=1)
+        assert passed is False
+        assert any("expectation mismatch" in item for item in summary["findings"])
+        assert any("New source namespaces introduced" in item for item in summary["expectation_assessment"]["unmet"])
+
     def test_validate_benchmark_against_spec(self):
         from claw import cli
 
