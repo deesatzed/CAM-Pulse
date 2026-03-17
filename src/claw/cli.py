@@ -6338,6 +6338,58 @@ async def _kb_capability_async(cap_id: str) -> None:
 
 
 @kb_app.command()
+def patterns(
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of promoted global patterns to show"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show globally promoted methodologies with attribution-backed evidence."""
+    asyncio.run(_kb_patterns_async(limit))
+
+
+async def _kb_patterns_async(limit: int) -> None:
+    from rich.panel import Panel
+    from claw.evolution.pattern_learner import PatternLearner
+
+    engine, repository = await _kb_engine()
+    try:
+        patterns = await PatternLearner(repository).get_global_patterns(limit=limit)
+        if not patterns:
+            console.print("[yellow]No global patterns found yet.[/yellow]")
+            return
+
+        console.print(Panel.fit(
+            f"[bold cyan]Global Patterns[/bold cyan]\n"
+            f"[bold]{len(patterns)}[/bold] promoted methodologies with evidence summaries",
+            border_style="cyan",
+        ))
+
+        table = Table(show_lines=True)
+        table.add_column("ID", width=8, style="cyan")
+        table.add_column("Description", max_width=42)
+        table.add_column("State", width=10)
+        table.add_column("Succ", justify="right", width=6)
+        table.add_column("Attr", justify="right", width=6)
+        table.add_column("Expect", justify="right", width=7)
+        table.add_column("Evidence", width=10)
+
+        for item in patterns:
+            expectation_score = item.get("avg_expectation_match_score")
+            table.add_row(
+                item["methodology_id"][:8],
+                item["problem_description"][:42],
+                item.get("lifecycle_state", "-"),
+                str(item.get("success_count", 0)),
+                str(item.get("attributed_success_count", 0)),
+                "-" if expectation_score is None else f"{float(expectation_score):.2f}",
+                str(item.get("evidence_source", "legacy")),
+            )
+        console.print(table)
+        console.print("\n[dim]Use 'cam kb capability <id>' to inspect attribution history for a specific promoted methodology.[/dim]")
+    finally:
+        await engine.close()
+
+
+@kb_app.command()
 def domains(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:

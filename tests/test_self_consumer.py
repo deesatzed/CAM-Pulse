@@ -25,6 +25,7 @@ from claw.core.models import (
     HypothesisEntry,
     HypothesisOutcome,
     Methodology,
+    MethodologyUsageEntry,
     Project,
     Task,
     TaskStatus,
@@ -367,6 +368,7 @@ class TestConsumeEvolution:
     ):
         """Evolution analysis works with multi-generation methodologies."""
         # Create methodologies with generation > 0
+        project = await _create_project(repository)
         for i in range(4):
             embedding = embedding_engine.encode(f"evolved methodology {i}")
             m = Methodology(
@@ -379,9 +381,40 @@ class TestConsumeEvolution:
                 success_count=3,
             )
             await repository.save_methodology(m)
+            task = await _create_completed_task(repository, project.id, f"evolution usage {i}")
+            await repository.log_methodology_usage(
+                MethodologyUsageEntry(
+                    task_id=task.id,
+                    methodology_id=m.id,
+                    project_id=project.id,
+                    stage="outcome_attributed",
+                    success=True,
+                    expectation_match_score=0.9,
+                    quality_score=0.85,
+                )
+            )
 
         report = await self_consumer.consume_methodology_evolution()
         assert report.patterns_found >= 1
+
+    async def test_evolution_skips_methodologies_without_expectation_matched_evidence(
+        self, self_consumer, repository, embedding_engine
+    ):
+        for i in range(4):
+            embedding = embedding_engine.encode(f"weak evolved methodology {i}")
+            m = Methodology(
+                problem_description=f"weak evolved methodology {i}",
+                problem_embedding=embedding,
+                solution_code=f"weak evolved code {i}",
+                lifecycle_state="thriving",
+                generation=1,
+                parent_ids=["parent-1"],
+                success_count=5,
+            )
+            await repository.save_methodology(m)
+
+        report = await self_consumer.consume_methodology_evolution()
+        assert report.patterns_found == 0
 
 
 # ---------------------------------------------------------------------------

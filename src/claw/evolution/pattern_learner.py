@@ -387,7 +387,7 @@ class PatternLearner:
         """Get all global-scope patterns (promoted methodologies).
 
         Returns methodologies with ``scope = 'global'``, ordered by
-        success_count descending.
+        success_count descending, enriched with attributed-usage evidence.
         """
         rows = await self.repository.engine.fetch_all(
             """SELECT id, problem_description, solution_code, methodology_notes,
@@ -425,6 +425,7 @@ class PatternLearner:
             failure_count = int(row.get("failure_count", 0))
             total = success_count + failure_count
             success_rate = success_count / total if total > 0 else 0.0
+            usage_stats = await self.repository.get_methodology_usage_stats_for_methodology(str(row["id"]))
 
             patterns.append({
                 "methodology_id": str(row["id"]),
@@ -440,6 +441,11 @@ class PatternLearner:
                 "tags": tags,
                 "fitness_vector": fitness,
                 "created_at": row.get("created_at"),
+                "attributed_success_count": int(usage_stats.get("attributed_success_count", 0) or 0),
+                "attributed_failure_count": int(usage_stats.get("attributed_failure_count", 0) or 0),
+                "avg_expectation_match_score": usage_stats.get("avg_expectation_match_score"),
+                "avg_quality_score": usage_stats.get("avg_quality_score"),
+                "evidence_source": "attribution" if int(usage_stats.get("attributed_success_count", 0) or 0) > 0 else "legacy",
             })
 
         return patterns

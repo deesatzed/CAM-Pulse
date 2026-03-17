@@ -117,6 +117,12 @@ class TestCLIUXSurface:
         }
         assert {"keycheck", "status", "expectations"} <= doctor_names
 
+        kb_names = {
+            cmd.name or (cmd.callback.__name__ if cmd.callback else "")
+            for cmd in groups["kb"].registered_commands
+        }
+        assert {"search", "capability", "patterns", "domains", "synergies"} <= kb_names
+
     def test_benchmark_command_registered(self):
         commands = _command_map()
         assert "benchmark" in commands

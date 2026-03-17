@@ -10,7 +10,7 @@ Circular reasoning guards:
 - Tag all outputs 'self_consumed' — cannot be re-consumed
 - Lower initial fitness (0.3 relevance penalty)
 - Max generation depth (configurable, default 3)
-- Require thriving + success_count >= 3 for global promotion
+- Prefer methodologies with expectation-matched attributed evidence
 """
 
 from __future__ import annotations
@@ -65,6 +65,7 @@ class SelfConsumer:
         self.config = config
         self.gov_config = governance_config or GovernanceConfig()
         self.assimilation_engine: Any = None
+        self._expectation_threshold = 0.65
 
     async def run_full_consumption(
         self,
@@ -272,7 +273,11 @@ class SelfConsumer:
         evolved: list[Methodology] = []
         for state in ("viable", "thriving"):
             batch = await self.repository.get_methodologies_by_state(state, limit=100)
-            evolved.extend(m for m in batch if m.generation >= min_generation)
+            for methodology in batch:
+                if methodology.generation < min_generation:
+                    continue
+                if await self._methodology_has_self_consume_evidence(methodology):
+                    evolved.append(methodology)
 
         if len(evolved) < 3:
             return report
@@ -313,6 +318,17 @@ class SelfConsumer:
                 report.patterns_blocked_dedup += 1
 
         return report
+
+    async def _methodology_has_self_consume_evidence(self, methodology: Methodology) -> bool:
+        """Require expectation-matched attribution before consuming methodology evolution."""
+        usage_stats = await self.repository.get_methodology_usage_stats_for_methodology(methodology.id)
+        attributed_success_count = int(usage_stats.get("attributed_success_count", 0) or 0)
+        avg_expectation_match_score = usage_stats.get("avg_expectation_match_score")
+        if attributed_success_count <= 0:
+            return False
+        if avg_expectation_match_score is None:
+            return False
+        return float(avg_expectation_match_score) >= self._expectation_threshold
 
     async def _store_meta_pattern(
         self,

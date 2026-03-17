@@ -1072,6 +1072,17 @@ class TestPatternLearnerGlobalPatterns:
                 failure_count=0,
             )
             await _save_methodology_with_counts(repository, meth)
+            await repository.log_methodology_usage(
+                MethodologyUsageEntry(
+                    task_id=task.id,
+                    methodology_id=meth.id,
+                    project_id=project.id,
+                    stage="outcome_attributed",
+                    success=True,
+                    expectation_match_score=0.9,
+                    quality_score=0.85,
+                )
+            )
 
         # Create one project-scope methodology (should NOT appear)
         local_meth = Methodology(
@@ -1094,6 +1105,9 @@ class TestPatternLearnerGlobalPatterns:
         assert "problem_description" in patterns[0]
         assert "success_rate" in patterns[0]
         assert "tags" in patterns[0]
+        assert "attributed_success_count" in patterns[0]
+        assert "avg_expectation_match_score" in patterns[0]
+        assert patterns[0]["evidence_source"] in {"attribution", "legacy"}
 
     async def test_get_global_patterns_empty(self, repository):
         pl = PatternLearner(repository)
