@@ -194,6 +194,16 @@ Use this when:
 .venv/bin/cam validate --spec-file data/create_specs/<spec-file>.json
 ```
 
+### Run the medCSS showpiece harness end-to-end
+
+```bash
+OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh
+```
+
+Use this when:
+- you want one command that enforces `create --execute` plus `validate` plus direct postchecks
+- you need a concrete showpiece proof path for CAM website-generation workflows
+
 ### Safe first-contact workflow for a single repo
 
 ```bash

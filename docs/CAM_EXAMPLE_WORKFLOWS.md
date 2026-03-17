@@ -227,6 +227,47 @@ What this shows:
 - results are written to a real summary artifact
 - CAM is reporting the benchmark honestly, even when the best result only matches baseline
 
+## Workflow 7: medCSS Showpiece Harness (Create + Validate + Postcheck)
+
+Command:
+
+```bash
+OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh
+```
+
+Observed output excerpt:
+
+```text
+medCSS modernizer test completed
+  Agent:       claude
+  Target repo: /Users/o2satz/multiclaw/tmp/medcss-web-modernizer-20260317-140202
+  Spec file:   /Users/o2satz/multiclaw/data/create_specs/20260317-140202-medcss-web-modernizer-20260317-140202-create-spec.json
+  Create exit: 0
+  Validate exit:0
+  Postcheck exit:0
+```
+
+Validation excerpt:
+
+```text
+CAM Validate
+  Checks run: 6
+  Expectation match: 1.000
+
+Validation passed.
+  OK test -f index.html
+  OK test -f README.md
+  OK rg -q -i 'current site' .
+  OK rg -q -i 'purpose' .
+  OK rg -q -i 'design direction' .
+  OK rg -q -i 'analyze first' .
+```
+
+What this shows:
+- CAM can run a full create workflow from a style prompt file (`medCSS.md`)
+- the generated app can pass executable acceptance checks and expectation matching in one run
+- this path now has a concrete reproducible harness instead of ad-hoc manual steps
+
 ## What These Workflows Add Up To
 
 Taken together, these examples show that CAM can already do a meaningful subset of the promised operator loop:
@@ -236,6 +277,7 @@ Taken together, these examples show that CAM can already do a meaningful subset 
 - export learned memory for external use
 - turn a requested outcome into a spec-backed task
 - validate the target repo against that spec
+- run a hardened showpiece harness that enforces create + validate + postcheck gates
 - benchmark a standalone downstream path
 
 What they do not yet prove is universal autonomous app creation. That remains the harder open problem.

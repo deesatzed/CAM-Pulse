@@ -58,6 +58,9 @@ As of March 15, 2026, these commands were run successfully in this repo:
   - `.venv/bin/cam mine tests/fixtures/embedding_forge --scan-only --depth 3 --max-repos 5`
 - standalone benchmark path:
   - `.venv/bin/cam forge-benchmark --max-minutes 1`
+- medCSS showpiece execution path (March 17, 2026):
+  - `OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh`
+  - outcome: create/validate/postcheck all passed in one run (`create=0`, `validate=0`, `postcheck=0`, `Checks run: 6`)
 
 ### Proven by targeted automated tests
 
@@ -409,6 +412,7 @@ These are the preferred expert paths. The older flat commands still work as comp
 - Short operator quick-reference: [docs/CAM_OPERATOR_CHEATSHEET.md](docs/CAM_OPERATOR_CHEATSHEET.md)
 - End-to-end example workflows and outputs: [docs/CAM_EXAMPLE_WORKFLOWS.md](docs/CAM_EXAMPLE_WORKFLOWS.md)
 - Current public showpiece: [docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md)
+- medCSS website modernizer showpiece: [docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md](docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md)
 - Blog-style writeup of the showpiece run: [docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md](docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md)
 
 ## Development
