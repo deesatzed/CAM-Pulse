@@ -469,7 +469,7 @@ What it does:
 Syntax:
 
 ```bash
-cam create <repo> --request "..." [--repo-mode fixed|augment|new] [--spec "..."] [--step "..."] [--check "..."] [--preflight] [--preflight-live] [--answer "..."] [--preflight-file path.json] [--accept-preflight-defaults] [--execute] [--max-minutes N]
+cam create <repo> --request "..." [--repo-mode fixed|augment|new] [--spec "..."] [--step "..."] [--check "..."] [--preflight] [--preflight-live] [--answer "..."] [--preflight-file path.json] [--accept-preflight-defaults] [--namespace-safe-retry] [--execute] [--max-minutes N]
 ```
 
 Repo modes:
@@ -483,6 +483,7 @@ Important execution behavior:
 - if preflight finds unresolved must-clarify questions, execution stops until you answer them or explicitly pass `--accept-preflight-defaults`
 - if preflight finds hard blockers, execution does not proceed
 - in `repo-mode fixed`, CAM now rejects runs that introduce a new top-level source namespace unless that was explicitly requested
+- `--namespace-safe-retry` (enabled by default) auto-runs one constrained retry in `repo-mode fixed` when execution is rejected for `new_source_namespace`
 
 Example use case:
 You want CAM to build a new standalone app using prior mined knowledge.

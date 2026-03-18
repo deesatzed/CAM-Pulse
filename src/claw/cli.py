@@ -619,6 +619,13 @@ def _enforce_quickstart_execution_guard(
     outcome: Any,
     verification: Any,
 ) -> tuple[Any, Any, list[str]]:
+    baseline_namespaces = _extract_source_namespaces_from_snapshot(baseline_snapshot)
+    # Only enforce the fixed-repo namespace guard when the target already has
+    # an established source namespace baseline. New repo creation is allowed to
+    # introduce its first namespace.
+    if not baseline_namespaces:
+        return outcome, verification, []
+
     new_source_namespaces = _scan_for_new_source_namespaces(repo_path, baseline_snapshot)
     if not new_source_namespaces:
         return outcome, verification, []
@@ -4275,9 +4282,11 @@ async def _quickstart_async(
     agent: Optional[str],
     execution_steps: list[str],
     acceptance_checks: list[str],
-    preview: bool,
-    execute: bool,
-    config_path: Optional[str],
+    repo_mode: str = "augment",
+    namespace_safe_retry: bool = False,
+    preview: bool = True,
+    execute: bool = False,
+    config_path: Optional[str] = None,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import CycleResult, Project, Task, TaskStatus
@@ -4352,41 +4361,73 @@ async def _quickstart_async(
                 return
 
             console.print("\n[cyan]Executing quickstart task...[/cyan]")
-            micro = MicroClaw(ctx=ctx, project_id=project.id)
-            start = _time.monotonic()
-            task_ctx = await micro.evaluate(task)
-            decision = await micro.decide(task_ctx)
-            acted = await micro.act(decision)
-            verified = await micro.verify(acted)
-            await micro.learn(verified)
-            duration = _time.monotonic() - start
 
-            agent_id, _, outcome, verification = verified
-            outcome, verification, rolled_back = _enforce_quickstart_execution_guard(
-                repo_path=repo_path,
-                baseline_snapshot=baseline_snapshot,
-                outcome=outcome,
-                verification=verification,
-            )
-            if rolled_back:
-                console.print(
-                    "\n[yellow]Quickstart safety rollback removed added files from the failed execution.[/yellow]"
+            async def _execute_once(active_task: Task) -> tuple[Any, Any]:
+                micro = MicroClaw(ctx=ctx, project_id=project.id)
+                start = _time.monotonic()
+                task_ctx = await micro.evaluate(active_task)
+                decision = await micro.decide(task_ctx)
+                acted = await micro.act(decision)
+                verified = await micro.verify(acted)
+                await micro.learn(verified)
+                duration = _time.monotonic() - start
+
+                agent_id, _, outcome, verification = verified
+                outcome, verification, rolled_back = _enforce_quickstart_execution_guard(
+                    repo_path=repo_path,
+                    baseline_snapshot=baseline_snapshot,
+                    outcome=outcome,
+                    verification=verification,
                 )
-                for rel_path in rolled_back[:8]:
-                    console.print(f"  - {rel_path}")
-            cycle_result = CycleResult(
-                cycle_level="micro",
-                task_id=task.id,
-                project_id=project.id,
-                agent_id=agent_id,
-                outcome=outcome,
-                verification=verification,
-                success=verification.approved,
-                tokens_used=outcome.tokens_used,
-                cost_usd=outcome.cost_usd,
-                duration_seconds=duration,
+                if rolled_back:
+                    console.print(
+                        "\n[yellow]Quickstart safety rollback removed added files from the failed execution.[/yellow]"
+                    )
+                    for rel_path in rolled_back[:8]:
+                        console.print(f"  - {rel_path}")
+                cycle_result = CycleResult(
+                    cycle_level="micro",
+                    task_id=active_task.id,
+                    project_id=project.id,
+                    agent_id=agent_id,
+                    outcome=outcome,
+                    verification=verification,
+                    success=verification.approved,
+                    tokens_used=outcome.tokens_used,
+                    cost_usd=outcome.cost_usd,
+                    duration_seconds=duration,
+                )
+                _display_task_result(cycle_result)
+                return outcome, verification
+
+            outcome, verification = await _execute_once(task)
+            should_retry_namespace_safe = (
+                namespace_safe_retry
+                and repo_mode == "fixed"
+                and getattr(outcome, "failure_reason", "") == "new_source_namespace"
             )
-            _display_task_result(cycle_result)
+            if should_retry_namespace_safe:
+                console.print(
+                    "\n[yellow]Namespace guard rejected the execution. Retrying once with namespace-safe fixed-mode constraints...[/yellow]"
+                )
+                retry_task = Task(
+                    project_id=project.id,
+                    title=f"{title} (namespace-safe retry)",
+                    description=(
+                        description
+                        + "\n\nNamespace-safe retry constraint: In fixed mode, modify only existing source namespaces. "
+                        + "Do not create new top-level source directories or package roots."
+                    ),
+                    status=TaskStatus.PENDING,
+                    priority=valid_priorities[priority],
+                    task_type=task_type,
+                    recommended_agent=recommended,
+                    execution_steps=[s.strip() for s in execution_steps if s.strip()],
+                    acceptance_checks=[s.strip() for s in acceptance_checks if s.strip()],
+                )
+                await ctx.repository.create_task(retry_task)
+                console.print(f"[dim]Retry task created: {retry_task.id}[/dim]")
+                await _execute_once(retry_task)
         else:
             console.print("\n[dim]Run `cam quickstart ... --execute` when you're ready to run it.[/dim]")
 
@@ -4456,6 +4497,11 @@ def create(
     auto_preflight: bool = typer.Option(True, "--auto-preflight/--no-auto-preflight", help="Automatically run preflight for risky or ambiguous create tasks"),
     preflight_live: bool = typer.Option(False, "--preflight-live/--no-preflight-live", help="Use an LLM to enrich the create preflight"),
     accept_preflight_defaults: bool = typer.Option(False, "--accept-preflight-defaults", help="Allow execution to continue using CAM's stated defaults even if must-clarify questions remain"),
+    namespace_safe_retry: bool = typer.Option(
+        True,
+        "--namespace-safe-retry/--no-namespace-safe-retry",
+        help="When fixed-mode execution is rejected for a new source namespace, auto-run one namespace-safe retry.",
+    ),
     preview: bool = typer.Option(True, "--preview/--no-preview", help="Preview runbook after creating the task"),
     execute: bool = typer.Option(False, "--execute", help="Immediately execute the created task"),
     max_minutes: int = typer.Option(20, "--max-minutes", help="Wall-clock time guardrail for creation/execution"),
@@ -4500,6 +4546,7 @@ def create(
                 auto_preflight=auto_preflight,
                 preflight_live=preflight_live,
                 accept_preflight_defaults=accept_preflight_defaults,
+                namespace_safe_retry=namespace_safe_retry,
                 preview=preview,
                 execute=execute,
                 config_path=config,
@@ -4531,6 +4578,7 @@ async def _create_async(
     preview: bool,
     execute: bool,
     config_path: Optional[str],
+    namespace_safe_retry: bool = True,
 ) -> None:
     preflight_report: Optional[dict[str, Any]] = None
     prior_report = _load_preflight_artifact(preflight_file)
@@ -4625,6 +4673,8 @@ async def _create_async(
         agent=agent,
         execution_steps=spec_payload["execution_steps"],
         acceptance_checks=spec_payload["acceptance_checks"],
+        repo_mode=repo_mode,
+        namespace_safe_retry=namespace_safe_retry,
         preview=preview,
         execute=execute,
         config_path=config_path,

@@ -33,44 +33,47 @@ What the harness does:
 ## Most Recent Passing Run
 
 Run timestamp:
-- `20260317-140202`
+- `20260318-130044`
 
 Generated repo:
-- `/Users/o2satz/multiclaw/tmp/medcss-web-modernizer-20260317-140202`
+- `/Users/o2satz/multiclaw/tmp/medcss-modernizer-showpiece`
+- versioned copy in main repo: [`apps/medcss_modernizer_showpiece`](../apps/medcss_modernizer_showpiece)
 
 Key artifacts:
-- `index.html`
-- `README.md`
-- `package.json`
-- `tests/test-workflow.html`
+- `app/cli.py`
+- `app/modernizer.py`
+- `demo_report.md`
+- `demo_landing.html`
 
 Validation outcomes:
-- `Create exit: 0`
-- `Validate exit: 0`
-- `Postcheck exit: 0`
-- `Checks run: 6`
-- `Expectation match: 1.000`
+- first generation pass failed (syntax/import defects), then repaired and revalidated
+- repaired acceptance checks:
+  - `pytest -q`: `16 passed`
+  - `python -m app.cli --help`: passed
+  - `python -m app.cli --site ... --purpose ... --ideas ... --out demo_report.md --html-out demo_landing.html`: passed
+  - `test -f demo_report.md`: passed
+  - `test -f demo_landing.html`: passed
+  - `grep -q 'Modernization Recommendations' demo_report.md`: passed
+- `cam validate` on create spec: `Checks run: 6`, `Expectation match: 1.000`
 
-Logs:
-- `/Users/o2satz/multiclaw/tmp/medcss_test_logs/medcss_modernizer_create_20260317-140202.log`
-- `/Users/o2satz/multiclaw/tmp/medcss_test_logs/medcss_modernizer_validate_20260317-140202.log`
-- `/Users/o2satz/multiclaw/tmp/medcss_test_logs/medcss_modernizer_postcheck_20260317-140202.log`
+Spec file:
+- `/Users/o2satz/multiclaw/data/create_specs/20260318-130044-medcss-modernizer-showpiece-create-spec.json`
 
 ## Acceptance Checks Executed
 
 These checks were executed (not treated as manual text-only checks):
 
 ```bash
-test -f index.html
-test -f README.md
-rg -q -i 'current site' .
-rg -q -i 'purpose' .
-rg -q -i 'design direction' .
-rg -q -i 'analyze first' .
+pytest -q
+python -m app.cli --help
+python -m app.cli --site 'legacy clinic site with dense text' --purpose 'increase trust and appointment conversions' --ideas 'minimal, airy, modern medical' --out demo_report.md --html-out demo_landing.html
+test -f demo_report.md
+test -f demo_landing.html
+grep -q 'Modernization Recommendations' demo_report.md
 ```
 
 ## Notes
 
 - This proves a real create/validate pass for this showpiece path.
 - This does not claim universal autonomous app generation for all requests.
-- If you need stronger UX quality enforcement, extend the harness with browser E2E assertions.
+- If you need stronger UX quality enforcement for this CLI showpiece, add snapshot-style assertions over generated markdown/html artifacts.

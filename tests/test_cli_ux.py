@@ -244,6 +244,7 @@ class TestCLIUXSurface:
         assert "auto_preflight" in sig.parameters
         assert "preflight_live" in sig.parameters
         assert "accept_preflight_defaults" in sig.parameters
+        assert "namespace_safe_retry" in sig.parameters
         assert "max_minutes" in sig.parameters
 
     def test_chat_guides_mine_request(self):

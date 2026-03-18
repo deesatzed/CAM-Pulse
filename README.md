@@ -67,6 +67,9 @@ As of March 15, 2026, these commands were run successfully in this repo:
 - medCSS showpiece execution path (March 17, 2026):
   - `OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh`
   - outcome: create/validate/postcheck all passed in one run (`create=0`, `validate=0`, `postcheck=0`, `Checks run: 6`)
+- reliability pipeline path (March 18, 2026):
+  - `OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/run_cam_reliability_pipeline.sh`
+  - outcome: full 1-7 operator workflow (test, mine, reassess, create, validate, showpiece) in one harness
 
 ### Proven by targeted automated tests
 
@@ -124,6 +127,8 @@ These are important because they are easy places for agent systems to become fak
   - parser hardened to recover from raw control characters inside JSON strings.
 - Zip-downloaded repo folders being invisible to `mine`
   - CAM can now discover source-tree style repos without `.git` metadata.
+- Fixed-mode create drift via new source namespaces
+  - CAM now offers `--namespace-safe-retry` on `cam create` to auto-retry once with hardened fixed-mode constraints after a namespace-guard rejection.
 
 ## Honest Limits
 
@@ -265,6 +270,22 @@ To inspect the folder state before mining:
 .venv/bin/cam mine-report /path/to/source-repos --depth 2
 ```
 
+### 3. Run an expectation-to-reality ladder (increasing complexity)
+
+```bash
+OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_expectation_ladder.sh
+```
+
+This staged harness proves CAM behavior across escalating levels:
+- health/expectation preflight
+- standalone build + validate
+- workflow UX build + validate
+- mine + reassess transfer quality
+- CAM self-improvement contract (and optional guarded self-execution)
+
+Guide:
+- [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
+
 To verify keys/providers before a live run without starting mining:
 
 ```bash
@@ -315,6 +336,13 @@ If you want CAM to attempt execution immediately:
   --check "pytest -q" \
   --execute \
   --max-minutes 20
+
+# for fixed-mode reliability hardening loops
+.venv/bin/cam create /path/to/target-repo \
+  --repo-mode fixed \
+  --request "Improve create+validate reliability" \
+  --namespace-safe-retry \
+  --execute
 ```
 
 ### 5. Validate the result before trusting it
@@ -455,6 +483,9 @@ These are the preferred expert paths. The older flat commands still work as comp
 - End-to-end example workflows and outputs: [docs/CAM_EXAMPLE_WORKFLOWS.md](docs/CAM_EXAMPLE_WORKFLOWS.md)
 - Current public showpiece: [docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md)
 - medCSS website modernizer showpiece: [docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md](docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md)
+- expectation ladder showpiece: [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
+- one-command reliability pipeline harness: [scripts/run_cam_reliability_pipeline.sh](scripts/run_cam_reliability_pipeline.sh)
+- versioned medCSS CLI showpiece app: [apps/medcss_modernizer_showpiece](apps/medcss_modernizer_showpiece)
 - Blog-style writeup of the showpiece run: [docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md](docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md)
 
 ## Development

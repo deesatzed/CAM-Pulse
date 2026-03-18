@@ -261,6 +261,141 @@ class TestPreflightAnswerHandling:
         assert "src/claw/__init__.py" in baseline
 
     @pytest.mark.asyncio
+    async def test_quickstart_fixed_mode_namespace_safe_retry(self, tmp_path, monkeypatch):
+        from claw import cli
+        from claw.core.models import TaskOutcome, VerificationResult
+
+        repo_path = tmp_path / "demo"
+        (repo_path / "src" / "claw").mkdir(parents=True)
+        (repo_path / "src" / "claw" / "__init__.py").write_text("", encoding="utf-8")
+        (repo_path / "tests").mkdir()
+
+        created_tasks: list[object] = []
+        attempts = {"count": 0}
+
+        class FakeRepository:
+            async def get_project_by_name(self, _name):
+                return None
+
+            async def create_project(self, project):
+                return None
+
+            async def create_task(self, task):
+                created_tasks.append(task)
+
+        class FakeAgent:
+            def can_modify_workspace(self):
+                return True
+
+        class FakeCtx:
+            def __init__(self):
+                self.repository = FakeRepository()
+                self.agents = {"claude": FakeAgent()}
+
+            async def close(self):
+                return None
+
+        class FakeMicroClaw:
+            def __init__(self, ctx, project_id):
+                self.ctx = ctx
+                self.project_id = project_id
+
+            async def evaluate(self, task):
+                return task
+
+            async def decide(self, task_ctx):
+                return ("claude", task_ctx)
+
+            async def act(self, decision):
+                attempts["count"] += 1
+                if attempts["count"] == 1:
+                    (repo_path / "cam").mkdir()
+                    (repo_path / "cam" / "cli.py").write_text("print('bad drift')\n", encoding="utf-8")
+                    outcome = TaskOutcome(
+                        approach_summary="bad namespace drift",
+                        tests_passed=True,
+                        files_changed=["cam/cli.py"],
+                        raw_output="created cam namespace",
+                    )
+                else:
+                    (repo_path / "src" / "claw" / "retry_safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+                    outcome = TaskOutcome(
+                        approach_summary="namespace-safe retry",
+                        tests_passed=True,
+                        files_changed=["src/claw/retry_safe.py"],
+                        raw_output="updated existing namespace only",
+                    )
+                return ("claude", decision[1], outcome)
+
+            async def verify(self, acted):
+                return (
+                    acted[0],
+                    acted[1],
+                    acted[2],
+                    VerificationResult(approved=True, violations=[], recommendations=[], quality_score=0.95),
+                )
+
+            async def learn(self, verified):
+                return None
+
+        async def fake_create(*args, **kwargs):
+            return FakeCtx()
+
+        monkeypatch.setattr("claw.core.factory.ClawFactory.create", fake_create)
+        monkeypatch.setattr("claw.cycle.MicroClaw", FakeMicroClaw)
+        monkeypatch.setattr(cli, "_display_task_result", lambda cycle_result: None)
+
+        await cli._quickstart_async(
+            repo_path=repo_path,
+            title="Guard quickstart",
+            description="Avoid namespace drift",
+            priority="high",
+            task_type="architecture",
+            agent="claude",
+            execution_steps=[],
+            acceptance_checks=["pytest -q"],
+            repo_mode="fixed",
+            namespace_safe_retry=True,
+            preview=False,
+            execute=True,
+            config_path=None,
+        )
+
+        assert attempts["count"] == 2
+        assert len(created_tasks) == 2
+        assert "(namespace-safe retry)" in created_tasks[1].title
+        assert not (repo_path / "cam").exists()
+        assert (repo_path / "src" / "claw" / "retry_safe.py").exists()
+
+    def test_quickstart_namespace_guard_skips_new_repo_baseline(self, tmp_path):
+        from claw import cli
+        from claw.core.models import TaskOutcome, VerificationResult
+
+        repo_path = tmp_path / "newrepo"
+        repo_path.mkdir()
+        (repo_path / "app").mkdir()
+        (repo_path / "app" / "cli.py").write_text("print('ok')\n", encoding="utf-8")
+
+        outcome = TaskOutcome(
+            approach_summary="new repo scaffold",
+            tests_passed=True,
+            files_changed=["app/cli.py"],
+            raw_output="created app namespace",
+        )
+        verification = VerificationResult(approved=True, violations=[], recommendations=[], quality_score=0.9)
+        updated_outcome, updated_verification, rolled_back = cli._enforce_quickstart_execution_guard(
+            repo_path=repo_path,
+            baseline_snapshot={},
+            outcome=outcome,
+            verification=verification,
+        )
+
+        assert rolled_back == []
+        assert updated_outcome.failure_reason in (None, "")
+        assert updated_verification.approved is True
+        assert (repo_path / "app" / "cli.py").exists()
+
+    @pytest.mark.asyncio
     async def test_run_preflight_async_reuses_prior_answers(self, tmp_path):
         from claw import cli
 

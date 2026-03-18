@@ -162,6 +162,19 @@ If you want CAM to attempt execution immediately:
   --max-minutes 20
 ```
 
+For fixed-mode reliability loops, use namespace-safe retry:
+
+```bash
+.venv/bin/cam create /path/to/target-repo \
+  --repo-mode fixed \
+  --request "Improve CAM reliability for create+validate loops" \
+  --check "pytest -q tests/test_create_benchmark_spec.py tests/test_cycle.py tests/test_openrouter.py tests/test_cli_ux.py tests/test_preflight_cli.py tests/test_config.py tests/test_miner.py" \
+  --namespace-safe-retry \
+  --accept-preflight-defaults \
+  --execute \
+  --max-minutes 30
+```
+
 ## 8. Validate Before You Trust
 
 ```bash
@@ -242,6 +255,27 @@ OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh
 Use this when:
 - you want one command that enforces `create --execute` plus `validate` plus direct postchecks
 - you need a concrete showpiece proof path for CAM website-generation workflows
+
+### Run the expectation ladder harness (increasing complexity)
+
+```bash
+OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_expectation_ladder.sh
+```
+
+Use this when:
+- you want staged proof from expectation to reality, not one isolated demo
+- you want CAM to mine/reassess and then produce a self-improvement contract for CAM itself
+- you want optional guarded CAM self-execution (`CAM_LADDER_SELF_EXECUTE=1`)
+
+### Run the full 1-7 reliability pipeline harness
+
+```bash
+OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/run_cam_reliability_pipeline.sh
+```
+
+Use this when:
+- you want one command that runs baseline test + mine + reassess + fixed-mode create + validate + showpiece generation
+- you want one summary artifact under `tmp/reliability_pipeline/<run-id>/summary.md`
 
 ### Safe first-contact workflow for a single repo
 
