@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import toml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from claw.core.exceptions import ConfigError
@@ -250,6 +251,24 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _load_runtime_env(config_path: Path) -> None:
+    """Load local .env files for CLI/runtime subprocess consistency.
+
+    This keeps shell-exported values authoritative (`override=False`) while
+    letting direct CLI subprocesses pick up keys from the repo-level `.env`.
+    """
+    candidates: list[Path] = []
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        candidates.append(cwd_env)
+    repo_env = config_path.parent / ".env"
+    if repo_env.exists() and repo_env not in candidates:
+        candidates.append(repo_env)
+
+    for env_path in candidates:
+        load_dotenv(env_path, override=False)
+
+
 def load_config(config_path: Optional[Path] = None) -> ClawConfig:
     """Load CLAW config from TOML file.
 
@@ -264,6 +283,8 @@ def load_config(config_path: Optional[Path] = None) -> ClawConfig:
 
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
+
+    _load_runtime_env(config_path)
 
     with open(config_path) as f:
         raw = toml.load(f)

@@ -17,6 +17,7 @@ import re
 import time
 import hashlib
 import ast
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -477,6 +478,7 @@ class RepoMiner:
         self.scan_ledger = RepoScanLedger(
             scan_ledger_path or _default_scan_ledger_path(config)
         )
+        self._assimilation_parallelism = 4
 
     @staticmethod
     def _extract_symbols_from_file(repo_path: Path, relative_path: str, max_symbols: int = 8) -> list[dict[str, str]]:
@@ -876,13 +878,20 @@ class RepoMiner:
         action_template_ids: list[str] = []
         for finding in findings:
             try:
-                methodology_id = await self.store_finding(finding, target_project_id)
+                methodology_id = await self.store_finding(
+                    finding,
+                    target_project_id,
+                    run_assimilation=False,
+                )
                 if methodology_id:
                     methodology_ids.append(methodology_id)
                 if finding.action_template_id:
                     action_template_ids.append(finding.action_template_id)
             except Exception as e:
                 logger.warning("Failed to store finding '%s': %s", finding.title, e)
+
+        if methodology_ids and self.assimilation_engine is not None:
+            await self._assimilate_methodologies(methodology_ids)
 
         duration = time.monotonic() - start
         return RepoMiningResult(
@@ -901,6 +910,8 @@ class RepoMiner:
         self,
         finding: MiningFinding,
         target_project_id: str,
+        *,
+        run_assimilation: bool = True,
     ) -> Optional[str]:
         """Store a mining finding in semantic memory as a Methodology.
 
@@ -983,13 +994,29 @@ class RepoMiner:
             )
 
         # Trigger capability assimilation
-        if self.assimilation_engine is not None:
+        if run_assimilation and self.assimilation_engine is not None:
             try:
                 await self.assimilation_engine.assimilate(methodology.id)
             except Exception as e:
                 logger.warning("Assimilation failed for %s: %s", methodology.id, e)
 
         return methodology.id
+
+    async def _assimilate_methodologies(self, methodology_ids: list[str]) -> None:
+        if self.assimilation_engine is None or not methodology_ids:
+            return
+
+        limit = max(1, min(self._assimilation_parallelism, len(methodology_ids)))
+        semaphore = asyncio.Semaphore(limit)
+
+        async def _run(methodology_id: str) -> None:
+            async with semaphore:
+                try:
+                    await self.assimilation_engine.assimilate(methodology_id)
+                except Exception as e:
+                    logger.warning("Assimilation failed for %s: %s", methodology_id, e)
+
+        await asyncio.gather(*(_run(methodology_id) for methodology_id in methodology_ids))
 
     async def _check_already_mined(self, repo_name: str) -> list[str]:
         """Check what CLAW already knows from a repo.

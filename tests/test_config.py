@@ -1,6 +1,7 @@
 """Tests for CLAW configuration system."""
 
 from pathlib import Path
+import os
 
 from claw.core.config import (
     AgentConfig,
@@ -43,6 +44,22 @@ class TestLoadConfig:
         config = load_config()
         assert "ANTHROPIC_API_KEY" in config.security.safe_env_vars
         assert "/System" in config.security.forbidden_paths
+
+    def test_loads_repo_env_without_overriding_existing_env(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "claw.toml").write_text("[database]\ndb_path='data/test.db'\n", encoding="utf-8")
+        (repo / ".env").write_text("OPENROUTER_API_KEY=from-env-file\n", encoding="utf-8")
+
+        monkeypatch.chdir(repo)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        load_config(repo / "claw.toml")
+        assert os.getenv("OPENROUTER_API_KEY") == "from-env-file"
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "from-shell")
+        load_config(repo / "claw.toml")
+        assert os.getenv("OPENROUTER_API_KEY") == "from-shell"
 
 
 class TestDefaults:

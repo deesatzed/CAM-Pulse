@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import time
+import asyncio
 
 import pytest
 
@@ -219,6 +220,27 @@ class TestSerializeRepo:
         # Should have stopped before processing all files
         assert count < 10
         assert "TRUNCATED" in content
+
+
+class TestAssimilationParallelism:
+    @pytest.mark.asyncio
+    async def test_assimilate_methodologies_runs_concurrently(self, repo_miner):
+        calls: list[str] = []
+
+        class SlowAssimilationEngine:
+            async def assimilate(self, methodology_id: str):
+                calls.append(methodology_id)
+                await asyncio.sleep(0.05)
+
+        repo_miner.assimilation_engine = SlowAssimilationEngine()
+        repo_miner._assimilation_parallelism = 4
+
+        start = time.monotonic()
+        await repo_miner._assimilate_methodologies(["a", "b", "c", "d"])
+        duration = time.monotonic() - start
+
+        assert sorted(calls) == ["a", "b", "c", "d"]
+        assert duration < 0.16
 
     def test_empty_directory(self, tmp_path):
         """Empty directory returns empty string and 0 file count."""

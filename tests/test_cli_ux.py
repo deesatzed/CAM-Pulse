@@ -274,6 +274,17 @@ class TestCLIUXSurface:
         assert "--scan-only" in result.output
         assert "--changed-only" in result.output
 
+    def test_resolve_operator_path_recovers_trailing_space_match(self, tmp_path, monkeypatch):
+        from claw import cli
+
+        real_dir = tmp_path / "repoTST "
+        real_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        resolved = cli._resolve_operator_path("repoTST")
+
+        assert resolved == real_dir.resolve()
+
     def test_ideate_has_focus_promote_and_time_guardrail(self):
         commands = _command_map()
         cb = commands["ideate"]

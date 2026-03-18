@@ -306,6 +306,33 @@ def _agent_supports_workspace_execution(agent: Any) -> bool:
     return False
 
 
+def _resolve_operator_path(raw_path: str) -> Path:
+    """Resolve operator-supplied paths, including whitespace-mismatch recovery.
+
+    If the exact path does not exist but a sibling entry differs only by leading
+    or trailing whitespace, prefer the unique match and warn.
+    """
+    candidate = Path(raw_path).expanduser()
+    if candidate.exists():
+        return candidate.resolve()
+
+    parent = candidate.parent if str(candidate.parent) not in {"", "."} else Path.cwd()
+    try:
+        if parent.exists():
+            stripped_name = candidate.name.strip()
+            matches = [entry for entry in parent.iterdir() if entry.name.strip() == stripped_name]
+            if len(matches) == 1:
+                resolved = matches[0].resolve()
+                console.print(
+                    f"[yellow]Path '{raw_path}' not found exactly. Using whitespace-normalized match: {resolved}[/yellow]"
+                )
+                return resolved
+    except OSError:
+        pass
+
+    return candidate.resolve()
+
+
 def _workspace_execution_agents(ctx: Any) -> tuple[list[str], list[str]]:
     executable: list[str] = []
     read_only: list[str] = []
@@ -5030,7 +5057,7 @@ def mine(
     """
     _setup_logging(verbose)
 
-    dir_path = Path(directory).resolve()
+    dir_path = _resolve_operator_path(directory)
     if not dir_path.exists():
         console.print(f"[red]Directory does not exist: {dir_path}[/red]")
         raise typer.Exit(1)
@@ -5089,7 +5116,7 @@ def mine_report(
     """Show repo mining status from the persistent mining ledger."""
     _setup_logging(False)
 
-    dir_path = Path(directory).resolve()
+    dir_path = _resolve_operator_path(directory)
     if not dir_path.exists():
         console.print(f"[red]Directory does not exist: {dir_path}[/red]")
         raise typer.Exit(1)
