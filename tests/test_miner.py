@@ -520,6 +520,31 @@ class TestParseFindings:
         assert len(results) == 1
         assert results[0].source_files == []
 
+    def test_handles_null_json_fields_without_crashing(self):
+        """Null-valued fields from LLM JSON should not trigger attribute errors."""
+        findings_data = [
+            self._make_finding_dict(
+                title=None,
+                description=None,
+                category=None,
+                implementation_sketch=None,
+                augmentation_notes=None,
+                language=None,
+            ),
+            self._make_finding_dict(
+                title="Valid",
+                description="Still valid",
+                category=None,
+                implementation_sketch=None,
+                augmentation_notes=None,
+                language=None,
+            ),
+        ]
+        results = parse_findings(json.dumps(findings_data), "test-repo")
+        assert len(results) == 1
+        assert results[0].title == "Valid"
+        assert results[0].category == "cross_cutting"
+
     def test_parses_optional_runbook_fields(self):
         """execution_steps/acceptance_checks/rollback/preconditions are parsed when present."""
         findings_data = [

@@ -348,19 +348,26 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
         logger.warning("Mining findings response is not a JSON array")
         return []
 
+    def _text(value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value
+        return str(value)
+
     findings: list[MiningFinding] = []
     for item in data:
         if not isinstance(item, dict):
             continue
 
         # Required fields
-        title = item.get("title", "").strip()
-        description = item.get("description", "").strip()
+        title = _text(item.get("title", ""), "").strip()
+        description = _text(item.get("description", ""), "").strip()
         if not title or not description:
             continue
 
         # Category validation
-        category = item.get("category", "").strip().lower()
+        category = _text(item.get("category", ""), "").strip().lower()
         if category not in _VALID_CATEGORIES:
             category = "cross_cutting"
 
@@ -428,10 +435,10 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             source_repo=repo_name,
             source_files=source_files[:20],
             source_symbols=normalized_symbols[:20],
-            implementation_sketch=str(item.get("implementation_sketch", ""))[:2000],
-            augmentation_notes=str(item.get("augmentation_notes", ""))[:1000],
+            implementation_sketch=_text(item.get("implementation_sketch", ""), "")[:2000],
+            augmentation_notes=_text(item.get("augmentation_notes", ""), "")[:1000],
             relevance_score=relevance,
-            language=str(item.get("language", "python"))[:20],
+            language=_text(item.get("language", "python"), "python")[:20],
             execution_steps=execution_steps[:10],
             acceptance_checks=acceptance_checks[:10],
             rollback_steps=rollback_steps[:10],
