@@ -366,6 +366,15 @@ class TestPreflightAnswerHandling:
         assert "(namespace-safe retry)" in created_tasks[1].title
         assert not (repo_path / "cam").exists()
         assert (repo_path / "src" / "claw" / "retry_safe.py").exists()
+        # P0 fix: retry task description must START with explicit namespace constraint
+        retry_desc = created_tasks[1].description
+        assert retry_desc.startswith("CRITICAL NAMESPACE CONSTRAINT (retry):")
+        assert "['claw']" in retry_desc or "claw" in retry_desc
+        assert "Allowed top-level source namespaces:" in retry_desc
+        # P0 fix: retry acceptance checks must include namespace guard
+        retry_checks = created_tasks[1].acceptance_checks
+        assert any("No new top-level namespaces beyond:" in c for c in retry_checks)
+        assert "pytest -q" in retry_checks  # original check preserved
 
     def test_quickstart_namespace_guard_skips_new_repo_baseline(self, tmp_path):
         from claw import cli

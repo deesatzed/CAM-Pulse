@@ -4410,20 +4410,32 @@ async def _quickstart_async(
                 console.print(
                     "\n[yellow]Namespace guard rejected the execution. Retrying once with namespace-safe fixed-mode constraints...[/yellow]"
                 )
+                baseline_namespaces = sorted(
+                    _extract_source_namespaces_from_snapshot(baseline_snapshot)
+                )
+                namespace_clause = (
+                    f"CRITICAL NAMESPACE CONSTRAINT (retry): "
+                    f"Allowed top-level source namespaces: {baseline_namespaces}. "
+                    f"You MUST NOT create any new top-level directories or package roots. "
+                    f"All changes must be within the existing namespace(s): {baseline_namespaces}."
+                )
+                retry_description = namespace_clause + "\n\n" + description
+                namespace_acceptance = (
+                    f"No new top-level namespaces beyond: {baseline_namespaces}"
+                )
+                retry_checks = [namespace_acceptance] + [
+                    s.strip() for s in acceptance_checks if s.strip()
+                ]
                 retry_task = Task(
                     project_id=project.id,
                     title=f"{title} (namespace-safe retry)",
-                    description=(
-                        description
-                        + "\n\nNamespace-safe retry constraint: In fixed mode, modify only existing source namespaces. "
-                        + "Do not create new top-level source directories or package roots."
-                    ),
+                    description=retry_description,
                     status=TaskStatus.PENDING,
                     priority=valid_priorities[priority],
                     task_type=task_type,
                     recommended_agent=recommended,
                     execution_steps=[s.strip() for s in execution_steps if s.strip()],
-                    acceptance_checks=[s.strip() for s in acceptance_checks if s.strip()],
+                    acceptance_checks=retry_checks,
                 )
                 await ctx.repository.create_task(retry_task)
                 console.print(f"[dim]Retry task created: {retry_task.id}[/dim]")

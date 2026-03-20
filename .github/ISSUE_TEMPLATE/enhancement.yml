@@ -1,0 +1,66 @@
+name: Enhancement / Roadmap Proposal
+description: Suggest improvements or features to push Clawamorphosis toward premier autonomous codebase engine
+title: "[ENHANCEMENT] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Description
+      description: What gap or problem does this enhancement address?
+      placeholder: "e.g., Other Claws can't reliably execute code changes without hallucinations"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Detailed proposal for the enhancement
+      placeholder: "e.g., Add Ollama/local model support so CAM runs 100% offline"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider?
+      placeholder: "e.g., Forking nanobot instead, but loses validation rigor"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - must-have
+        - nice-to-have
+        - exploration
+    validations:
+      required: true
+
+  - type: dropdown
+    id: roadmap-phase
+    attributes:
+      label: Roadmap Phase
+      description: Which phase of the CAM evolution roadmap does this align with?
+      options:
+        - Phase 1 - Skill/CLI
+        - Phase 2 - Local-First
+        - Phase 3 - Autonomy/Swarm
+        - Phase 4 - Enterprise
+        - Phase 5 - Premier Showpieces
+        - Not sure / New direction
+    validations:
+      required: true
+
+  - type: input
+    id: related
+    attributes:
+      label: Related Files or Commits
+      description: Any relevant file paths, commit hashes, or issue numbers
+      placeholder: "e.g., src/claw/cli.py:4403, commit 4e6f541"
+    validations:
+      required: false

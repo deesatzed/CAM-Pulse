@@ -213,7 +213,7 @@ class AgentInterface(ABC):
     def can_use_internal_workspace_executor(self) -> bool:
         """Whether CAM can turn this agent's output into real file changes."""
         mode = getattr(self, "mode", None)
-        return mode in {AgentMode.OPENROUTER, AgentMode.API}
+        return mode in {AgentMode.OPENROUTER, AgentMode.API, AgentMode.LOCAL}
 
     async def execute_openrouter(
         self, task: TaskContext, context: Optional[Any] = None
@@ -285,6 +285,97 @@ class AgentInterface(ABC):
                 duration_seconds=duration,
             )
 
+        except httpx.HTTPStatusError as e:
+            duration = time.monotonic() - start
+            detail = str(e)
+            try:
+                err_body = e.response.json()
+                detail = err_body.get("error", {}).get("message", detail)
+            except Exception:
+                pass
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason=f"http_{e.response.status_code}",
+                failure_detail=detail,
+                duration_seconds=duration,
+            )
+        except Exception as e:
+            duration = time.monotonic() - start
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason=type(e).__name__,
+                failure_detail=str(e),
+                duration_seconds=duration,
+            )
+
+    async def execute_local(
+        self, task: TaskContext, context: Optional[Any] = None
+    ) -> TaskOutcome:
+        """Execute task via a local LLM provider (Ollama or MLX-LM).
+
+        Uses the OpenAI-compatible /v1/chat/completions endpoint that both
+        Ollama and mlx_lm.server expose. No API key required for local.
+        """
+        model = getattr(self, "model", None)
+        if not model:
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason="no_model",
+                failure_detail="No model configured for local mode. Set model in claw.toml.",
+            )
+
+        local_base_url = getattr(self, "local_base_url", None) or "http://localhost:11434/v1"
+        endpoint = f"{local_base_url.rstrip('/')}/chat/completions"
+
+        prompt = self._build_openrouter_prompt(task, context)
+        start = time.monotonic()
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+                response = await client.post(
+                    endpoint,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": max(4096, int(getattr(self, "max_tokens", 4096) or 4096)),
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            duration = time.monotonic() - start
+
+            choices = data.get("choices", [])
+            content = ""
+            if choices:
+                content = _coerce_openrouter_content(choices[0])
+                if not isinstance(content, str):
+                    content = str(content or "")
+
+            usage = data.get("usage", {})
+            tokens_used = (usage.get("prompt_tokens", 0) or 0) + (usage.get("completion_tokens", 0) or 0)
+            model_used = data.get("model", model)
+
+            return TaskOutcome(
+                approach_summary=content[:500],
+                model_used=model_used,
+                agent_id=self.agent_id,
+                raw_output=content,
+                tokens_used=tokens_used,
+                tests_passed=True,
+                duration_seconds=duration,
+            )
+
+        except httpx.ConnectError:
+            duration = time.monotonic() - start
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason="local_unreachable",
+                failure_detail=f"Local LLM endpoint not reachable at {endpoint}. "
+                               f"Start Ollama (`ollama serve`) or MLX-LM (`mlx_lm.server --model ...`).",
+                duration_seconds=duration,
+            )
         except httpx.HTTPStatusError as e:
             duration = time.monotonic() - start
             detail = str(e)
@@ -409,6 +500,53 @@ class AgentInterface(ABC):
             )
 
         return "\n".join(parts)
+
+    async def _local_health_check(self, agent_name: str) -> AgentHealth:
+        """Check if local LLM endpoint (Ollama / MLX-LM) is reachable.
+
+        Both Ollama and mlx_lm.server expose an OpenAI-compatible endpoint.
+        We hit GET /v1/models to verify connectivity.
+        """
+        model = getattr(self, "model", None)
+        if not model:
+            return AgentHealth(
+                agent_id=agent_name,
+                available=False,
+                mode=AgentMode.LOCAL,
+                error="No model configured for local mode in claw.toml",
+            )
+
+        local_base_url = getattr(self, "local_base_url", None) or "http://localhost:11434/v1"
+        models_url = f"{local_base_url.rstrip('/')}/models"
+
+        try:
+            start = time.monotonic()
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                response = await client.get(models_url)
+                response.raise_for_status()
+            latency = (time.monotonic() - start) * 1000
+            return AgentHealth(
+                agent_id=agent_name,
+                available=True,
+                mode=AgentMode.LOCAL,
+                version=f"local:{model}",
+                latency_ms=latency,
+            )
+        except httpx.ConnectError:
+            return AgentHealth(
+                agent_id=agent_name,
+                available=False,
+                mode=AgentMode.LOCAL,
+                error=f"Local LLM not reachable at {models_url}. "
+                      f"Start Ollama (`ollama serve`) or MLX-LM (`mlx_lm.server --model ...`).",
+            )
+        except Exception as e:
+            return AgentHealth(
+                agent_id=agent_name,
+                available=False,
+                mode=AgentMode.LOCAL,
+                error=str(e),
+            )
 
     def get_metrics(self) -> dict[str, Any]:
         """Return a copy of the agent's runtime metrics."""

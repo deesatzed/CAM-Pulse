@@ -18,15 +18,31 @@ from claw.core.exceptions import ConfigError
 
 logger = logging.getLogger("claw.embeddings")
 
-# Lazy import — sentence-transformers is heavy
+# Lazy import — sentence-transformers is heavy and requires torch
 _SentenceTransformer = None
+_SENTENCE_TRANSFORMERS_AVAILABLE: bool | None = None
 
 
 def _get_sentence_transformer():
-    global _SentenceTransformer
+    global _SentenceTransformer, _SENTENCE_TRANSFORMERS_AVAILABLE
+    if _SENTENCE_TRANSFORMERS_AVAILABLE is False:
+        raise ImportError(
+            "sentence-transformers is not installed. "
+            "Install with: pip install 'claw[ml]'  "
+            "Or use Gemini API embeddings (set embeddings.model to a gemini-embedding model in claw.toml)."
+        )
     if _SentenceTransformer is None:
-        from sentence_transformers import SentenceTransformer
-        _SentenceTransformer = SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+            _SentenceTransformer = SentenceTransformer
+            _SENTENCE_TRANSFORMERS_AVAILABLE = True
+        except ImportError:
+            _SENTENCE_TRANSFORMERS_AVAILABLE = False
+            raise ImportError(
+                "sentence-transformers is not installed. "
+                "Install with: pip install 'claw[ml]'  "
+                "Or use Gemini API embeddings (set embeddings.model to a gemini-embedding model in claw.toml)."
+            )
     return _SentenceTransformer
 
 
@@ -49,11 +65,12 @@ class EmbeddingEngine:
         self._model = None
         self._genai_client = None
         self._uses_gemini_api = self.model_name.startswith("gemini-embedding") or self.model_name.startswith("models/gemini-embedding")
+        self._uses_mlx = self.model_name.startswith("mlx-community/") or self.model_name.startswith("mlx-embeddings:")
+        self._mlx_model = None
 
     @property
     def model(self):
-        if self._uses_gemini_api:
-            # Gemini path does not use sentence-transformers.
+        if self._uses_gemini_api or self._uses_mlx:
             return None
         if self._model is None:
             SentenceTransformer = _get_sentence_transformer()
@@ -61,6 +78,31 @@ class EmbeddingEngine:
             self._model = SentenceTransformer(self.model_name)
             logger.info("Embedding model loaded (%dD)", self.dimension)
         return self._model
+
+    def _get_mlx_model(self):
+        """Lazily load mlx-embeddings model (Apple Silicon only)."""
+        if self._mlx_model is None:
+            try:
+                from mlx_embeddings import load as mlx_load
+                model_id = self.model_name
+                if model_id.startswith("mlx-embeddings:"):
+                    model_id = model_id[len("mlx-embeddings:"):]
+                logger.info("Loading MLX embedding model: %s", model_id)
+                self._mlx_model = mlx_load(model_id)
+                logger.info("MLX embedding model loaded (%dD)", self.dimension)
+            except ImportError:
+                raise ImportError(
+                    "mlx-embeddings is not installed. "
+                    "Install with: pip install 'claw[mlx]'"
+                )
+        return self._mlx_model
+
+    def _embed_with_mlx(self, texts: list[str]) -> list[list[float]]:
+        """Encode texts using mlx-embeddings (Apple Silicon)."""
+        model = self._get_mlx_model()
+        from mlx_embeddings import encode as mlx_encode
+        embeddings = mlx_encode(model, texts)
+        return [self._normalize_dimension(list(float(x) for x in v)) for v in embeddings]
 
     def _get_genai_client(self):
         if self._genai_client is None:
@@ -138,6 +180,8 @@ class EmbeddingEngine:
         if self._uses_gemini_api:
             clipped = text[:12000]
             return self._embed_with_gemini([clipped])[0]
+        if self._uses_mlx:
+            return self._embed_with_mlx([text])[0]
         vec = self.model.encode(text, show_progress_bar=False)
         return vec.tolist()
 
@@ -148,6 +192,10 @@ class EmbeddingEngine:
                 return []
             clipped = [t[:12000] for t in texts]
             return self._embed_with_gemini(clipped)
+        if self._uses_mlx:
+            if not texts:
+                return []
+            return self._embed_with_mlx(texts)
         vecs = self.model.encode(texts, show_progress_bar=False, batch_size=32)
         return [v.tolist() for v in vecs]
 

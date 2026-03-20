@@ -1,0 +1,24 @@
+# Clawamorphosis (CAM) — Docker Compose
+#
+# Usage:
+#   docker compose run --rm cam evaluate /app/target-repo
+#   docker compose run --rm cam create /app/target-repo --title "Fix tests"
+#   docker compose run --rm cam validate --spec-file /app/data/create_specs/spec.json
+#
+# Environment:
+#   Copy .env.example to .env and set your API keys, or export them in your shell.
+
+services:
+  cam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data:/app/data
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+    entrypoint: ["cam"]

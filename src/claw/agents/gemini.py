@@ -73,6 +73,8 @@ class GeminiAgent(AgentInterface):
         """Check Gemini availability."""
         if self.mode == AgentMode.OPENROUTER:
             return await self._openrouter_health_check()
+        elif self.mode == AgentMode.LOCAL:
+            return await self._local_health_check("gemini")
         elif self.mode == AgentMode.CLI:
             return await self._cli_health_check()
         else:
@@ -82,6 +84,8 @@ class GeminiAgent(AgentInterface):
         """Execute a task using Gemini."""
         if self.mode == AgentMode.OPENROUTER:
             return await self.execute_openrouter(task, context)
+        elif self.mode == AgentMode.LOCAL:
+            return await self.execute_local(task, context)
         elif self.mode == AgentMode.CLI:
             return await self._execute_cli(task, context)
         else:

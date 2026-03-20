@@ -57,6 +57,8 @@ class ClaudeCodeAgent(AgentInterface):
         """Check Claude Code availability."""
         if self.mode == AgentMode.OPENROUTER:
             return await self._openrouter_health_check()
+        elif self.mode == AgentMode.LOCAL:
+            return await self._local_health_check("claude")
         elif self.mode == AgentMode.CLI:
             return await self._cli_health_check()
         else:
@@ -66,6 +68,8 @@ class ClaudeCodeAgent(AgentInterface):
         """Execute a task using Claude Code."""
         if self.mode == AgentMode.OPENROUTER:
             return await self.execute_openrouter(task, context)
+        elif self.mode == AgentMode.LOCAL:
+            return await self.execute_local(task, context)
         elif self.mode == AgentMode.CLI:
             return await self._execute_cli(task, context)
         else:

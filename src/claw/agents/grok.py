@@ -59,6 +59,8 @@ class GrokAgent(AgentInterface):
         """Check Grok availability."""
         if self.mode == AgentMode.OPENROUTER:
             return await self._openrouter_health_check()
+        elif self.mode == AgentMode.LOCAL:
+            return await self._local_health_check("grok")
         elif self.mode == AgentMode.CLI:
             return await self._cli_health_check()
         else:
@@ -68,6 +70,8 @@ class GrokAgent(AgentInterface):
         """Execute a task using Grok."""
         if self.mode == AgentMode.OPENROUTER:
             return await self.execute_openrouter(task, context)
+        elif self.mode == AgentMode.LOCAL:
+            return await self.execute_local(task, context)
         elif self.mode == AgentMode.CLI:
             return await self._execute_cli(task, context)
         else:

@@ -91,6 +91,11 @@ set +e
   --check "rg -q -i 'purpose' ." \
   --check "rg -q -i 'design direction' ." \
   --check "rg -q -i 'analyze first' ." \
+  --answer "Target audience: Solo developers and small teams modernizing existing websites" \
+  --answer "Deployment target: Static HTML/CSS/JS served locally or via any static host" \
+  --answer "Accessibility standard: WCAG 2.1 AA minimum" \
+  --answer "Framework preference: Vanilla HTML/CSS/JS with no build step required" \
+  --answer "Output format: Structured markdown report plus HTML landing page outline" \
   --execute \
   --max-minutes 20 | tee "${CREATE_LOG}"
 CREATE_STATUS=$?

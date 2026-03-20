@@ -57,6 +57,8 @@ class CodexAgent(AgentInterface):
         """Check Codex availability based on current mode."""
         if self.mode == AgentMode.OPENROUTER:
             return await self._openrouter_health_check()
+        elif self.mode == AgentMode.LOCAL:
+            return await self._local_health_check("codex")
         elif self.mode == AgentMode.CLI:
             return await self._cli_health_check()
         elif self.mode == AgentMode.CLOUD:
@@ -69,6 +71,8 @@ class CodexAgent(AgentInterface):
         """Execute a task using Codex."""
         if self.mode == AgentMode.OPENROUTER:
             return await self.execute_openrouter(task, context)
+        elif self.mode == AgentMode.LOCAL:
+            return await self.execute_local(task, context)
         elif self.mode == AgentMode.CLI:
             return await self._execute_cli(task, context)
         elif self.mode == AgentMode.CLOUD:

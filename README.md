@@ -1,13 +1,57 @@
-# CAM
+# Clawamorphosis (CAM) — Codebase Assimilation Machine
 
-CAM is a multi-agent codebase worker built around a simple idea:
+**The only Claw variant that ships real, verifiable code changes — because it never trusts its own narration.**
 
-1. inspect a repository
-2. learn from other repositories
-3. turn that learning into concrete repo work
-4. validate the result instead of trusting agent narration
+CAM is a multi-agent Python system designed for autonomous, high-trust repository engineering:
 
-This repository is documented for a new operator, not as an internal lab notebook.
+1. **Inspect** any repo (local, zip, Git)
+2. **Mine** reusable patterns/methodologies into persistent SQLite + vector knowledge (`claw.db`)
+3. **Ideate** new apps or improvements
+4. **Generate** explicit, structured specs
+5. **Execute** changes safely
+6. **Validate rigorously** (diffs, builds, tests, benchmarks — rejects hallucinated "success")
+7. **Export** neutral JSONL knowledge packs for reuse
+
+It fills the critical gap the broader Claw ecosystem misses: agents that can actually own and evolve codebases without constant human babysitting.
+
+## Why Clawamorphosis Stands Out
+
+- **Validation-first architecture** — actual workspace checks + Forge harness benchmarks (no more "it worked in my head")
+- **Incremental, persistent learning** — skips unchanged repos, builds cross-repo memory over time
+- **Honest failure modes** — preflight estimates, namespace guards, retry logic, explicit limits documented
+- **Proven reliability** — 1,710+ tests passing; real showpieces (e.g., MedCSS modernizer full workflow)
+- **Evolving toward premier use case**: Autonomous codebase metamorphosis — legacy to modern, research repo to production, monorepo refactoring, self-evolving maintainer mode
+
+## Current Status (March 2026)
+
+- Very early but battle-tested locally
+- Not yet fully autonomous (safer `--execute` mode still gated)
+- Heavy deps (torch/transformers/sentence-transformers) — working on lighter/local-first editions
+
+## Quick Start
+
+```bash
+git clone https://github.com/deesatzed/clawamorphosis.git
+cd clawamorphosis
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"          # includes torch etc.
+```
+
+```bash
+# Smoke test
+cam --help
+cam setup               # enter LLM API keys (OpenRouter/Anthropic/OpenAI)
+cam govern stats        # check DB health
+cam chat                # guided interactive mode
+```
+
+## Roadmap — Toward Premier Singular Use Case
+
+- Drop-in ClawHub skill wrapper (call CAM from nanobot/ZeroClaw/NemoClaw)
+- Local-first / Ollama / Nemotron support
+- Git-native PR automation + swarm mode
+- Public benchmark leaderboard on real OSS repos
 
 ## What Is Novel About CAM
 
@@ -22,7 +66,7 @@ CAM is not just a wrapper around a chat model. The distinctive parts are the wor
 - `create` now auto-runs preflight for risky or ambiguous work, blocks unsafe execution when must-clarify questions remain, and lets the operator reuse recorded answers across reruns.
 - execution workflows now refuse to pretend they can build when no executable build path exists in the current runtime.
 - `chat` provides a guided conversational front door for common workflows instead of forcing the operator to memorize flags.
-- `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM’s knowledge without importing CAM itself.
+- `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM's knowledge without importing CAM itself.
 - `mine` can detect extracted source trees even when they are not full `.git` clones, which matters when you are evaluating zip-downloaded repos.
 - `mine` now keeps a persistent scan ledger, so unchanged repos are skipped by default and only changed repos are rescanned unless you force a refresh.
 
@@ -72,6 +116,12 @@ As of March 15, 2026, these commands were run successfully in this repo:
   - outcome: full 1-7 operator workflow (test, mine, reassess, create, validate, showpiece) in one harness
 
 ### Proven by targeted automated tests
+
+Full test suite as of March 18, 2026:
+
+```text
+1710 passed, 6 skipped
+```
 
 A targeted verification run passed on March 15, 2026:
 
@@ -304,7 +354,7 @@ To ask CAM which old methodologies should matter for a new task right now:
 .venv/bin/cam learn reassess --task "repair broken tests with ast-based refactoring" --limit 10
 ```
 
-### 3. Invent new app ideas from CAM memory plus repo inputs
+### 4. Invent new app ideas from CAM memory plus repo inputs
 
 ```bash
 .venv/bin/cam ideate /path/to/source-repos \
@@ -316,7 +366,7 @@ To ask CAM which old methodologies should matter for a new task right now:
 
 Use this when you want CAM to propose new product directions, not just summarize repos.
 
-### 4. Create or modify a target repo from that context
+### 5. Create or modify a target repo from that context
 
 ```bash
 .venv/bin/cam create /path/to/target-repo \
@@ -345,7 +395,7 @@ If you want CAM to attempt execution immediately:
   --execute
 ```
 
-### 5. Validate the result before trusting it
+### 6. Validate the result before trusting it
 
 ```bash
 .venv/bin/cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
@@ -353,13 +403,13 @@ If you want CAM to attempt execution immediately:
 
 This is the line between "the agent said it did it" and "the repo actually matches the requested spec closely enough to pass checks".
 
-### 6. Benchmark only after validation passes
+### 7. Benchmark only after validation passes
 
 ```bash
 .venv/bin/cam benchmark --max-minutes 5
 ```
 
-### 7. Export learned knowledge for a standalone app
+### 8. Export learned knowledge for a standalone app
 
 ```bash
 .venv/bin/cam forge-export \
@@ -487,8 +537,15 @@ These are the preferred expert paths. The older flat commands still work as comp
 - one-command reliability pipeline harness: [scripts/run_cam_reliability_pipeline.sh](scripts/run_cam_reliability_pipeline.sh)
 - versioned medCSS CLI showpiece app: [apps/medcss_modernizer_showpiece](apps/medcss_modernizer_showpiece)
 - Blog-style writeup of the showpiece run: [docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md](docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md)
+- OpenClaw skill wrapper: [SKILL.md](SKILL.md)
 
 ## Development
+
+Run the full test suite:
+
+```bash
+.venv/bin/pytest
+```
 
 Run the targeted verification slice used for the claims above:
 
@@ -496,14 +553,10 @@ Run the targeted verification slice used for the claims above:
 .venv/bin/pytest -q tests/test_llm.py tests/test_miner.py tests/test_db.py tests/test_create_benchmark_spec.py tests/test_embedding_forge_benchmark.py tests/test_cli_ux.py
 ```
 
-Or run the full suite:
-
-```bash
-.venv/bin/pytest
-```
-
 Show CLI help:
 
 ```bash
 .venv/bin/cam --help
 ```
+
+License: MIT

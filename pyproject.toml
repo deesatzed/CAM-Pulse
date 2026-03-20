@@ -29,6 +29,16 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.4.0",
 ]
+ml = [
+    "sentence-transformers>=2.2.0",
+]
+local = [
+    "ollama>=0.4.0",
+]
+mlx = [
+    "mlx-lm>=0.22.0",
+    "mlx-embeddings>=0.1.0",
+]
 xai = [
     "xai-sdk>=1.0.0",
 ]

@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Data (user mounts these via volume)
+data/claw.db
+data/token_costs.jsonl
+
+# Temporary and test repos
+tmp/
+repoTst/
+ReposEV/
+Repo2Eval/
+repo2e3/
+
+# External project dirs (not part of CAM core)
+OpenClaw-Medical-Skills/
+ralfed/
+page-agent/
+autoresearch-macos/
+awesome-codex-subagents/
+claude-scientific-skills/
+morepo/
+idea_mess/
+
+# Large history/handoff files
+*.txt
+HANDOFF*.md
+AGONY_DOSSIER.md
+ASSESSMENT_NONIT*.md
+INTEGRATION_GAP_MITIGATION.md
+MITIGATION_ROADMAP.md
+googembed.md
+medCSS.md
+updCAM.md
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

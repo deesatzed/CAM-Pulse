@@ -103,15 +103,24 @@ class TokenTrackingConfig(BaseModel):
     cost_per_1k_output: float = 0.015
 
 
+class LocalLLMConfig(BaseModel):
+    """Configuration for local LLM providers (Ollama, MLX-LM)."""
+    provider: str = "ollama"  # ollama, mlx-lm
+    base_url: str = "http://localhost:11434/v1"
+    model: str = ""
+    timeout: int = 300
+
+
 class AgentConfig(BaseModel):
     """Per-agent configuration."""
     enabled: bool = False
-    mode: str = "cli"  # cli, api, cloud
+    mode: str = "cli"  # cli, api, cloud, openrouter, local
     api_key_env: str = ""
     max_concurrent: int = 2
     timeout: int = 300
     model: Optional[str] = None  # User-set; never hardcoded
     max_budget_usd: float = 1.0
+    local_base_url: Optional[str] = None  # Override base_url for local mode
 
 
 class RoutingConfig(BaseModel):

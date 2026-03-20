@@ -73,6 +73,7 @@ class AgentMode(str, enum.Enum):
     API = "api"
     CLOUD = "cloud"
     OPENROUTER = "openrouter"
+    LOCAL = "local"
 
 
 class OperationalMode(str, enum.Enum):
