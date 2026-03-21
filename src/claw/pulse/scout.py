@@ -47,7 +47,7 @@ class XScout:
         self.config = config
         self.xai_api_key = os.getenv(config.xai_api_key_env, "")
         self.model = config.xai_model
-        self._timeout = httpx.Timeout(30.0, connect=10.0)
+        self._timeout = httpx.Timeout(120.0, connect=15.0)
 
     async def scan(
         self,
