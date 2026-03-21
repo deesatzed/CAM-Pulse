@@ -202,6 +202,30 @@ class FleetConfig(BaseModel):
     max_cost_per_day_usd: float = 50.0
 
 
+class PulseConfig(BaseModel):
+    """CAM-PULSE: Perpetual Unified Learning Swarm Engine configuration."""
+    enabled: bool = False
+    poll_interval_minutes: int = 30
+    max_scouts: int = 4
+    novelty_threshold: float = 0.70
+    max_cost_per_scan_usd: float = 0.50
+    max_cost_per_day_usd: float = 10.0
+    max_repos_per_scan: int = 20
+    clone_workspace: str = "data/pulse_clones"
+    auto_mine: bool = True
+    auto_queue_enhance: bool = False
+    enhance_novelty_threshold: float = 0.85
+    self_improve_interval_hours: int = 24
+    xai_model: str = ""  # User-set, never hardcoded
+    xai_api_key_env: str = "XAI_API_KEY"
+    keywords: list[str] = Field(default_factory=lambda: [
+        "github.com new repo",
+        "github.com just released open source",
+        "github.com dropped today AI agent",
+        "github.com framework new 2026",
+    ])
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -222,6 +246,7 @@ class ClawConfig(BaseModel):
     fleet: FleetConfig = Field(default_factory=FleetConfig)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     assimilation: AssimilationConfig = Field(default_factory=AssimilationConfig)
+    pulse: PulseConfig = Field(default_factory=PulseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 

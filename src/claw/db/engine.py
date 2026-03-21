@@ -293,6 +293,61 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration applied: methodology_usage_log table created")
 
+        # Migration 9: create pulse_discoveries table (CAM-PULSE)
+        row = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='pulse_discoveries'"
+        )
+        if row and row["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS pulse_discoveries (
+                    id TEXT PRIMARY KEY,
+                    github_url TEXT NOT NULL,
+                    canonical_url TEXT NOT NULL,
+                    x_post_url TEXT,
+                    x_post_text TEXT,
+                    x_author_handle TEXT,
+                    discovered_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    novelty_score REAL,
+                    status TEXT NOT NULL DEFAULT 'discovered'
+                        CHECK (status IN ('discovered','cloning','mining','assimilated','failed','skipped','queued_enhance')),
+                    scan_id TEXT,
+                    keywords_matched TEXT NOT NULL DEFAULT '[]',
+                    mine_result TEXT,
+                    methodology_ids TEXT NOT NULL DEFAULT '[]',
+                    error_detail TEXT,
+                    UNIQUE(canonical_url)
+                );
+                CREATE INDEX IF NOT EXISTS idx_pulse_disc_status ON pulse_discoveries(status);
+                CREATE INDEX IF NOT EXISTS idx_pulse_disc_novelty ON pulse_discoveries(novelty_score DESC);
+                CREATE INDEX IF NOT EXISTS idx_pulse_disc_discovered ON pulse_discoveries(discovered_at DESC);
+            """)
+            await self.conn.commit()
+            logger.info("Migration applied: pulse_discoveries table created")
+
+        # Migration 10: create pulse_scan_log table (CAM-PULSE)
+        row = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='pulse_scan_log'"
+        )
+        if row and row["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS pulse_scan_log (
+                    id TEXT PRIMARY KEY,
+                    scan_type TEXT NOT NULL DEFAULT 'x_search',
+                    keywords TEXT NOT NULL DEFAULT '[]',
+                    started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    completed_at TEXT,
+                    repos_discovered INTEGER NOT NULL DEFAULT 0,
+                    repos_novel INTEGER NOT NULL DEFAULT 0,
+                    repos_assimilated INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL DEFAULT 0.0,
+                    tokens_used INTEGER NOT NULL DEFAULT 0,
+                    error_detail TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_pulse_scan_started ON pulse_scan_log(started_at DESC);
+            """)
+            await self.conn.commit()
+            logger.info("Migration applied: pulse_scan_log table created")
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:

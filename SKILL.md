@@ -69,6 +69,33 @@ cam validate --spec-file data/create_specs/<spec>.json
 cam forge-export --out knowledge.jsonl --max-methodologies 200
 ```
 
+### CAM-PULSE: Autonomous X-powered discovery
+```bash
+# Check configuration and API key
+cam pulse preflight
+
+# One-shot scan: search X for new GitHub repos, filter for novelty, assimilate
+cam pulse scan --keywords "AI agent framework,new repo github.com" --from-date 2026-03-21
+
+# Dry run (scan + filter only, no cloning/mining)
+cam pulse scan --dry-run
+
+# Start perpetual polling daemon
+cam pulse daemon --interval 15
+
+# View discovery stats
+cam pulse status
+
+# List recent discoveries
+cam pulse discoveries --limit 20
+
+# Scan history
+cam pulse scans
+
+# Daily report
+cam pulse report --date 2026-03-21
+```
+
 ### Guided interactive mode (no flags to memorize)
 ```bash
 cam chat

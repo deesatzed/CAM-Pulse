@@ -10,7 +10,7 @@ CAM is a multi-agent autonomous codebase engineering system. It inspects, learns
 
 | Metric | Value |
 |---|---|
-| Automated tests | **1,735 passing**, 6 skipped |
+| Automated tests | **1,811 passing**, 6 skipped |
 | Agent backends | 4 (Claude, Codex, Gemini, Grok) |
 | Execution modes | 5 (CLI, API, Cloud, OpenRouter, **Local**) |
 | Knowledge base | 59 MB SQLite, 1,469+ mined methodologies |
@@ -53,9 +53,36 @@ These are the capabilities that exist in CAM and do not exist in nanobot, ZeroCl
 
 - **Phase 1 complete**: SKILL.md wrapper, GitHub issue templates, namespace fix, reliability pipeline
 - **Phase 2 complete**: Docker deployment, Ollama/MLX-LM local mode, torch-free lightweight install, 1,735 tests
+- **Phase 3 in progress**: CAM-PULSE autonomous X-powered discovery swarm (76 new tests, 1,811 total)
 - Battle-tested locally across 3 end-to-end showpieces
 - Not yet fully autonomous — `--execute` mode is gated behind preflight checks
 - Coverage at 79% (target: >90%, action plan in progress)
+
+---
+
+## CAM-PULSE: Perpetual X-Powered Discovery
+
+CAM-PULSE (Perpetual Unified Learning Swarm Engine) transforms CAM from a tool-you-run into a perpetual code intelligence organism. It continuously discovers novel GitHub repos mentioned on X (Twitter) via Grok API's native `x_search` tool, deduplicates against existing knowledge, mines/assimilates discoveries into `claw.db`, and optionally queues high-value repos for enhancement.
+
+```bash
+# Preflight: verify XAI_API_KEY and configuration
+cam pulse preflight
+
+# One-shot scan: search X, filter novelty, assimilate into claw.db
+cam pulse scan --keywords "AI agent framework,new repo" --from-date 2026-03-21
+
+# Start perpetual daemon (polls every 30 min by default)
+cam pulse daemon
+
+# View stats and recent discoveries
+cam pulse status
+cam pulse discoveries --limit 20
+cam pulse report
+```
+
+**Architecture**: X-Scout (xAI Responses API) -> Novelty Filter (URL dedup + semantic distance) -> Assimilation Pipeline (git clone + RepoMiner) -> PR Bridge (fleet registration + enhancement queuing). Circuit breaker with exponential backoff. Budget gate ($10/day default). Self-improvement loop mines CAM's own source periodically.
+
+**Docker deployment**: `docker compose -f pulse/docker-compose.pulse.yml up --build`
 
 ---
 
@@ -630,7 +657,7 @@ These are the preferred expert paths. The older flat commands still work as comp
 |---|---|---|
 | Phase 1: Drop-In Skill | **Complete** | SKILL.md, issue templates, namespace fix, reliability pipeline |
 | Phase 2: Local-First | **Complete** | Docker, Ollama/MLX-LM, torch-free mode, 1,735 tests |
-| Phase 3: Autonomy | Planned | Git-native PR automation, swarm orchestration, LanceDB upgrade |
+| Phase 3: PULSE | **In Progress** | CAM-PULSE X-powered discovery swarm, novelty filter, auto-assimilation, TUI dashboard |
 | Phase 4: Enterprise | Planned | Sandbox enforcement, audit logs, budget hardening, benchmark leaderboard |
 | Phase 5: Premier | Planned | Python2-to-FastAPI showpiece, self-evolving maintainer mode, community rollout |
 

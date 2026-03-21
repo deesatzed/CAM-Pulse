@@ -69,6 +69,11 @@ doctor_app = typer.Typer(
     help="Preflight and diagnostics — key checks and system health",
     no_args_is_help=True,
 )
+pulse_app = typer.Typer(
+    name="pulse",
+    help="CAM-PULSE — perpetual X-powered discovery and assimilation of novel GitHub repos",
+    no_args_is_help=True,
+)
 
 _FOUNDATION_CHARTER = [
     {
@@ -7175,6 +7180,7 @@ app.add_typer(task_app, name="task")
 app.add_typer(forge_app, name="forge")
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(kb_app, name="kb")
+app.add_typer(pulse_app, name="pulse")
 
 
 async def _kb_engine():
@@ -7836,6 +7842,209 @@ async def _kb_synergies_async(limit: int) -> None:
 
     finally:
         await engine.close()
+
+
+# ---------------------------------------------------------------------------
+# pulse — CAM-PULSE command group
+# ---------------------------------------------------------------------------
+
+async def _pulse_engine():
+    """Shared async setup for pulse commands — returns (engine, config)."""
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+
+    config = load_config()
+    engine = DatabaseEngine(config.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+    return engine, config
+
+
+async def _pulse_orchestrator(engine, config):
+    """Build a full PulseOrchestrator from engine + config."""
+    from claw.db.embeddings import EmbeddingEngine
+    from claw.db.repository import Repository
+    from claw.llm.client import LLMClient
+    from claw.memory.semantic import SemanticMemory
+    from claw.miner import RepoMiner
+    from claw.pulse.assimilator import PulseAssimilator
+    from claw.pulse.novelty import NoveltyFilter
+    from claw.pulse.orchestrator import PulseOrchestrator
+    from claw.pulse.scout import XScout
+
+    repository = Repository(engine)
+    llm_client = LLMClient(config)
+    embedding_engine = EmbeddingEngine()
+    semantic_memory = SemanticMemory(repository, embedding_engine)
+
+    scout = XScout(config.pulse)
+    novelty = NoveltyFilter(engine, embedding_engine, config.pulse)
+    miner = RepoMiner(repository, llm_client, semantic_memory, config)
+    assimilator = PulseAssimilator(engine, miner, config)
+
+    return PulseOrchestrator(
+        engine=engine,
+        scout=scout,
+        novelty=novelty,
+        assimilator=assimilator,
+        config=config,
+    )
+
+
+@pulse_app.command(name="scan")
+def pulse_scan(
+    keywords: Optional[str] = typer.Option(None, "--keywords", "-k", help="Comma-separated search keywords"),
+    from_date: Optional[str] = typer.Option(None, "--from-date", help="Start date (YYYY-MM-DD)"),
+    to_date: Optional[str] = typer.Option(None, "--to-date", help="End date (YYYY-MM-DD)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Scan and filter only, skip assimilation"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """One-shot X scan: discover GitHub repos, filter, and assimilate."""
+    import asyncio
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            orch = await _pulse_orchestrator(engine, cfg)
+            kw_list = [k.strip() for k in keywords.split(",")] if keywords else None
+            result = await orch.run_single_scan(
+                keywords=kw_list,
+                from_date=from_date,
+                to_date=to_date,
+                dry_run=dry_run,
+            )
+            console.print(orch.build_scan_report(result))
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="daemon")
+def pulse_daemon(
+    interval: Optional[int] = typer.Option(None, "--interval", "-i", help="Poll interval in minutes (overrides config)"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Start perpetual polling daemon."""
+    import asyncio
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        if interval is not None:
+            cfg.pulse.poll_interval_minutes = interval
+        try:
+            orch = await _pulse_orchestrator(engine, cfg)
+            console.print(f"[bold green]PULSE daemon starting[/bold green] (interval={cfg.pulse.poll_interval_minutes}m)")
+            await orch.run_daemon()
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="status")
+def pulse_status(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show discovery statistics."""
+    import asyncio
+    from claw.pulse.dashboard import PulseDashboard
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            dash = PulseDashboard(engine)
+            await dash.show_stats()
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="discoveries")
+def pulse_discoveries(
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (discovered, assimilated, failed, etc.)"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum rows to display"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """List recent discoveries."""
+    import asyncio
+    from claw.pulse.dashboard import PulseDashboard
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            dash = PulseDashboard(engine)
+            await dash.show_novel(limit=limit)
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="scans")
+def pulse_scans(
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum scan sessions to display"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show scan history."""
+    import asyncio
+    from claw.pulse.dashboard import PulseDashboard
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            dash = PulseDashboard(engine)
+            await dash.show_scans(limit=limit)
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="report")
+def pulse_report(
+    date: Optional[str] = typer.Option(None, "--date", "-d", help="Date for report (YYYY-MM-DD), defaults to today"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Generate daily summary report."""
+    import asyncio
+    from claw.pulse.dashboard import PulseDashboard
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            dash = PulseDashboard(engine)
+            await dash.show_daily_report(date=date)
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="preflight")
+def pulse_preflight(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Validate PULSE configuration and API key."""
+    from claw.core.config import load_config
+    from claw.pulse.scout import XScout
+
+    cfg = load_config()
+    scout = XScout(cfg.pulse)
+    ok, msg = scout.check_api_key()
+
+    if ok:
+        console.print(f"[green]OK[/green]: {msg}")
+        console.print(f"Model: {cfg.pulse.xai_model}")
+        console.print(f"Keywords: {len(cfg.pulse.keywords)}")
+        console.print(f"Novelty threshold: {cfg.pulse.novelty_threshold}")
+        console.print(f"Poll interval: {cfg.pulse.poll_interval_minutes}m")
+        console.print(f"Max cost/day: ${cfg.pulse.max_cost_per_day_usd:.2f}")
+    else:
+        console.print(f"[red]FAIL[/red]: {msg}")
+        raise typer.Exit(1)
 
 
 def app_main() -> None:

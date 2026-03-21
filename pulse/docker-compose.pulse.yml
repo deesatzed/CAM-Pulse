@@ -1,0 +1,50 @@
+# CAM-PULSE Docker Compose — Perpetual X-powered discovery swarm
+#
+# Usage:
+#   docker compose -f pulse/docker-compose.pulse.yml up --build
+#   docker compose -f pulse/docker-compose.pulse.yml up -d  # detached
+#
+# Environment:
+#   XAI_API_KEY must be set (required for x_search).
+#   OPENROUTER_API_KEY needed for mining (LLM analysis).
+#
+# Volumes:
+#   ./data is shared across all services for claw.db and pulse_clones.
+
+services:
+  pulse-orchestrator:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["cam", "pulse", "daemon"]
+    volumes:
+      - ../data:/app/data
+    environment:
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    restart: unless-stopped
+
+  pulse-scout-ai:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["cam", "pulse", "scan", "--keywords", "AI agent framework new repo github.com,LLM tool open source github.com"]
+    volumes:
+      - ../data:/app/data
+    environment:
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+  pulse-scout-tools:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["cam", "pulse", "scan", "--keywords", "developer tools CLI open source github.com,code analysis static analysis github.com"]
+    volumes:
+      - ../data:/app/data
+    environment:
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}

@@ -324,3 +324,42 @@ CREATE TABLE IF NOT EXISTS governance_log (
 );
 CREATE INDEX IF NOT EXISTS idx_governance_log_action ON governance_log(action_type);
 CREATE INDEX IF NOT EXISTS idx_governance_log_created ON governance_log(created_at DESC);
+
+-- 16. PULSE_DISCOVERIES (X-discovered repos via CAM-PULSE)
+CREATE TABLE IF NOT EXISTS pulse_discoveries (
+    id TEXT PRIMARY KEY,
+    github_url TEXT NOT NULL,
+    canonical_url TEXT NOT NULL,
+    x_post_url TEXT,
+    x_post_text TEXT,
+    x_author_handle TEXT,
+    discovered_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    novelty_score REAL,
+    status TEXT NOT NULL DEFAULT 'discovered'
+        CHECK (status IN ('discovered','cloning','mining','assimilated','failed','skipped','queued_enhance')),
+    scan_id TEXT,
+    keywords_matched TEXT NOT NULL DEFAULT '[]',
+    mine_result TEXT,
+    methodology_ids TEXT NOT NULL DEFAULT '[]',
+    error_detail TEXT,
+    UNIQUE(canonical_url)
+);
+CREATE INDEX IF NOT EXISTS idx_pulse_disc_status ON pulse_discoveries(status);
+CREATE INDEX IF NOT EXISTS idx_pulse_disc_novelty ON pulse_discoveries(novelty_score DESC);
+CREATE INDEX IF NOT EXISTS idx_pulse_disc_discovered ON pulse_discoveries(discovered_at DESC);
+
+-- 17. PULSE_SCAN_LOG (Scan session tracking for CAM-PULSE)
+CREATE TABLE IF NOT EXISTS pulse_scan_log (
+    id TEXT PRIMARY KEY,
+    scan_type TEXT NOT NULL DEFAULT 'x_search',
+    keywords TEXT NOT NULL DEFAULT '[]',
+    started_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at TEXT,
+    repos_discovered INTEGER NOT NULL DEFAULT 0,
+    repos_novel INTEGER NOT NULL DEFAULT 0,
+    repos_assimilated INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0.0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    error_detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pulse_scan_started ON pulse_scan_log(started_at DESC);

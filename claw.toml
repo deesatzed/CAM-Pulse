@@ -171,6 +171,35 @@ timeout = 300
 max_budget_usd = 1.0
 
 # ---------------------------------------------------------------------------
+# CAM-PULSE: Perpetual Unified Learning Swarm Engine
+# ---------------------------------------------------------------------------
+# Autonomous X-powered discovery and assimilation of novel GitHub repos.
+# Requires XAI_API_KEY (set in environment or xai.env).
+# Enable and set xai_model to activate.
+
+[pulse]
+enabled = false
+poll_interval_minutes = 30
+max_scouts = 4
+novelty_threshold = 0.70
+max_cost_per_scan_usd = 0.50
+max_cost_per_day_usd = 10.0
+max_repos_per_scan = 20
+clone_workspace = "data/pulse_clones"
+auto_mine = true
+auto_queue_enhance = false
+enhance_novelty_threshold = 0.85
+self_improve_interval_hours = 24
+xai_model = ""  # Set your Grok model here (e.g., "grok-3")
+xai_api_key_env = "XAI_API_KEY"
+keywords = [
+    "github.com new repo",
+    "github.com just released open source",
+    "github.com dropped today AI agent framework",
+    "github.com new tool CLI developer",
+]
+
+# ---------------------------------------------------------------------------
 # Local LLM providers (Ollama / MLX-LM)
 # ---------------------------------------------------------------------------
 # To use a local model, set mode = "local" on any agent above and configure

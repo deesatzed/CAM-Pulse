@@ -1,0 +1,26 @@
+# CAM-PULSE standalone configuration for Docker deployment
+#
+# This overrides the [pulse] section from the main claw.toml
+# when running in Docker containers.
+
+[pulse]
+enabled = true
+poll_interval_minutes = 30
+max_scouts = 4
+novelty_threshold = 0.70
+max_cost_per_scan_usd = 0.50
+max_cost_per_day_usd = 10.0
+max_repos_per_scan = 20
+clone_workspace = "data/pulse_clones"
+auto_mine = true
+auto_queue_enhance = false
+enhance_novelty_threshold = 0.85
+self_improve_interval_hours = 24
+xai_model = ""  # Set your Grok model here (e.g., grok-3)
+xai_api_key_env = "XAI_API_KEY"
+keywords = [
+    "github.com new repo",
+    "github.com just released open source",
+    "github.com dropped today AI agent",
+    "github.com framework new 2026",
+]
