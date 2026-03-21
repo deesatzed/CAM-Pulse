@@ -7866,6 +7866,7 @@ async def _pulse_orchestrator(engine, config):
     from claw.db.embeddings import EmbeddingEngine
     from claw.db.repository import Repository
     from claw.llm.client import LLMClient
+    from claw.memory.hybrid_search import HybridSearch
     from claw.memory.semantic import SemanticMemory
     from claw.miner import RepoMiner
     from claw.pulse.assimilator import PulseAssimilator
@@ -7874,9 +7875,10 @@ async def _pulse_orchestrator(engine, config):
     from claw.pulse.scout import XScout
 
     repository = Repository(engine)
-    llm_client = LLMClient(config)
+    llm_client = LLMClient(config.llm)
     embedding_engine = EmbeddingEngine()
-    semantic_memory = SemanticMemory(repository, embedding_engine)
+    hybrid_search = HybridSearch(repository, embedding_engine)
+    semantic_memory = SemanticMemory(repository, embedding_engine, hybrid_search)
 
     scout = XScout(config.pulse)
     novelty = NoveltyFilter(engine, embedding_engine, config.pulse)
