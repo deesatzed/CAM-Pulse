@@ -40,6 +40,8 @@ Thumbs.db
 
 # Token cost logs
 *.jsonl
+# But allow test fixture JSONL files
+!tests/fixtures/**/*.jsonl
 
 # Local working notes and agent instruction files
 CLAUDE.md
