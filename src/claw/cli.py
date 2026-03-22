@@ -5865,16 +5865,20 @@ def setup(
         console.print("[dim]Run from the multiclaw directory or pass --config path/to/claw.toml[/dim]")
         raise typer.Exit(1)
 
-    console.print(f"\n[bold]CLAW Setup[/bold]")
+    console.print(f"\n[bold]CAM Setup[/bold]")
     console.print(f"  Config: {config_path}\n")
 
-    # Load .env file so API keys are available during setup
+    # Load .env file so API keys and models are available
     import os
     from dotenv import load_dotenv
     env_path = config_path.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=False)
-        console.print(f"  [dim]Loaded .env from {env_path}[/dim]\n")
+        console.print(f"  [dim]Loaded .env from {env_path}[/dim]")
+    else:
+        console.print(f"  [yellow]No .env found. Run: cp .env.example .env[/yellow]")
+        console.print(f"  [yellow]Fill in your API keys and models, then re-run cam setup.[/yellow]")
+        raise typer.Exit(1)
 
     # Load current config
     with open(config_path) as f:
@@ -5883,186 +5887,128 @@ def setup(
     agents_section = raw.setdefault("agents", {})
     changed = False
 
-    # Check which routing keys are available
-    or_key = os.getenv("OPENROUTER_API_KEY", "")
-    has_openrouter = bool(or_key)
+    # ── Key summary (read-only, no prompts) ──
+    console.print(f"\n[bold cyan]── API Keys (from .env) ──[/bold cyan]")
+    key_checks = {
+        "OPENROUTER_API_KEY": "Multi-agent LLM routing",
+        "XAI_API_KEY": "PULSE X-Scout scanning",
+        "GOOGLE_API_KEY": "Embeddings / novelty scoring",
+    }
+    keys_ok = {}
+    for key_name, purpose in key_checks.items():
+        val = os.getenv(key_name, "")
+        keys_ok[key_name] = bool(val)
+        status = "[green]set[/green]" if val else "[red]missing[/red]"
+        console.print(f"  {key_name}: {status}  ({purpose})")
 
-    # --- Agent configuration ---
-    # Each agent can be used via its native key OR via OpenRouter
-    agent_info = {
-        "claude": {
-            "label": "Claude (Anthropic)",
-            "native_key_env": "ANTHROPIC_API_KEY",
-            "model_hint": "e.g. anthropic/claude-sonnet-4-6, anthropic/claude-opus-4-6",
-        },
-        "codex": {
-            "label": "Codex (OpenAI)",
-            "native_key_env": "OPENAI_API_KEY",
-            "model_hint": "e.g. openai/codex-mini-latest, openai/o4-mini",
-        },
-        "gemini": {
-            "label": "Gemini (Google)",
-            "native_key_env": "GOOGLE_API_KEY",
-            "model_hint": "e.g. google/gemini-2.5-pro, google/gemini-2.5-flash",
-        },
-        "grok": {
-            "label": "Grok (xAI)",
-            "native_key_env": "XAI_API_KEY",
-            "model_hint": "e.g. x-ai/grok-4-1-fast-non-reasoning, x-ai/grok-4.20-0309-reasoning",
-        },
+    if not any(keys_ok.values()):
+        console.print(f"\n  [red]No API keys found. Edit .env and add your keys first.[/red]")
+        raise typer.Exit(1)
+    console.print()
+
+    has_openrouter = keys_ok["OPENROUTER_API_KEY"]
+
+    # ── Agent models (read from .env CAM_MODEL_* vars) ──
+    console.print(f"[bold cyan]── Agent Models (from .env) ──[/bold cyan]")
+    agent_slots = {
+        "claude": {"env_var": "CAM_MODEL_CLAUDE", "label": "Claude"},
+        "codex": {"env_var": "CAM_MODEL_CODEX", "label": "Codex"},
+        "gemini": {"env_var": "CAM_MODEL_GEMINI", "label": "Gemini"},
+        "grok": {"env_var": "CAM_MODEL_GROK", "label": "Grok"},
     }
 
-    for agent_name, info in agent_info.items():
-        native_key_env = info["native_key_env"]
-        has_native = bool(os.getenv(native_key_env, ""))
+    enabled_agents = []
+    for agent_name, slot in agent_slots.items():
+        model = os.getenv(slot["env_var"], "").strip()
+        if model:
+            console.print(f"  {slot['label']:8s} → {model}")
+            enabled_agents.append((agent_name, model))
+        else:
+            console.print(f"  [dim]{slot['label']:8s} → (not set — agent disabled)[/dim]")
 
-        # Skip agents that have no usable key (neither native nor OpenRouter)
-        if not has_native and not has_openrouter:
-            current = agents_section.get(agent_name, {})
-            if current.get("enabled", False):
-                agents_section.setdefault(agent_name, {})["enabled"] = False
-                changed = True
-            console.print(f"[dim]--- {info['label']} --- skipped (no {native_key_env} or OPENROUTER_API_KEY)[/dim]\n")
-            continue
+    if not enabled_agents:
+        console.print(f"\n  [yellow]No agent models set. Add CAM_MODEL_* vars to .env.[/yellow]")
+        console.print(f"  [dim]Example: CAM_MODEL_CLAUDE=anthropic/claude-sonnet-4-6[/dim]")
 
-        console.print(f"[bold cyan]--- {info['label']} ---[/bold cyan]")
+    # PULSE model
+    pulse_model = os.getenv("CAM_PULSE_MODEL", "").strip()
+    console.print(f"\n  {'PULSE':8s} → {pulse_model or '[dim](not set)[/dim]'}")
+    console.print()
 
+    # ── Budget configuration (the only interactive part) ──
+    console.print(f"[bold cyan]── Budget Configuration ──[/bold cyan]")
+    console.print(f"  Budgets are hard caps — CAM stops spending when hit.")
+    console.print(f"  Typical costs:")
+    console.print(f"    Per-agent task (evaluate/enhance a repo): $0.50 - $2.00")
+    console.print(f"    PULSE scan (4 keywords via x_search):    ~$0.02 per scan")
+    console.print(f"    PULSE daily (scan every 30 min):          ~$1-2 per day")
+    console.print()
+
+    for agent_name, model in enabled_agents:
         current = agents_section.get(agent_name, {})
-        current_enabled = current.get("enabled", False)
-        current_model = current.get("model")
         current_budget = current.get("max_budget_usd", 1.0)
-
-        # Show key status
-        if has_native:
-            console.print(f"  {native_key_env}: [green]set[/green]")
-        if has_openrouter:
-            console.print(f"  OPENROUTER_API_KEY: [green]set[/green] (can route to {agent_name})")
-
-        # Enable/disable
-        enable_str = console.input(
-            f"  Enable {agent_name}? [{'Y/n' if current_enabled else 'y/N'}] "
-        ).strip().lower()
-
-        if enable_str == "":
-            enable = current_enabled
-        else:
-            enable = enable_str in ("y", "yes")
-
-        if not enable:
-            agents_section.setdefault(agent_name, {})["enabled"] = False
-            if enable != current_enabled:
-                changed = True
-            console.print(f"  [dim]{agent_name}: disabled[/dim]\n")
-            continue
-
-        # Mode selection — offer openrouter if available
-        current_mode = current.get("mode", "openrouter" if has_openrouter else "api")
-        available_modes = ["openrouter", "api", "cli", "local"]
-        mode_display = "/".join(available_modes)
-        mode_input = console.input(
-            f"  Mode ({mode_display}) [{current_mode}]: "
-        ).strip().lower()
-        mode = mode_input if mode_input in available_modes else current_mode
-
-        # Set the correct api_key_env based on mode
-        if mode == "openrouter":
-            key_env = "OPENROUTER_API_KEY"
-        else:
-            key_env = native_key_env
-
-        # Model selection
-        console.print(f"  Model ({info['model_hint']}):")
-        model_input = console.input(
-            f"  Model [{current_model or 'none'}]: "
-        ).strip()
-
-        model = model_input if model_input else current_model
-
-        # Budget
         budget_input = console.input(
-            f"  Max budget per task USD [{current_budget}]: "
+            f"  {agent_name} max budget per task USD [{current_budget}]: "
         ).strip()
-
         try:
             budget = float(budget_input) if budget_input else current_budget
         except ValueError:
-            console.print(f"  [yellow]Invalid budget, keeping {current_budget}[/yellow]")
+            console.print(f"  [yellow]Invalid, keeping ${current_budget:.2f}[/yellow]")
             budget = current_budget
 
-        # Write to config
+        # Write agent config
         agent_section = agents_section.setdefault(agent_name, {})
         new_values = {
             "enabled": True,
-            "mode": mode,
-            "api_key_env": key_env,
+            "mode": "openrouter" if has_openrouter else "api",
+            "api_key_env": "OPENROUTER_API_KEY" if has_openrouter else "",
+            "model": model,
             "max_concurrent": current.get("max_concurrent", 2),
             "timeout": current.get("timeout", 600 if agent_name in ("claude", "gemini") else 300),
             "max_budget_usd": budget,
         }
-        if model:
-            new_values["model"] = model
-
         if new_values != {k: current.get(k) for k in new_values}:
             changed = True
-
         agent_section.update(new_values)
+        console.print(f"  [green]{agent_name}: {model}, ${budget:.2f}/task[/green]")
 
-        status_parts = [f"enabled", f"mode={mode}"]
-        if model:
-            status_parts.append(f"model={model}")
-        status_parts.append(f"budget=${budget:.2f}")
-        console.print(f"  [green]{agent_name}: {', '.join(status_parts)}[/green]\n")
-
-    # --- OpenRouter summary ---
-    console.print(f"[bold cyan]--- OpenRouter (LLM Client) ---[/bold cyan]")
-    or_status = "[green]set[/green]" if has_openrouter else "[red]not set[/red]"
-    console.print(f"  API key (OPENROUTER_API_KEY): {or_status}")
-    if not has_openrouter:
-        console.print(f"  [dim]Set it with: export OPENROUTER_API_KEY=your-key-here[/dim]")
-        console.print(f"  [dim]Or add to .env file. Most agents route through OpenRouter.[/dim]")
-    console.print()
-
-    # --- CAM-PULSE configuration ---
-    console.print(f"[bold cyan]--- CAM-PULSE (X-Scout Discovery) ---[/bold cyan]")
-    pulse_section = raw.setdefault("pulse", {})
-    current_pulse_enabled = pulse_section.get("enabled", False)
-    current_xai_model = pulse_section.get("xai_model", "")
-    current_pulse_budget = pulse_section.get("max_cost_per_day_usd", 10.0)
-
-    xai_key = os.getenv("XAI_API_KEY", "")
-    xai_status = "[green]set[/green]" if xai_key else "[red]not set[/red]"
-    console.print(f"  API key (XAI_API_KEY): {xai_status}")
-    if not xai_key:
-        console.print(f"  [dim]Get one at https://console.x.ai/ — set with: export XAI_API_KEY=your-key-here[/dim]")
-
-    pulse_enable_str = console.input(
-        f"  Enable PULSE? [{'Y/n' if current_pulse_enabled else 'y/N'}] "
-    ).strip().lower()
-    if pulse_enable_str == "":
-        pulse_enabled = current_pulse_enabled
-    else:
-        pulse_enabled = pulse_enable_str in ("y", "yes")
-
-    if pulse_enabled:
-        pulse_section["enabled"] = True
-
-        console.print(f"  xAI model (grok-4-1-fast-non-reasoning recommended for budget):")
-        xai_model_input = console.input(
-            f"  Model [{current_xai_model or 'none'}]: "
-        ).strip()
-        if xai_model_input:
-            pulse_section["xai_model"] = xai_model_input
+    # Disable agents that have no model set
+    all_agent_names = set(agent_slots.keys())
+    enabled_names = {name for name, _ in enabled_agents}
+    for disabled_name in all_agent_names - enabled_names:
+        section = agents_section.setdefault(disabled_name, {})
+        if section.get("enabled", False):
+            section["enabled"] = False
             changed = True
 
+    console.print()
+
+    # ── PULSE configuration ──
+    console.print(f"[bold cyan]── CAM-PULSE (X-Scout Discovery) ──[/bold cyan]")
+    pulse_section = raw.setdefault("pulse", {})
+    has_xai = keys_ok["XAI_API_KEY"]
+
+    if not has_xai:
+        console.print(f"  [dim]PULSE disabled — XAI_API_KEY not set in .env[/dim]\n")
+        pulse_section["enabled"] = False
+    elif not pulse_model:
+        console.print(f"  [dim]PULSE disabled — CAM_PULSE_MODEL not set in .env[/dim]")
+        console.print(f"  [dim]Add: CAM_PULSE_MODEL=grok-4-1-fast-non-reasoning[/dim]\n")
+        pulse_section["enabled"] = False
+    else:
+        pulse_section["enabled"] = True
+        pulse_section["xai_model"] = pulse_model
+
+        current_pulse_budget = pulse_section.get("max_cost_per_day_usd", 10.0)
         budget_input = console.input(
-            f"  Max cost per day USD [{current_pulse_budget}]: "
+            f"  PULSE max cost per day USD [{current_pulse_budget}]: "
         ).strip()
         try:
-            if budget_input:
-                pulse_section["max_cost_per_day_usd"] = float(budget_input)
-                changed = True
+            pulse_budget = float(budget_input) if budget_input else current_pulse_budget
         except ValueError:
-            console.print(f"  [yellow]Invalid budget, keeping {current_pulse_budget}[/yellow]")
+            console.print(f"  [yellow]Invalid, keeping ${current_pulse_budget:.2f}[/yellow]")
+            pulse_budget = current_pulse_budget
+        pulse_section["max_cost_per_day_usd"] = pulse_budget
 
         # Profile configuration
         profile_section = pulse_section.setdefault("profile", {})
@@ -6071,6 +6017,7 @@ def setup(
         current_profile_domains = profile_section.get("domains", [])
 
         console.print(f"\n  [bold]Mission Profile[/bold]")
+        console.print(f"  [dim]Focus your PULSE instance on a domain (or keep 'general' for broad discovery)[/dim]")
         profile_name_input = console.input(
             f"  Profile name [{current_profile_name}]: "
         ).strip()
@@ -6093,16 +6040,9 @@ def setup(
             profile_section["domains"] = [d.strip() for d in domains_input.split(",") if d.strip()]
             changed = True
 
-        model_display = pulse_section.get("xai_model") or "not set"
-        budget_display = pulse_section.get("max_cost_per_day_usd", current_pulse_budget)
-        console.print(f"  [green]PULSE: enabled, model={model_display}, budget=${budget_display:.2f}/day[/green]")
-        profile_display = profile_section.get("name", current_profile_name)
-        console.print(f"  [green]Profile: {profile_display}[/green]\n")
-    else:
-        pulse_section["enabled"] = False
-        if pulse_enabled != current_pulse_enabled:
-            changed = True
-        console.print(f"  [dim]PULSE: disabled[/dim]\n")
+        console.print(f"\n  [green]PULSE: {pulse_model}, ${pulse_budget:.2f}/day, profile={profile_section.get('name', 'general')}[/green]\n")
+
+    changed = True  # Always write to capture model updates from .env
 
     # --- Write config ---
     if changed:
