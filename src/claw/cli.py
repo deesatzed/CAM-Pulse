@@ -7977,7 +7977,8 @@ def pulse_scan(
             console.print(orch.build_scan_report(result))
 
             # If 0 results, give the user useful context
-            if result.get("discovered", 0) == 0:
+            disc_count = len(result.discoveries) if hasattr(result, "discoveries") else 0
+            if disc_count == 0:
                 console.print(f"[dim]Tip: 0 discoveries can mean:[/dim]")
                 console.print(f"[dim]  • No X posts matched your keywords for this date range[/dim]")
                 console.print(f"[dim]  • Try broader keywords or a wider date range[/dim]")
