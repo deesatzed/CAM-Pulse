@@ -58,10 +58,13 @@ class NoveltyFilter:
         return round(min(1.0, combined), 3)
 
     async def is_already_known(self, canonical_url: str) -> bool:
-        """Fast URL-based check against pulse_discoveries and fleet_repos."""
-        # Check pulse_discoveries
+        """Fast URL-based check against pulse_discoveries and fleet_repos.
+
+        Only counts 'assimilated' discoveries as known — failed ones are retryable.
+        """
+        # Check pulse_discoveries (only assimilated count as known)
         row = await self.engine.fetch_one(
-            "SELECT COUNT(*) as cnt FROM pulse_discoveries WHERE canonical_url = ?",
+            "SELECT COUNT(*) as cnt FROM pulse_discoveries WHERE canonical_url = ? AND status = 'assimilated'",
             [canonical_url],
         )
         if row and row["cnt"] > 0:

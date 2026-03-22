@@ -32,10 +32,10 @@ class TestNoveltyFilter:
 
     @pytest.mark.asyncio
     async def test_known_url_scores_zero(self, pulse_engine):
-        # Insert a known URL
+        # Insert a known URL (assimilated = truly processed, should block)
         await pulse_engine.execute(
             """INSERT INTO pulse_discoveries (id, github_url, canonical_url, status)
-               VALUES ('d1', 'https://github.com/known/repo', 'https://github.com/known/repo', 'discovered')"""
+               VALUES ('d1', 'https://github.com/known/repo', 'https://github.com/known/repo', 'assimilated')"""
         )
         nf = NoveltyFilter(pulse_engine, config=PulseConfig())
         disc = PulseDiscovery(
@@ -70,7 +70,7 @@ class TestNoveltyFilter:
     async def test_is_already_known_true(self, pulse_engine):
         await pulse_engine.execute(
             """INSERT INTO pulse_discoveries (id, github_url, canonical_url, status)
-               VALUES ('d2', 'https://github.com/x/y', 'https://github.com/x/y', 'discovered')"""
+               VALUES ('d2', 'https://github.com/x/y', 'https://github.com/x/y', 'assimilated')"""
         )
         nf = NoveltyFilter(pulse_engine, config=PulseConfig())
         result = await nf.is_already_known("https://github.com/x/y")
@@ -86,10 +86,10 @@ class TestNoveltyFilter:
             )
             for i in range(3)
         ]
-        # Insert one as known
+        # Insert one as assimilated (known = won't retry)
         await pulse_engine.execute(
             """INSERT INTO pulse_discoveries (id, github_url, canonical_url, status)
-               VALUES ('dk', 'https://github.com/new/repo0', 'https://github.com/new/repo0', 'discovered')"""
+               VALUES ('dk', 'https://github.com/new/repo0', 'https://github.com/new/repo0', 'assimilated')"""
         )
         novel = await nf.filter_discoveries(discoveries)
         # repo0 is known (score 0.0), repo1 and repo2 should pass
@@ -97,6 +97,28 @@ class TestNoveltyFilter:
         # Verify scores were set
         for d in novel:
             assert d.novelty_score >= 0.5
+
+    @pytest.mark.asyncio
+    async def test_failed_discovery_is_retryable(self, pulse_engine):
+        """Failed discoveries should NOT block re-assimilation."""
+        await pulse_engine.execute(
+            """INSERT INTO pulse_discoveries (id, github_url, canonical_url, status)
+               VALUES ('df', 'https://github.com/fail/repo', 'https://github.com/fail/repo', 'failed')"""
+        )
+        nf = NoveltyFilter(pulse_engine, config=PulseConfig())
+        result = await nf.is_already_known("https://github.com/fail/repo")
+        assert result is False  # failed = retryable, not "known"
+
+    @pytest.mark.asyncio
+    async def test_discovered_status_is_retryable(self, pulse_engine):
+        """Discovered-but-not-assimilated repos should be retryable."""
+        await pulse_engine.execute(
+            """INSERT INTO pulse_discoveries (id, github_url, canonical_url, status)
+               VALUES ('dd', 'https://github.com/disc/repo', 'https://github.com/disc/repo', 'discovered')"""
+        )
+        nf = NoveltyFilter(pulse_engine, config=PulseConfig())
+        result = await nf.is_already_known("https://github.com/disc/repo")
+        assert result is False  # discovered = not yet processed, retryable
 
     @pytest.mark.asyncio
     async def test_semantic_novelty_without_engine(self, pulse_engine):
