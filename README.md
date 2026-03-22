@@ -15,11 +15,11 @@ CAM is a multi-agent autonomous codebase engineering system. It inspects, learns
 | Automated tests | **1,811 passing**, 6 skipped |
 | Agent backends | 4 (Claude, Codex, Gemini, Grok) |
 | Execution modes | 5 (CLI, API, Cloud, OpenRouter, **Local**) |
-| Knowledge base | 59 MB SQLite, 1,469+ mined methodologies |
+| Knowledge base | SQLite, 1,700+ mined methodologies |
 | Deployment | `pip install`, Docker, or Ollama local-only |
 | Install weight | Full (torch) **or** lightweight (API-only, no torch) |
 | Apple Silicon | Native MLX-LM + mlx-embeddings support |
-| Proven showpieces | 3 end-to-end (repo upgrade, medCSS modernizer, expectation ladder) |
+| Proven showpieces | 5 end-to-end (repo upgrade, medCSS modernizer, expectation ladder, PULSE knowledge loop, cross-repo intelligence) |
 
 ---
 
@@ -49,14 +49,36 @@ These are the capabilities that exist in CAM and do not exist in nanobot, ZeroCl
 
 5. **Deterministic standalone benchmarks** — `cam forge-benchmark` runs a repeatable regression harness on fixture data with no external dependencies. The result is a pass/fail with measured lift, not a subjective quality score.
 
+6. **Autonomous discovery from live social feeds** — CAM-PULSE scans X (Twitter) via Grok's `x_search`, discovers GitHub repos developers are sharing, filters by semantic novelty, clones and mines them, and stores the patterns. No other tool learns from the wild without human curation.
+
+7. **Semantic knowledge search** — `cam learn search "topic"` performs hybrid vector + text search across all 1,700+ methodologies with provenance, lifecycle tracking, and cross-domain synergy scoring.
+
+### How CAM Compares
+
+| Capability | CAM | Aider | Cursor | AutoGPT | Generic Claw Variants |
+|---|---|---|---|---|---|
+| **Verifies actual file diffs** | Yes — fails if nothing changed | No | No | No | No |
+| **Persistent cross-repo memory** | 1,700+ methodologies in SQLite | None | None | Limited (workspace only) | None |
+| **Semantic knowledge search** | Hybrid vector + text search | N/A | N/A | N/A | N/A |
+| **Autonomous repo discovery** | PULSE X-Scout daemon | No | No | No | No |
+| **Preflight contract system** | Blocks unsafe work, persists answers | No | No | No | No |
+| **Namespace-safe execution** | Rejects agent drift, auto-retries | No | No | No | No |
+| **Multi-agent routing** | 4 agents, Bayesian routing | 1 model | 1 model | 1 model | Usually 1 model |
+| **Deterministic benchmarks** | Fixture-based, measured lift | No | No | No | No |
+| **Knowledge lifecycle** | 5 stages: stored → proven | N/A | N/A | N/A | N/A |
+| **Budget controls** | 3-layer caps (scan/day/agent) | None | Subscription | Token limits | None |
+| **Methodology attribution** | Per-task provenance tracking | N/A | N/A | N/A | N/A |
+| **Local-only mode** | Ollama + MLX-LM, zero cloud keys | Some models | No | No | Varies |
+| **Honest failure** | Reports 0% lift, marks failed runs | Silent | Silent | Retries | Silent |
+
 ---
 
 ## Current Status (March 2026)
 
 - **Phase 1 complete**: SKILL.md wrapper, GitHub issue templates, namespace fix, reliability pipeline
-- **Phase 2 complete**: Docker deployment, Ollama/MLX-LM local mode, torch-free lightweight install, 1,735 tests
-- **Phase 3 in progress**: CAM-PULSE autonomous X-powered discovery swarm (76 new tests, 1,811 total)
-- Battle-tested locally across 3 end-to-end showpieces
+- **Phase 2 complete**: Docker deployment, Ollama/MLX-LM local mode, torch-free lightweight install
+- **Phase 3 complete**: CAM-PULSE autonomous X-powered discovery swarm, mission profiles, budget config, JSON repair
+- **1,838 automated tests** passing, 5 runnable showpieces, 1,700+ learned methodologies
 - Not yet fully autonomous — `--execute` mode is gated behind preflight checks
 - Coverage at 79% (target: >90%, action plan in progress)
 
@@ -749,11 +771,13 @@ These are the preferred expert paths. The older flat commands still work as comp
 - Project charter and anti-drift expectations: [docs/CAM_PROJECT_CHARTER.md](docs/CAM_PROJECT_CHARTER.md)
 - Short operator quick-reference: [docs/CAM_OPERATOR_CHEATSHEET.md](docs/CAM_OPERATOR_CHEATSHEET.md)
 - End-to-end example workflows and outputs: [docs/CAM_EXAMPLE_WORKFLOWS.md](docs/CAM_EXAMPLE_WORKFLOWS.md)
-- Current public showpiece: [docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md)
+- Repo upgrade advisor showpiece: [docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md)
 - medCSS website modernizer showpiece: [docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md](docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md)
-- expectation ladder showpiece: [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
-- one-command reliability pipeline harness: [scripts/run_cam_reliability_pipeline.sh](scripts/run_cam_reliability_pipeline.sh)
-- versioned medCSS CLI showpiece app: [apps/medcss_modernizer_showpiece](apps/medcss_modernizer_showpiece)
+- Expectation ladder showpiece: [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
+- PULSE knowledge loop showpiece: [docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md)
+- Cross-repo intelligence showpiece: [docs/CAM_SHOWPIECE_CROSS_REPO_INTELLIGENCE.md](docs/CAM_SHOWPIECE_CROSS_REPO_INTELLIGENCE.md)
+- One-command reliability pipeline harness: [scripts/run_cam_reliability_pipeline.sh](scripts/run_cam_reliability_pipeline.sh)
+- Versioned medCSS CLI showpiece app: [apps/medcss_modernizer_showpiece](apps/medcss_modernizer_showpiece)
 - Blog-style writeup of the showpiece run: [docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md](docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md)
 - OpenClaw skill wrapper: [SKILL.md](SKILL.md)
 

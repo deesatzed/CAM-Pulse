@@ -6854,6 +6854,78 @@ def learn_usage(
     asyncio.run(_learn_usage_async(task_id, config))
 
 
+@learn_app.command(name="search")
+def learn_search(
+    query: str = typer.Argument(..., help="Natural language search query"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show detailed scores"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Semantic search across all learned methodologies."""
+    _setup_logging(verbose)
+    asyncio.run(_learn_search_async(query, limit, verbose, config))
+
+
+async def _learn_search_async(
+    query: str, limit: int, verbose: bool, config_path: Optional[str]
+) -> None:
+    from claw.core.factory import ClawFactory
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        hs = ctx.semantic_memory.hybrid_search
+        results = await hs.search(query, limit=limit)
+
+        if not results:
+            console.print(f"[yellow]No methodologies matched: {query!r}[/yellow]")
+            return
+
+        console.print(f"\n[bold]CAM Knowledge Search[/bold]: {query!r}")
+        console.print(f"  {len(results)} result(s)\n")
+
+        table = Table(show_lines=True)
+        table.add_column("#", width=3, justify="right")
+        table.add_column("Description", max_width=52)
+        table.add_column("Score", width=6, justify="right")
+        table.add_column("Source", max_width=28)
+        table.add_column("Domains", max_width=30)
+        if verbose:
+            table.add_column("Vec", width=5, justify="right")
+            table.add_column("Txt", width=5, justify="right")
+            table.add_column("Stage", width=12)
+
+        for i, r in enumerate(results, 1):
+            m = r.methodology
+            source = next(
+                (tag.split(":", 1)[1] for tag in (m.tags or []) if tag.startswith("source:")),
+                "-",
+            )
+            cd = m.capability_data or {}
+            domains = ", ".join(cd.get("domain", [])[:3]) if cd else "-"
+            desc = m.problem_description[:52] if m.problem_description else "-"
+
+            row = [
+                str(i),
+                desc,
+                f"{r.combined_score:.3f}",
+                source,
+                domains,
+            ]
+            if verbose:
+                row.extend([
+                    f"{r.vector_score:.2f}",
+                    f"{r.text_score:.2f}",
+                    m.lifecycle_state or "-",
+                ])
+            table.add_row(*row)
+
+        console.print(table)
+    finally:
+        await ctx.close()
+
+
 @task_app.command(name="add")
 def task_add(
     repo: str = typer.Argument(..., help="Path to the repository this goal is for"),
