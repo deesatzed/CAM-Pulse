@@ -79,6 +79,9 @@ class XScout:
         if not to_date:
             to_date = from_date
 
+        # Profile-aware keyword enrichment: append domain terms to each keyword
+        keywords = self._enrich_keywords(keywords)
+
         scan_id = str(uuid.uuid4())[:8]
         all_discoveries: dict[str, PulseDiscovery] = {}
 
@@ -257,6 +260,26 @@ class XScout:
         if handle_match:
             return handle_match[-1]  # Closest handle before the URL
         return ""
+
+    def _enrich_keywords(self, keywords: list[str]) -> list[str]:
+        """Enrich keywords with profile domains if configured.
+
+        If profile.domains is set, appends domain terms to each keyword
+        to focus the search. E.g., keyword "github.com new repo" with
+        domains ["memory", "RAG"] becomes "github.com new repo memory RAG".
+        """
+        domains = getattr(self.config, "profile", None)
+        if domains is None:
+            return keywords
+        domain_list = getattr(domains, "domains", [])
+        if not domain_list:
+            return keywords
+
+        # Append up to 3 domain terms per keyword to keep queries focused
+        domain_suffix = " ".join(domain_list[:3])
+        enriched = [f"{kw} {domain_suffix}" for kw in keywords]
+        logger.info("Profile-enriched keywords: %s", enriched)
+        return enriched
 
     def check_api_key(self) -> tuple[bool, str]:
         """Validate that XAI_API_KEY is set and non-empty.

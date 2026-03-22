@@ -1,5 +1,6 @@
 """Tests for CAM-PULSE X-Scout URL extraction and normalization."""
 
+from claw.core.config import PulseConfig, PulseProfileConfig
 from claw.pulse.scout import XScout
 from claw.pulse.models import PulseDiscovery
 
@@ -190,7 +191,6 @@ class TestExtractDiscoveriesFromResponse:
         assert len(discoveries) == 1
 
     def test_empty_response(self, monkeypatch):
-        from claw.core.config import PulseConfig
         monkeypatch.setenv("XAI_API_KEY", "test")
         config = PulseConfig(xai_model="grok-3")
         scout = XScout(config)
@@ -198,3 +198,55 @@ class TestExtractDiscoveriesFromResponse:
         response = {"output": []}
         discoveries = scout._extract_discoveries_from_response(response, "kw", "s3")
         assert discoveries == []
+
+
+class TestProfileKeywordEnrichment:
+    def test_no_profile_returns_original(self, monkeypatch):
+        monkeypatch.setenv("XAI_API_KEY", "test")
+        config = PulseConfig(xai_model="grok-3")
+        scout = XScout(config)
+        keywords = ["github.com new repo", "AI framework"]
+        result = scout._enrich_keywords(keywords)
+        assert result == keywords
+
+    def test_empty_domains_returns_original(self, monkeypatch):
+        monkeypatch.setenv("XAI_API_KEY", "test")
+        config = PulseConfig(
+            xai_model="grok-3",
+            profile=PulseProfileConfig(name="test", domains=[]),
+        )
+        scout = XScout(config)
+        keywords = ["github.com new repo"]
+        result = scout._enrich_keywords(keywords)
+        assert result == keywords
+
+    def test_domains_enrich_keywords(self, monkeypatch):
+        monkeypatch.setenv("XAI_API_KEY", "test")
+        config = PulseConfig(
+            xai_model="grok-3",
+            profile=PulseProfileConfig(
+                name="agent-memory",
+                domains=["memory", "RAG", "vector-db"],
+            ),
+        )
+        scout = XScout(config)
+        keywords = ["github.com new repo", "AI framework"]
+        result = scout._enrich_keywords(keywords)
+        assert len(result) == 2
+        assert "memory RAG vector-db" in result[0]
+        assert "memory RAG vector-db" in result[1]
+
+    def test_domains_limited_to_three(self, monkeypatch):
+        monkeypatch.setenv("XAI_API_KEY", "test")
+        config = PulseConfig(
+            xai_model="grok-3",
+            profile=PulseProfileConfig(
+                name="broad",
+                domains=["a", "b", "c", "d", "e"],
+            ),
+        )
+        scout = XScout(config)
+        keywords = ["test"]
+        result = scout._enrich_keywords(keywords)
+        # Only first 3 domains appended
+        assert result == ["test a b c"]

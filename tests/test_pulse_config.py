@@ -1,6 +1,6 @@
 """Tests for CAM-PULSE configuration."""
 
-from claw.core.config import ClawConfig, PulseConfig, load_config
+from claw.core.config import ClawConfig, PulseConfig, PulseProfileConfig, load_config
 
 
 class TestPulseConfig:
@@ -41,9 +41,68 @@ class TestPulseConfig:
         assert hasattr(config, "pulse")
         assert isinstance(config.pulse, PulseConfig)
 
+    def test_pulse_config_has_profile(self):
+        pc = PulseConfig()
+        assert hasattr(pc, "profile")
+        assert isinstance(pc.profile, PulseProfileConfig)
+
+    def test_profile_defaults(self):
+        profile = PulseProfileConfig()
+        assert profile.name == "general"
+        assert profile.mission == ""
+        assert profile.domains == []
+        assert profile.novelty_bias == {}
+
+    def test_profile_custom_values(self):
+        profile = PulseProfileConfig(
+            name="agent-memory",
+            mission="Discover repos for agent memory",
+            domains=["memory", "RAG", "vector-db"],
+            novelty_bias={"memory": 0.15, "RAG": 0.10},
+        )
+        assert profile.name == "agent-memory"
+        assert profile.mission == "Discover repos for agent memory"
+        assert len(profile.domains) == 3
+        assert profile.novelty_bias["memory"] == 0.15
+
+    def test_pulse_config_with_profile(self):
+        pc = PulseConfig(
+            enabled=True,
+            xai_model="grok-4-1-fast-non-reasoning",
+            profile=PulseProfileConfig(
+                name="code-quality",
+                domains=["testing", "linting"],
+            ),
+        )
+        assert pc.profile.name == "code-quality"
+        assert pc.profile.domains == ["testing", "linting"]
+
+    def test_pulse_config_from_dict(self):
+        """Simulate TOML loading with nested profile."""
+        data = {
+            "enabled": True,
+            "xai_model": "grok-4-1-fast-non-reasoning",
+            "profile": {
+                "name": "agent-comms",
+                "mission": "Discover multi-agent repos",
+                "domains": ["multi-agent", "orchestration"],
+                "novelty_bias": {"orchestration": 0.15},
+            },
+        }
+        pc = PulseConfig(**data)
+        assert pc.profile.name == "agent-comms"
+        assert pc.profile.novelty_bias == {"orchestration": 0.15}
+
     def test_load_config_includes_pulse(self):
         config = load_config()
         assert hasattr(config, "pulse")
         assert isinstance(config.pulse, PulseConfig)
         # claw.toml should have [pulse] section
         assert config.pulse.novelty_threshold == 0.70
+
+    def test_load_config_includes_profile(self):
+        config = load_config()
+        assert hasattr(config.pulse, "profile")
+        assert isinstance(config.pulse.profile, PulseProfileConfig)
+        # claw.toml has [pulse.profile] with name = "general"
+        assert config.pulse.profile.name == "general"

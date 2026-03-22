@@ -202,6 +202,14 @@ class FleetConfig(BaseModel):
     max_cost_per_day_usd: float = 50.0
 
 
+class PulseProfileConfig(BaseModel):
+    """Mission profile for a PULSE instance."""
+    name: str = "general"
+    mission: str = ""
+    domains: list[str] = Field(default_factory=list)
+    novelty_bias: dict[str, float] = Field(default_factory=dict)
+
+
 class PulseConfig(BaseModel):
     """CAM-PULSE: Perpetual Unified Learning Swarm Engine configuration."""
     enabled: bool = False
@@ -224,6 +232,7 @@ class PulseConfig(BaseModel):
         "github.com dropped today AI agent",
         "github.com framework new 2026",
     ])
+    profile: PulseProfileConfig = Field(default_factory=PulseProfileConfig)
 
 
 class LoggingConfig(BaseModel):

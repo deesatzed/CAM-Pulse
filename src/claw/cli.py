@@ -5899,7 +5899,7 @@ def setup(
             "label": "Grok (xAI)",
             "key_env": "XAI_API_KEY",
             "default_mode": "api",
-            "model_hint": "e.g. grok-3, grok-3-mini",
+            "model_hint": "e.g. grok-4-1-fast-non-reasoning, grok-4.20-0309-reasoning",
         },
     }
 
@@ -5998,6 +5998,88 @@ def setup(
         console.print(f"  [dim]Set it with: export OPENROUTER_API_KEY=your-key-here[/dim]")
     console.print()
 
+    # --- CAM-PULSE configuration ---
+    console.print(f"[bold cyan]--- CAM-PULSE (X-Scout Discovery) ---[/bold cyan]")
+    pulse_section = raw.setdefault("pulse", {})
+    current_pulse_enabled = pulse_section.get("enabled", False)
+    current_xai_model = pulse_section.get("xai_model", "")
+    current_pulse_budget = pulse_section.get("max_cost_per_day_usd", 10.0)
+
+    xai_key = os.getenv("XAI_API_KEY", "")
+    xai_status = "[green]set[/green]" if xai_key else "[red]not set[/red]"
+    console.print(f"  API key (XAI_API_KEY): {xai_status}")
+    if not xai_key:
+        console.print(f"  [dim]Get one at https://console.x.ai/ — set with: export XAI_API_KEY=your-key-here[/dim]")
+
+    pulse_enable_str = console.input(
+        f"  Enable PULSE? [{'Y/n' if current_pulse_enabled else 'y/N'}] "
+    ).strip().lower()
+    if pulse_enable_str == "":
+        pulse_enabled = current_pulse_enabled
+    else:
+        pulse_enabled = pulse_enable_str in ("y", "yes")
+
+    if pulse_enabled:
+        pulse_section["enabled"] = True
+
+        console.print(f"  xAI model (grok-4-1-fast-non-reasoning recommended for budget):")
+        xai_model_input = console.input(
+            f"  Model [{current_xai_model or 'none'}]: "
+        ).strip()
+        if xai_model_input:
+            pulse_section["xai_model"] = xai_model_input
+            changed = True
+
+        budget_input = console.input(
+            f"  Max cost per day USD [{current_pulse_budget}]: "
+        ).strip()
+        try:
+            if budget_input:
+                pulse_section["max_cost_per_day_usd"] = float(budget_input)
+                changed = True
+        except ValueError:
+            console.print(f"  [yellow]Invalid budget, keeping {current_pulse_budget}[/yellow]")
+
+        # Profile configuration
+        profile_section = pulse_section.setdefault("profile", {})
+        current_profile_name = profile_section.get("name", "general")
+        current_profile_mission = profile_section.get("mission", "")
+        current_profile_domains = profile_section.get("domains", [])
+
+        console.print(f"\n  [bold]Mission Profile[/bold]")
+        profile_name_input = console.input(
+            f"  Profile name [{current_profile_name}]: "
+        ).strip()
+        if profile_name_input:
+            profile_section["name"] = profile_name_input
+            changed = True
+
+        mission_input = console.input(
+            f"  Mission [{current_profile_mission or 'none'}]: "
+        ).strip()
+        if mission_input:
+            profile_section["mission"] = mission_input
+            changed = True
+
+        domains_str = ", ".join(current_profile_domains) if current_profile_domains else "none"
+        domains_input = console.input(
+            f"  Domains (comma-separated) [{domains_str}]: "
+        ).strip()
+        if domains_input:
+            profile_section["domains"] = [d.strip() for d in domains_input.split(",") if d.strip()]
+            changed = True
+
+        model_display = pulse_section.get("xai_model") or "not set"
+        budget_display = pulse_section.get("max_cost_per_day_usd", current_pulse_budget)
+        console.print(f"  [green]PULSE: enabled, model={model_display}, budget=${budget_display:.2f}/day[/green]")
+        profile_display = profile_section.get("name", current_profile_name)
+        console.print(f"  [green]Profile: {profile_display}[/green]\n")
+    else:
+        pulse_section["enabled"] = False
+        if pulse_enabled != current_pulse_enabled:
+            changed = True
+        console.print(f"  [dim]PULSE: disabled[/dim]\n")
+
     # --- Write config ---
     if changed:
         with open(config_path, "w") as f:
@@ -6028,13 +6110,15 @@ def setup(
             console.print(line)
 
     console.print(f"\n[dim]Next steps:[/dim]")
-    console.print(f"  claw status              — verify agent connectivity")
-    console.print(f"  claw evaluate <repo>     — analyze a repository")
-    console.print(f"  claw add-goal <repo>     — add a custom task")
-    console.print(f"  claw enhance <repo>      — run the full pipeline")
-    console.print(f"  claw fleet-enhance <dir> — process a fleet of repos")
-    console.print(f"  claw forge-export        — export CAM memory for standalone Forge")
-    console.print(f"  claw forge-benchmark     — benchmark Forge with time guardrails")
+    console.print(f"  cam status              — verify agent connectivity")
+    console.print(f"  cam evaluate <repo>     — analyze a repository")
+    console.print(f"  cam add-goal <repo>     — add a custom task")
+    console.print(f"  cam enhance <repo>      — run the full pipeline")
+    console.print(f"  cam fleet-enhance <dir> — process a fleet of repos")
+    console.print(f"  cam pulse preflight     — verify PULSE configuration")
+    console.print(f"  cam pulse scan          — run a single X-Scout scan")
+    console.print(f"  cam forge-export        — export CAM memory for standalone Forge")
+    console.print(f"  cam forge-benchmark     — benchmark Forge with time guardrails")
 
 
 @app.command(hidden=True)

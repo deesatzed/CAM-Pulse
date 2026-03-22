@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CAM-PULSE — Autonomous X-Powered Code Discovery</title>
+  <meta name="description" content="CAM-PULSE: The autonomous, X-powered code vacuum that never sleeps. Perpetual discovery and assimilation of novel GitHub repos via Grok API.">
+  <meta property="og:title" content="CAM-PULSE — Autonomous X-Powered Code Discovery">
+  <meta property="og:description" content="The only codebase engineering system that discovers repos from X in real time, mines them into persistent knowledge, and proves what it did with actual diffs.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CAM-PULSE">
+  <meta name="twitter:description" content="Autonomous X-powered code discovery and assimilation engine.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0f;
+      color: #c9d1d9;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    a { color: #58a6ff; text-decoration: none; transition: color 0.2s; }
+    a:hover { color: #79c0ff; }
+    img { max-width: 100%; }
+
+    /* ── CSS Custom Properties ────────────────────────────── */
+    :root {
+      --crimson: #ff3366;
+      --cyan: #00ffaa;
+      --blue: #3366ff;
+      --purple: #a855f7;
+      --bg-deep: #0a0a0f;
+      --bg-card: #0d1117;
+      --bg-card-hover: #161b22;
+      --border: rgba(255,255,255,0.06);
+      --text-primary: #f0f6fc;
+      --text-secondary: #8b949e;
+      --text-dim: #484f58;
+      --container: 1140px;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    /* ── Layout ───────────────────────────────────────────── */
+    .container { max-width: var(--container); margin: 0 auto; padding: 0 24px; }
+    section { padding: 100px 0; position: relative; }
+
+    /* ── Typography ───────────────────────────────────────── */
+    h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 900; line-height: 1.1; color: var(--text-primary); }
+    h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 700; line-height: 1.2; color: var(--text-primary); margin-bottom: 16px; }
+    h3 { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
+    p { color: var(--text-secondary); }
+    .section-subtitle { font-size: 1.1rem; color: var(--text-secondary); max-width: 640px; margin-bottom: 48px; }
+    .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+    /* ── Gradient Text ────────────────────────────────────── */
+    .gradient-text {
+      background: linear-gradient(135deg, var(--crimson), var(--blue), var(--purple));
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: gradient-shift 4s ease infinite;
+    }
+    @keyframes gradient-shift {
+      0%, 100% { background-position: 0% center; }
+      50% { background-position: 100% center; }
+    }
+
+    /* ── Cards ────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,0.12);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    /* ── Buttons ──────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 14px 28px; border-radius: var(--radius-sm);
+      font-weight: 600; font-size: 1rem;
+      transition: all 0.3s ease; cursor: pointer;
+      border: none; text-decoration: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--crimson), #cc2952);
+      color: white;
+      box-shadow: 0 4px 16px rgba(255,51,102,0.3);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 6px 24px rgba(255,51,102,0.5);
+      transform: translateY(-1px);
+      color: white;
+    }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .btn-ghost:hover {
+      border-color: rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-primary);
+    }
+
+    /* ── Badge ────────────────────────────────────────────── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 50px;
+      font-size: 0.85rem; font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+    }
+    .badge .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--cyan);
+      animation: pulse-glow 2s ease infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,170,0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(0,255,170,0); }
+    }
+
+    /* ── Grids ────────────────────────────────────────────── */
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+    .grid-6 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+
+    /* ── Scroll Reveal ────────────────────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .reveal-delay-1 { transition-delay: 0.1s; }
+    .reveal-delay-2 { transition-delay: 0.2s; }
+    .reveal-delay-3 { transition-delay: 0.3s; }
+    .reveal-delay-4 { transition-delay: 0.4s; }
+    .reveal-delay-5 { transition-delay: 0.5s; }
+
+    /* ── Background Grid ──────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+    section { position: relative; z-index: 1; }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 1: HERO
+       ═══════════════════════════════════════════════════════ */
+    #hero {
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      text-align: center;
+      padding: 40px 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #hero-canvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 0;
+    }
+    .hero-content { position: relative; z-index: 1; max-width: 800px; }
+    .hero-title { margin-bottom: 16px; letter-spacing: -1px; }
+    .hero-tagline {
+      font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+    .hero-subtitle {
+      font-size: 0.95rem;
+      color: var(--text-dim);
+      margin-bottom: 36px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
+    .hero-metrics {
+      display: flex; gap: 32px; justify-content: center; flex-wrap: wrap;
+      padding: 20px 0;
+      border-top: 1px solid var(--border);
+    }
+    .hero-metric {
+      text-align: center;
+    }
+    .hero-metric .value {
+      font-size: 1.5rem; font-weight: 700; color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .hero-metric .label {
+      font-size: 0.75rem; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 1px;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 2: PROBLEM / SOLUTION
+       ═══════════════════════════════════════════════════════ */
+    #problem-solution { background: linear-gradient(180deg, var(--bg-deep), #0d1117); }
+    .comparison-row { margin-bottom: 32px; }
+    .comparison-label {
+      font-size: 0.8rem; font-weight: 600; letter-spacing: 1.5px;
+      text-transform: uppercase; margin-bottom: 16px;
+      padding-left: 4px;
+    }
+    .comparison-label.problem { color: #f85149; }
+    .comparison-label.solution { color: var(--cyan); }
+    .comparison-card {
+      display: flex; align-items: flex-start; gap: 16px;
+      padding: 20px 24px;
+    }
+    .comparison-icon {
+      flex-shrink: 0;
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; font-weight: 700;
+    }
+    .icon-problem { background: rgba(248,81,73,0.12); color: #f85149; }
+    .icon-solution { background: rgba(0,255,170,0.1); color: var(--cyan); }
+    .comparison-card h4 { font-size: 1rem; color: var(--text-primary); margin-bottom: 4px; }
+    .comparison-card p { font-size: 0.9rem; }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 3: ARCHITECTURE
+       ═══════════════════════════════════════════════════════ */
+    #architecture { text-align: center; }
+    .pipeline {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; flex-wrap: wrap;
+      margin: 48px 0 24px;
+    }
+    .pipeline-node {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px 20px;
+      text-align: center;
+      min-width: 140px;
+      position: relative;
+      transition: all 0.3s ease;
+    }
+    .pipeline-node .node-icon {
+      font-size: 1.8rem;
+      margin-bottom: 8px;
+      display: block;
+    }
+    .pipeline-node h4 { font-size: 0.9rem; color: var(--text-primary); margin-bottom: 4px; }
+    .pipeline-node p { font-size: 0.75rem; color: var(--text-dim); }
+    .pipeline-arrow {
+      color: var(--text-dim);
+      font-size: 1.4rem;
+      padding: 0 6px;
+      flex-shrink: 0;
+    }
+
+    /* Pipeline glow animation */
+    .pipeline-node.glow-1 { animation: node-glow 5s ease-in-out infinite 0s; }
+    .pipeline-node.glow-2 { animation: node-glow 5s ease-in-out infinite 1s; }
+    .pipeline-node.glow-3 { animation: node-glow 5s ease-in-out infinite 2s; }
+    .pipeline-node.glow-4 { animation: node-glow 5s ease-in-out infinite 3s; }
+    .pipeline-node.glow-5 { animation: node-glow 5s ease-in-out infinite 4s; }
+    @keyframes node-glow {
+      0%, 30%, 100% { border-color: var(--border); box-shadow: none; }
+      15% { border-color: var(--cyan); box-shadow: 0 0 20px rgba(0,255,170,0.15); }
+    }
+
+    .workflow-bar {
+      display: flex; justify-content: center; flex-wrap: wrap;
+      gap: 4px; margin-top: 40px;
+    }
+    .workflow-step {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 10px 18px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-radius: 6px;
+      transition: all 0.3s;
+    }
+    .workflow-step:hover { border-color: var(--crimson); color: var(--text-primary); }
+    .workflow-sep { color: var(--text-dim); font-size: 0.8rem; display: flex; align-items: center; }
+    .arch-caption {
+      font-size: 0.9rem; color: var(--text-dim);
+      margin-top: 16px;
+      font-style: italic;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 4: METRICS
+       ═══════════════════════════════════════════════════════ */
+    #metrics { background: linear-gradient(180deg, #0d1117, var(--bg-deep)); }
+    .metric-card {
+      text-align: center;
+      padding: 36px 24px;
+    }
+    .metric-card .number {
+      font-size: 3rem;
+      font-weight: 900;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-primary);
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    .metric-card .suffix {
+      font-size: 1.5rem;
+      color: var(--text-dim);
+    }
+    .metric-card .metric-label {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+    .metric-card:nth-child(1) .number { color: var(--cyan); }
+    .metric-card:nth-child(2) .number { color: var(--blue); }
+    .metric-card:nth-child(3) .number { color: var(--crimson); }
+    .metric-card:nth-child(4) .number { color: var(--purple); }
+    .metric-card:nth-child(5) .number { color: var(--cyan); }
+    .metric-card:nth-child(6) .number { color: var(--blue); }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 5: CODE SHOWCASE
+       ═══════════════════════════════════════════════════════ */
+    #code-showcase { }
+    .tabs {
+      display: flex; gap: 4px; margin-bottom: 0;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0;
+    }
+    .tab-btn {
+      padding: 12px 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      background: none;
+      border: none;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+    .tab-btn:hover { color: var(--text-secondary); }
+    .tab-btn.active {
+      color: var(--text-primary);
+    }
+    .tab-btn.active::after {
+      content: '';
+      position: absolute; bottom: -1px; left: 0; right: 0;
+      height: 2px; background: var(--crimson);
+      border-radius: 2px 2px 0 0;
+    }
+    .code-panel { display: none; }
+    .code-panel.active { display: block; }
+    .code-block {
+      background: #161b22;
+      border: 1px solid var(--border);
+      border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+      padding: 24px;
+      overflow-x: auto;
+      position: relative;
+    }
+    .code-block pre {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: var(--text-primary);
+    }
+    .code-block .comment { color: #8b949e; }
+    .code-block .command { color: var(--cyan); }
+    .code-block .flag { color: var(--crimson); }
+    .code-block .string { color: #a5d6ff; }
+    .copy-btn {
+      position: absolute; top: 12px; right: 12px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 6px 12px;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+    .copy-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-secondary); }
+    .copy-btn.copied { color: var(--cyan); border-color: rgba(0,255,170,0.3); }
+
+    .terminal-output {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 20px 24px;
+      margin-top: 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 1.8;
+      color: var(--text-secondary);
+    }
+    .terminal-header {
+      display: flex; gap: 6px; margin-bottom: 16px;
+    }
+    .terminal-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+    .terminal-dot.red { background: #ff5f56; }
+    .terminal-dot.yellow { background: #ffbd2e; }
+    .terminal-dot.green { background: #27c93f; }
+    .terminal-green { color: var(--cyan); }
+    .terminal-white { color: var(--text-primary); }
+    .terminal-dim { color: var(--text-dim); }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 6: AGENT BACKENDS
+       ═══════════════════════════════════════════════════════ */
+    #backends { background: linear-gradient(180deg, var(--bg-deep), #0d1117); }
+    .backend-card { padding: 32px; }
+    .backend-card .backend-icon { font-size: 2rem; margin-bottom: 12px; display: block; }
+    .backend-card h4 { font-size: 1.1rem; margin-bottom: 8px; }
+    .backend-card .model-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .backend-card .routing-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+    .routing-tag {
+      font-size: 0.7rem;
+      padding: 3px 10px;
+      border-radius: 50px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .backend-card:nth-child(1) { border-top: 2px solid var(--blue); }
+    .backend-card:nth-child(2) { border-top: 2px solid #fbbc04; }
+    .backend-card:nth-child(3) { border-top: 2px solid var(--crimson); }
+    .backend-card:nth-child(4) { border-top: 2px solid var(--cyan); }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 7: HONEST LIMITS
+       ═══════════════════════════════════════════════════════ */
+    #honest {
+      background: linear-gradient(180deg, #0d1117, #0f0d14);
+    }
+    .honest-border {
+      border: 1px solid rgba(255,153,0,0.2);
+      border-radius: var(--radius);
+      padding: 48px;
+      background: rgba(255,153,0,0.02);
+    }
+    .honest-item {
+      display: flex; gap: 20px;
+      padding: 20px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .honest-item:last-child { border-bottom: none; }
+    .honest-number {
+      font-size: 1.5rem; font-weight: 900;
+      color: rgba(255,153,0,0.4);
+      font-family: 'JetBrains Mono', monospace;
+      flex-shrink: 0;
+      width: 36px;
+    }
+    .honest-item h4 { color: #ffaa33; margin-bottom: 4px; font-size: 1rem; }
+    .honest-item p { font-size: 0.9rem; }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 8: DEPLOYMENT
+       ═══════════════════════════════════════════════════════ */
+    #deployment { }
+    .deploy-card { text-align: center; padding: 36px 28px; }
+    .deploy-card .deploy-icon { font-size: 2.5rem; margin-bottom: 16px; display: block; }
+    .deploy-card h4 { margin-bottom: 8px; }
+    .deploy-card code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      background: rgba(255,255,255,0.05);
+      padding: 6px 12px;
+      border-radius: 6px;
+      color: var(--cyan);
+      display: inline-block;
+      margin-top: 12px;
+    }
+    .docker-snippet {
+      margin-top: 40px;
+      background: #161b22;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 24px;
+      text-align: left;
+      overflow-x: auto;
+    }
+    .docker-snippet pre {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: var(--text-secondary);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 9: ROADMAP
+       ═══════════════════════════════════════════════════════ */
+    #roadmap { background: linear-gradient(180deg, var(--bg-deep), #0d1117); text-align: center; }
+    .timeline {
+      display: flex; justify-content: center; gap: 0;
+      margin-top: 48px; flex-wrap: wrap;
+    }
+    .timeline-item {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 0 24px;
+      position: relative;
+    }
+    .timeline-item::after {
+      content: '';
+      position: absolute; top: 20px; right: -2px;
+      width: 24px; height: 2px;
+      background: var(--border);
+    }
+    .timeline-item:last-child::after { display: none; }
+    .timeline-dot {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem;
+      margin-bottom: 12px;
+      border: 2px solid var(--border);
+      background: var(--bg-card);
+    }
+    .timeline-dot.complete { border-color: var(--cyan); background: rgba(0,255,170,0.08); color: var(--cyan); }
+    .timeline-dot.active { border-color: #ffaa33; background: rgba(255,170,51,0.08); color: #ffaa33; animation: pulse-glow-amber 2s ease infinite; }
+    .timeline-dot.planned { border-color: var(--text-dim); color: var(--text-dim); }
+    @keyframes pulse-glow-amber {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,170,51,0.3); }
+      50% { box-shadow: 0 0 0 8px rgba(255,170,51,0); }
+    }
+    .timeline-phase { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .timeline-desc { font-size: 0.75rem; color: var(--text-dim); max-width: 120px; }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION 10: FOOTER / CTA
+       ═══════════════════════════════════════════════════════ */
+    #footer {
+      text-align: center;
+      padding: 80px 0 60px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-cta { font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 900; color: var(--text-primary); margin-bottom: 32px; }
+    .footer-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
+    .footer-links {
+      display: flex; gap: 24px; justify-content: center; flex-wrap: wrap;
+      font-size: 0.85rem; color: var(--text-dim);
+    }
+    .footer-attr {
+      margin-top: 32px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    /* ── Responsive ───────────────────────────────────────── */
+    @media (max-width: 1024px) {
+      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 768px) {
+      section { padding: 64px 0; }
+      .grid-2, .grid-3, .grid-4, .grid-6 { grid-template-columns: 1fr; }
+      .pipeline { flex-direction: column; gap: 12px; }
+      .pipeline-arrow { transform: rotate(90deg); }
+      .hero-metrics { gap: 20px; }
+      .hero-metric .value { font-size: 1.2rem; }
+      .honest-border { padding: 24px; }
+      .timeline { flex-direction: column; align-items: center; gap: 24px; }
+      .timeline-item::after { display: none; }
+      .workflow-bar { gap: 2px; }
+      .workflow-step { padding: 8px 12px; font-size: 0.7rem; }
+      .showpiece-card { padding: 24px; }
+      .claw-compare-table { font-size: 0.8rem; }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION: PROVEN SHOWPIECES
+       ═══════════════════════════════════════════════════════ */
+    #showpieces { background: linear-gradient(180deg, #0d1117, #0e0f16); }
+    .showpiece-card {
+      padding: 32px;
+      position: relative;
+      overflow: hidden;
+    }
+    .showpiece-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--crimson), var(--blue));
+    }
+    .showpiece-number {
+      font-size: 3rem; font-weight: 900;
+      color: rgba(255,255,255,0.04);
+      position: absolute; top: 12px; right: 20px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .showpiece-card h4 { font-size: 1.15rem; margin-bottom: 6px; }
+    .showpiece-card .showpiece-type {
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--crimson); font-weight: 600; margin-bottom: 12px;
+    }
+    .showpiece-card p { font-size: 0.9rem; margin-bottom: 12px; }
+    .showpiece-proof {
+      background: rgba(0,255,170,0.04);
+      border: 1px solid rgba(0,255,170,0.12);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      margin-top: 16px;
+    }
+    .showpiece-proof .proof-label {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--cyan); font-weight: 600; margin-bottom: 6px;
+    }
+    .showpiece-proof code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem; color: var(--text-secondary);
+      display: block; line-height: 1.6;
+    }
+    .showpiece-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+    .showpiece-tag {
+      font-size: 0.7rem; padding: 3px 10px; border-radius: 50px;
+      border: 1px solid var(--border); color: var(--text-dim);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       SECTION: WHY NOT ANOTHER CLAW
+       ═══════════════════════════════════════════════════════ */
+    #claw-compare { }
+    .claw-compare-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 32px;
+      font-size: 0.85rem;
+    }
+    .claw-compare-table th {
+      text-align: left;
+      padding: 14px 16px;
+      color: var(--text-dim);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid var(--border);
+    }
+    .claw-compare-table td {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      color: var(--text-secondary);
+    }
+    .claw-compare-table tr:last-child td { border-bottom: none; }
+    .claw-compare-table .variant-name {
+      font-weight: 600; color: var(--text-primary);
+    }
+    .claw-compare-table .cam-row {
+      background: rgba(0,255,170,0.03);
+    }
+    .claw-compare-table .cam-row td { color: var(--text-primary); }
+    .claw-compare-table .pulse-row {
+      background: rgba(255,51,102,0.04);
+    }
+    .claw-compare-table .pulse-row td { color: var(--text-primary); }
+    .check-yes { color: var(--cyan); font-weight: 700; }
+    .check-no { color: #f85149; }
+    .check-partial { color: #d29922; }
+    .why-download {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px;
+      margin-top: 48px;
+    }
+    .why-card {
+      padding: 32px;
+      border-left: 3px solid var(--crimson);
+    }
+    .why-card.pulse-why { border-left-color: var(--cyan); }
+    .why-card h4 { font-size: 1.1rem; margin-bottom: 8px; }
+    .why-card ul {
+      list-style: none; padding: 0;
+    }
+    .why-card ul li {
+      padding: 4px 0; font-size: 0.9rem; color: var(--text-secondary);
+      padding-left: 20px; position: relative;
+    }
+    .why-card ul li::before {
+      content: '\2192'; position: absolute; left: 0; color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ═══════════════ HERO ═══════════════ -->
+  <section id="hero">
+    <canvas id="hero-canvas"></canvas>
+    <div class="hero-content container">
+      <div class="badge">
+        <span class="pulse-dot"></span>
+        Phase 3 &mdash; Now Live
+      </div>
+      <h1 class="hero-title gradient-text">CAM-PULSE</h1>
+      <p class="hero-tagline">The autonomous, X-powered code vacuum that never sleeps.</p>
+      <p class="hero-subtitle">Perpetual Unified Learning Swarm Engine</p>
+      <div class="hero-buttons">
+        <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="https://github.com/deesatzed/CAM-Pulse/blob/main/README.md" class="btn btn-ghost">Read the Docs</a>
+      </div>
+      <div class="hero-metrics">
+        <div class="hero-metric">
+          <div class="value">1,811</div>
+          <div class="label">Tests Passing</div>
+        </div>
+        <div class="hero-metric">
+          <div class="value">4</div>
+          <div class="label">Agent Backends</div>
+        </div>
+        <div class="hero-metric">
+          <div class="value">1,469+</div>
+          <div class="label">Methodologies</div>
+        </div>
+        <div class="hero-metric">
+          <div class="value">59 MB</div>
+          <div class="label">Knowledge Base</div>
+        </div>
+        <div class="hero-metric">
+          <div class="value">5</div>
+          <div class="label">Execution Modes</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ PROBLEM / SOLUTION ═══════════════ -->
+  <section id="problem-solution">
+    <div class="container">
+      <h2 class="reveal">Most AI coding agents generate text <em>about</em> code.</h2>
+      <p class="section-subtitle reveal reveal-delay-1">CAM generates code, then checks whether it actually worked.</p>
+
+      <div class="comparison-row">
+        <div class="comparison-label problem reveal">The Problem</div>
+        <div class="grid-3">
+          <div class="card comparison-card reveal reveal-delay-1">
+            <div class="comparison-icon icon-problem">&times;</div>
+            <div>
+              <h4>"I updated the files."</h4>
+              <p>Other agents narrate changes. No one checks the actual diff.</p>
+            </div>
+          </div>
+          <div class="card comparison-card reveal reveal-delay-2">
+            <div class="comparison-icon icon-problem">&times;</div>
+            <div>
+              <h4>Blind to the outside world</h4>
+              <p>No awareness of new repos, tools, or patterns emerging daily.</p>
+            </div>
+          </div>
+          <div class="card comparison-card reveal reveal-delay-3">
+            <div class="comparison-icon icon-problem">&times;</div>
+            <div>
+              <h4>Forget what they learned</h4>
+              <p>Each session starts from scratch. Knowledge never compounds.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="comparison-row">
+        <div class="comparison-label solution reveal">The CAM-PULSE Solution</div>
+        <div class="grid-3">
+          <div class="card comparison-card reveal reveal-delay-1">
+            <div class="comparison-icon icon-solution">&#10003;</div>
+            <div>
+              <h4>Checks the actual diff</h4>
+              <p>If no files changed, execution is marked <strong>failed</strong>. Period.</p>
+            </div>
+          </div>
+          <div class="card comparison-card reveal reveal-delay-2">
+            <div class="comparison-icon icon-solution">&#10003;</div>
+            <div>
+              <h4>Discovers repos from X in real time</h4>
+              <p>X-Scout uses Grok API's native x_search to find new repos mentioned on X.</p>
+            </div>
+          </div>
+          <div class="card comparison-card reveal reveal-delay-3">
+            <div class="comparison-icon icon-solution">&#10003;</div>
+            <div>
+              <h4>Mines and remembers forever</h4>
+              <p>1,469+ methodologies stored in persistent SQLite. Knowledge compounds across repos.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ ARCHITECTURE ═══════════════ -->
+  <section id="architecture">
+    <div class="container">
+      <h2 class="reveal">How CAM-PULSE Works</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto 0;">Five stages. Fully autonomous. Loops forever.</p>
+
+      <div class="pipeline reveal">
+        <div class="pipeline-node glow-1">
+          <span class="node-icon">&#x1D54F;</span>
+          <h4>X-Scout</h4>
+          <p>Search X via Grok</p>
+        </div>
+        <span class="pipeline-arrow">&rarr;</span>
+        <div class="pipeline-node glow-2">
+          <span class="node-icon">&#x29D6;</span>
+          <h4>Novelty Filter</h4>
+          <p>URL + semantic dedup</p>
+        </div>
+        <span class="pipeline-arrow">&rarr;</span>
+        <div class="pipeline-node glow-3">
+          <span class="node-icon">&#x2699;</span>
+          <h4>Assimilator</h4>
+          <p>Clone + mine repo</p>
+        </div>
+        <span class="pipeline-arrow">&rarr;</span>
+        <div class="pipeline-node glow-4">
+          <span class="node-icon">&#x2442;</span>
+          <h4>PR Bridge</h4>
+          <p>Fleet registration</p>
+        </div>
+        <span class="pipeline-arrow">&rarr;</span>
+        <div class="pipeline-node glow-5">
+          <span class="node-icon">&#x2609;</span>
+          <h4>Orchestrator</h4>
+          <p>Budget + circuit breaker</p>
+        </div>
+      </div>
+
+      <p class="arch-caption reveal">Powered by Grok API's native x_search tool &mdash; no scraping, no workarounds.</p>
+
+      <div class="workflow-bar reveal">
+        <span class="workflow-step">Inspect</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Mine</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Ideate</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Spec</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Execute</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Validate</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step">Benchmark</span>
+      </div>
+      <p class="arch-caption reveal" style="margin-top: 12px; font-style: normal; font-size: 0.8rem;">The 7-step CAM core workflow. Each step produces verifiable artifacts, not just text.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ METRICS ═══════════════ -->
+  <section id="metrics">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">By the Numbers</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Every number here is from a real command run or test suite, not a marketing claim.</p>
+      <div class="grid-6">
+        <div class="card metric-card reveal reveal-delay-1">
+          <div class="number"><span class="counter" data-target="1811">0</span></div>
+          <div class="metric-label">Automated tests passing</div>
+        </div>
+        <div class="card metric-card reveal reveal-delay-2">
+          <div class="number"><span class="counter" data-target="76">0</span></div>
+          <div class="metric-label">PULSE-specific tests</div>
+        </div>
+        <div class="card metric-card reveal reveal-delay-3">
+          <div class="number"><span class="counter" data-target="4">0</span></div>
+          <div class="metric-label">Agent backends</div>
+        </div>
+        <div class="card metric-card reveal reveal-delay-1">
+          <div class="number"><span class="counter" data-target="5">0</span></div>
+          <div class="metric-label">Execution modes</div>
+        </div>
+        <div class="card metric-card reveal reveal-delay-2">
+          <div class="number"><span class="counter" data-target="1469">0</span><span class="suffix">+</span></div>
+          <div class="metric-label">Methodologies mined</div>
+        </div>
+        <div class="card metric-card reveal reveal-delay-3">
+          <div class="number"><span class="counter" data-target="59">0</span><span class="suffix"> MB</span></div>
+          <div class="metric-label">Persistent knowledge base</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ CODE SHOWCASE ═══════════════ -->
+  <section id="code-showcase">
+    <div class="container">
+      <h2 class="reveal">See It In Action</h2>
+      <p class="section-subtitle reveal reveal-delay-1">Real commands. Real output. Copy and run.</p>
+
+      <div class="reveal">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="quickstart">Quick Start</button>
+          <button class="tab-btn" data-tab="pulsescan">Pulse Scan</button>
+          <button class="tab-btn" data-tab="daemon">Daemon Mode</button>
+        </div>
+
+        <div class="code-panel active" id="panel-quickstart">
+          <div class="code-block">
+            <button class="copy-btn" data-copy="quickstart">Copy</button>
+            <pre><span class="comment"># Install and verify</span>
+<span class="command">git clone</span> https://github.com/deesatzed/CAM-Pulse.git
+<span class="command">cd</span> CAM-Pulse
+<span class="command">pip install</span> <span class="flag">-e</span> <span class="string">".[dev]"</span>
+
+<span class="comment"># Smoke test</span>
+<span class="command">cam</span> <span class="flag">--help</span>
+<span class="command">cam</span> govern stats
+<span class="command">cam</span> pulse preflight</pre>
+          </div>
+        </div>
+
+        <div class="code-panel" id="panel-pulsescan">
+          <div class="code-block">
+            <button class="copy-btn" data-copy="pulsescan">Copy</button>
+            <pre><span class="comment"># One-shot X scan: search, filter, assimilate</span>
+<span class="command">cam</span> pulse scan \
+  <span class="flag">--keywords</span> <span class="string">"AI agent framework,new repo"</span> \
+  <span class="flag">--from-date</span> <span class="string">2026-03-21</span>
+
+<span class="comment"># Dry run (scan + filter only, no cloning/mining)</span>
+<span class="command">cam</span> pulse scan <span class="flag">--dry-run</span>
+
+<span class="comment"># View results</span>
+<span class="command">cam</span> pulse discoveries <span class="flag">--limit</span> 20
+<span class="command">cam</span> pulse status</pre>
+          </div>
+        </div>
+
+        <div class="code-panel" id="panel-daemon">
+          <div class="code-block">
+            <button class="copy-btn" data-copy="daemon">Copy</button>
+            <pre><span class="comment"># Start perpetual polling daemon (default: every 30 min)</span>
+<span class="command">cam</span> pulse daemon
+
+<span class="comment"># Custom interval</span>
+<span class="command">cam</span> pulse daemon <span class="flag">--interval</span> 15
+
+<span class="comment"># View scan history and daily report</span>
+<span class="command">cam</span> pulse scans
+<span class="command">cam</span> pulse report
+
+<span class="comment"># Docker swarm deployment</span>
+<span class="command">docker compose</span> <span class="flag">-f</span> pulse/docker-compose.pulse.yml up <span class="flag">-d</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal-output reveal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+        </div>
+<span class="terminal-dim">$</span> <span class="terminal-green">cam govern stats</span>
+
+<span class="terminal-white">Memory Governance Stats</span>
+  Total methodologies:  <span class="terminal-green">1469</span>
+  Active (non-dead):    <span class="terminal-green">1469</span>
+  Quota: 1469/2000 (73.5%)
+  DB size: <span class="terminal-green">50.25 MB</span>
+  Episodes: 3
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ PROVEN SHOWPIECES ═══════════════ -->
+  <section id="showpieces">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">Proven, Not Just Claimed</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Three end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
+
+      <div class="grid-3">
+        <!-- Showpiece 1: Repo Upgrade Advisor -->
+        <div class="card showpiece-card reveal reveal-delay-1">
+          <span class="showpiece-number">01</span>
+          <div class="showpiece-type">Knowledge Transfer</div>
+          <h4>Repo Upgrade Advisor</h4>
+          <p>Mined external repos into CAM memory, exported a 160-item knowledge pack, then a <strong>standalone app</strong> consumed it without importing CAM &mdash; and produced ranked upgrade recommendations with provenance.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">cam mine</span>
+            <span class="showpiece-tag">forge-export</span>
+            <span class="showpiece-tag">standalone app</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Verified Output</div>
+            <code>Knowledge pack: 160 items (120 methodologies + 40 tasks)<br>
+4 ranked recommendations with confidence scores<br>
+Provenance traced to 6 source repos<br>
+Standalone tests: 6 passed in 0.03s</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 2: medCSS Modernizer -->
+        <div class="card showpiece-card reveal reveal-delay-2">
+          <span class="showpiece-number">02</span>
+          <div class="showpiece-type">Full Create + Validate</div>
+          <h4>medCSS Website Modernizer</h4>
+          <p>CAM read external style context, ran <code>cam create --execute</code>, generated a complete app with CLI and tests, then <code>cam validate</code> confirmed every spec item passed.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">cam create --execute</span>
+            <span class="showpiece-tag">cam validate</span>
+            <span class="showpiece-tag">16 tests pass</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Verified Output</div>
+            <code>cam validate: 6 checks run<br>
+Expectation match: 1.000 (100%)<br>
+pytest -q: 16 passed<br>
+Generated: CLI app, modernizer, tests, docs</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 3: Expectation Ladder -->
+        <div class="card showpiece-card reveal reveal-delay-3">
+          <span class="showpiece-number">03</span>
+          <div class="showpiece-type">Escalating Proof</div>
+          <h4>Expectation Ladder</h4>
+          <p>Five escalating levels of proof &mdash; from health checks to standalone builds to mining to CAM-on-CAM self-improvement &mdash; each level harder than the last, all in one harness.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">5 levels</span>
+            <span class="showpiece-tag">self-improvement</span>
+            <span class="showpiece-tag">namespace guards</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Levels Proven</div>
+            <code>L0: Runtime health + govern stats<br>
+L1: Standalone CLI app created + validated<br>
+L2: Web app with UX checks<br>
+L3: Mine + reassess external repos<br>
+L4: CAM-on-CAM self-improvement contract</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ AGENT BACKENDS ═══════════════ -->
+  <section id="backends">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">Four Agent Backends, One Unified Pipeline</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Intelligent routing picks the right model for each task type.</p>
+      <div class="grid-4">
+        <div class="card backend-card reveal reveal-delay-1">
+          <span class="backend-icon">&#x2601;</span>
+          <h4>OpenRouter</h4>
+          <span class="model-name">openai/gpt-5.4-mini</span>
+          <p>Access to Claude, GPT, Gemini, and dozens more via OpenRouter's unified gateway.</p>
+          <div class="routing-tags">
+            <span class="routing-tag">analysis</span>
+            <span class="routing-tag">documentation</span>
+          </div>
+        </div>
+        <div class="card backend-card reveal reveal-delay-2">
+          <span class="backend-icon">&#x2726;</span>
+          <h4>Google Gemini</h4>
+          <span class="model-name">minimax/minimax-m2.7</span>
+          <p>Embeddings, full repo comprehension, and deep dependency analysis.</p>
+          <div class="routing-tags">
+            <span class="routing-tag">dependency analysis</span>
+            <span class="routing-tag">comprehension</span>
+          </div>
+        </div>
+        <div class="card backend-card reveal reveal-delay-3">
+          <span class="backend-icon">&#x2717;</span>
+          <h4>xAI Grok</h4>
+          <span class="model-name">x-ai/grok-4.20-beta</span>
+          <p>Native X search, quick fixes, and live web lookup. Powers the PULSE X-Scout.</p>
+          <div class="routing-tags">
+            <span class="routing-tag">quick fixes</span>
+            <span class="routing-tag">web lookup</span>
+            <span class="routing-tag">x_search</span>
+          </div>
+        </div>
+        <div class="card backend-card reveal reveal-delay-4">
+          <span class="backend-icon">&#x2302;</span>
+          <h4>Ollama / MLX-LM</h4>
+          <span class="model-name">llama3.2 (local)</span>
+          <p>100% local, zero cloud, no API keys. Native Apple Silicon MLX acceleration.</p>
+          <div class="routing-tags">
+            <span class="routing-tag">offline</span>
+            <span class="routing-tag">private</span>
+            <span class="routing-tag">Apple Silicon</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ WHY NOT ANOTHER CLAW ═══════════════ -->
+  <section id="claw-compare">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">Why Not Another Claw?</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">There are many Claw variants. Here is what each actually does &mdash; and what only CAM and CAM-PULSE do.</p>
+
+      <div class="reveal" style="overflow-x: auto;">
+        <table class="claw-compare-table">
+          <thead>
+            <tr>
+              <th>Variant</th>
+              <th>Validates Diffs</th>
+              <th>Persistent Memory</th>
+              <th>Cross-Repo Learning</th>
+              <th>Preflight Contracts</th>
+              <th>Namespace Guards</th>
+              <th>Real-Time Discovery</th>
+              <th>Local Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="variant-name">nanobot</td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">ZeroClaw</td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">NemoClaw</td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">PicoClaw</td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~</span></td>
+            </tr>
+            <tr class="cam-row">
+              <td class="variant-name">CAM</td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+            </tr>
+            <tr class="pulse-row">
+              <td class="variant-name">CAM-PULSE</td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-yes">&#10003;</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="why-download reveal">
+        <div class="card why-card">
+          <h4>Download CAM if you need to&hellip;</h4>
+          <ul>
+            <li>Evaluate a repo and get a real improvement plan, not a chat answer</li>
+            <li>Mine patterns from a folder of repos into persistent, reusable knowledge</li>
+            <li>Generate new apps or improvements backed by a reviewable spec</li>
+            <li>Validate that your agent's changes actually exist in the filesystem</li>
+            <li>Run deterministic benchmarks on your knowledge base quality</li>
+            <li>Export knowledge packs for standalone apps (no CAM runtime needed)</li>
+            <li>Run everything locally with Ollama or MLX-LM &mdash; zero cloud, zero cost</li>
+          </ul>
+        </div>
+        <div class="card why-card pulse-why">
+          <h4>Add PULSE if you also need to&hellip;</h4>
+          <ul>
+            <li>Discover new GitHub repos from X (Twitter) automatically, in real time</li>
+            <li>Filter discoveries against your existing knowledge (semantic + URL dedup)</li>
+            <li>Auto-assimilate novel repos: clone, mine, store &mdash; hands-free</li>
+            <li>Run a perpetual daemon that polls every 30 minutes (or any interval)</li>
+            <li>Deploy a Docker swarm with multiple scout workers</li>
+            <li>Self-improve: the system periodically mines its own source code</li>
+            <li>Turn the X firehose into structured, validated, reusable engineering knowledge</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ HONEST LIMITS ═══════════════ -->
+  <section id="honest">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">Built to Fail Honestly</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">These are the things CAM has been explicitly hardened against &mdash; because they are easy places for agent systems to become fake.</p>
+
+      <div class="honest-border reveal">
+        <div class="honest-item">
+          <span class="honest-number">01</span>
+          <div>
+            <h4>Rejects hallucinated success</h4>
+            <p>Other agents say "I updated the files." CAM checks the actual diff. If no files changed, the run is explicitly failed. This is a core architectural decision, not a wrapper.</p>
+          </div>
+        </div>
+        <div class="honest-item">
+          <span class="honest-number">02</span>
+          <div>
+            <h4>Namespace-safe execution</h4>
+            <p>In fixed-mode, CAM rejects agent output that introduces new top-level source namespaces. <code>--namespace-safe-retry</code> auto-retries with hardened constraints.</p>
+          </div>
+        </div>
+        <div class="honest-item">
+          <span class="honest-number">03</span>
+          <div>
+            <h4>Preflight contract system</h4>
+            <p>Before attempting risky execution, CAM asks the high-value questions, produces a reusable task contract, and blocks unsafe work. Answers persist across reruns.</p>
+          </div>
+        </div>
+        <div class="honest-item">
+          <span class="honest-number">04</span>
+          <div>
+            <h4>Honest benchmark reporting</h4>
+            <p>The benchmark harness reports "0% lift" when the fixture corpus doesn't beat baseline. CAM does not overstate results.</p>
+          </div>
+        </div>
+        <div class="honest-item">
+          <span class="honest-number">05</span>
+          <div>
+            <h4>Documented limits</h4>
+            <p>CAM openly states what does not work yet. <code>--execute</code> is not yet a guaranteed autonomous builder. Local mode is functional but less battle-tested than cloud mode.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ DEPLOYMENT ═══════════════ -->
+  <section id="deployment">
+    <div class="container">
+      <h2 class="reveal" style="text-align:center;">Deploy Anywhere</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">From pip install to Docker swarm in one command.</p>
+
+      <div class="grid-3">
+        <div class="card deploy-card reveal reveal-delay-1">
+          <span class="deploy-icon">&#x1F4E6;</span>
+          <h4>pip install</h4>
+          <p>Lightweight, no torch required. Uses Gemini API for embeddings.</p>
+          <code>pip install -e .</code>
+        </div>
+        <div class="card deploy-card reveal reveal-delay-2">
+          <span class="deploy-icon">&#x1F433;</span>
+          <h4>Docker</h4>
+          <p>One command. Everything included. Production-ready.</p>
+          <code>docker compose up --build</code>
+        </div>
+        <div class="card deploy-card reveal reveal-delay-3">
+          <span class="deploy-icon">&#x1F41D;</span>
+          <h4>PULSE Swarm</h4>
+          <p>Multi-container deployment with dedicated scout workers.</p>
+          <code>docker compose -f pulse/docker-compose.pulse.yml up -d</code>
+        </div>
+      </div>
+
+      <div class="docker-snippet reveal">
+        <pre><span style="color:#8b949e;"># pulse/docker-compose.pulse.yml</span>
+<span style="color:#ff7b72;">services:</span>
+  <span style="color:#79c0ff;">pulse-orchestrator:</span>
+    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"daemon"</span>]
+    restart: unless-stopped
+
+  <span style="color:#79c0ff;">pulse-scout-ai:</span>
+    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"scan"</span>, <span style="color:#a5d6ff;">"--keywords"</span>,
+             <span style="color:#a5d6ff;">"AI agent framework new repo github.com"</span>]
+
+  <span style="color:#79c0ff;">pulse-scout-tools:</span>
+    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"scan"</span>, <span style="color:#a5d6ff;">"--keywords"</span>,
+             <span style="color:#a5d6ff;">"developer tools CLI open source github.com"</span>]</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ ROADMAP ═══════════════ -->
+  <section id="roadmap">
+    <div class="container">
+      <h2 class="reveal">Roadmap</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto;">From drop-in skill to enterprise-grade autonomous codebase engineering.</p>
+
+      <div class="timeline reveal">
+        <div class="timeline-item">
+          <div class="timeline-dot complete">&#10003;</div>
+          <div class="timeline-phase">Phase 1</div>
+          <div class="timeline-desc">Drop-In Skill &mdash; SKILL.md, namespace fix, reliability pipeline</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot complete">&#10003;</div>
+          <div class="timeline-phase">Phase 2</div>
+          <div class="timeline-desc">Local-First &mdash; Docker, Ollama, MLX-LM, torch-free install</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot active">&#x25CF;</div>
+          <div class="timeline-phase">Phase 3</div>
+          <div class="timeline-desc">PULSE &mdash; X-Scout, novelty filter, auto-assimilation, swarm</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot planned">&#x25CB;</div>
+          <div class="timeline-phase">Phase 4</div>
+          <div class="timeline-desc">Enterprise &mdash; Multi-tenant, RBAC, audit trail, SLA</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot planned">&#x25CB;</div>
+          <div class="timeline-phase">Phase 5</div>
+          <div class="timeline-desc">Premier &mdash; Self-evolving agent mesh, cross-org knowledge</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ FOOTER / CTA ═══════════════ -->
+  <section id="footer">
+    <div class="container">
+      <h2 class="footer-cta gradient-text">Start assimilating.</h2>
+      <div class="footer-buttons">
+        <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub Repository
+        </a>
+        <a href="https://github.com/deesatzed/CAM-Pulse/blob/main/README.md" class="btn btn-ghost">Documentation</a>
+      </div>
+      <div class="footer-links">
+        <span>MIT License</span>
+        <a href="https://github.com/deesatzed/CAM-Pulse">Source Code</a>
+        <a href="https://github.com/deesatzed/CAM-Pulse/blob/main/SKILL.md">SKILL.md</a>
+        <a href="https://github.com/deesatzed/CAM-Pulse/issues">Issues</a>
+      </div>
+      <p class="footer-attr">Built with Clawamorphosis by <a href="https://github.com/deesatzed">deesatzed</a></p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ JAVASCRIPT ═══════════════ -->
+  <script>
+    // ── Particle Canvas ─────────────────────────────────────
+    (function() {
+      const canvas = document.getElementById('hero-canvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      let particles = [];
+      const PARTICLE_COUNT = 50;
+      const CONNECT_DIST = 150;
+      const colors = ['#ff3366', '#00ffaa', '#3366ff', '#a855f7'];
+
+      function resize() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+      }
+
+      function createParticle() {
+        return {
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.4,
+          vy: (Math.random() - 0.5) * 0.4,
+          r: Math.random() * 2 + 1,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          alpha: Math.random() * 0.5 + 0.2
+        };
+      }
+
+      function init() {
+        resize();
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          particles.push(createParticle());
+        }
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw connections
+        for (let i = 0; i < particles.length; i++) {
+          for (let j = i + 1; j < particles.length; j++) {
+            const dx = particles[i].x - particles[j].x;
+            const dy = particles[i].y - particles[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < CONNECT_DIST) {
+              const alpha = (1 - dist / CONNECT_DIST) * 0.08;
+              ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+              ctx.lineWidth = 0.5;
+              ctx.beginPath();
+              ctx.moveTo(particles[i].x, particles[i].y);
+              ctx.lineTo(particles[j].x, particles[j].y);
+              ctx.stroke();
+            }
+          }
+        }
+
+        // Draw particles
+        for (const p of particles) {
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+          if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = p.alpha;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+
+        requestAnimationFrame(draw);
+      }
+
+      init();
+      draw();
+      window.addEventListener('resize', () => { resize(); });
+    })();
+
+    // ── Scroll Reveal ───────────────────────────────────────
+    (function() {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+          }
+        });
+      }, { threshold: 0.1 });
+
+      document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+    })();
+
+    // ── Counter Animation ───────────────────────────────────
+    (function() {
+      const counters = document.querySelectorAll('.counter');
+      const animated = new Set();
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && !animated.has(entry.target)) {
+            animated.add(entry.target);
+            const target = parseInt(entry.target.dataset.target);
+            const duration = 1500;
+            const start = performance.now();
+
+            function update(now) {
+              const elapsed = now - start;
+              const progress = Math.min(elapsed / duration, 1);
+              // Ease out cubic
+              const eased = 1 - Math.pow(1 - progress, 3);
+              const current = Math.floor(eased * target);
+              entry.target.textContent = current.toLocaleString();
+              if (progress < 1) requestAnimationFrame(update);
+              else entry.target.textContent = target.toLocaleString();
+            }
+            requestAnimationFrame(update);
+          }
+        });
+      }, { threshold: 0.3 });
+
+      counters.forEach(c => observer.observe(c));
+    })();
+
+    // ── Tab Switching ───────────────────────────────────────
+    (function() {
+      const tabBtns = document.querySelectorAll('.tab-btn');
+      const panels = document.querySelectorAll('.code-panel');
+
+      tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tabId = btn.dataset.tab;
+          tabBtns.forEach(b => b.classList.remove('active'));
+          panels.forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById('panel-' + tabId).classList.add('active');
+        });
+      });
+    })();
+
+    // ── Copy to Clipboard ───────────────────────────────────
+    (function() {
+      const codeTexts = {
+        quickstart: `git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
+pip install -e ".[dev]"
+
+cam --help
+cam govern stats
+cam pulse preflight`,
+        pulsescan: `cam pulse scan \\
+  --keywords "AI agent framework,new repo" \\
+  --from-date 2026-03-21
+
+cam pulse scan --dry-run
+
+cam pulse discoveries --limit 20
+cam pulse status`,
+        daemon: `cam pulse daemon
+
+cam pulse daemon --interval 15
+
+cam pulse scans
+cam pulse report
+
+docker compose -f pulse/docker-compose.pulse.yml up -d`
+      };
+
+      document.querySelectorAll('.copy-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const key = btn.dataset.copy;
+          navigator.clipboard.writeText(codeTexts[key]).then(() => {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+              btn.textContent = 'Copy';
+              btn.classList.remove('copied');
+            }, 2000);
+          });
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

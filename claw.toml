@@ -190,7 +190,7 @@ auto_mine = true
 auto_queue_enhance = false
 enhance_novelty_threshold = 0.85
 self_improve_interval_hours = 24
-xai_model = ""  # Set your Grok model here (e.g., "grok-3")
+xai_model = ""  # Set your Grok model (e.g., "grok-4-1-fast-non-reasoning" — budget pick at $0.20/M tokens)
 xai_api_key_env = "XAI_API_KEY"
 keywords = [
     "github.com new repo",
@@ -198,6 +198,46 @@ keywords = [
     "github.com dropped today AI agent framework",
     "github.com new tool CLI developer",
 ]
+
+# Mission profile — focus your PULSE instance on a specific domain.
+# Domains enrich keywords, novelty_bias boosts scores for matching discoveries.
+[pulse.profile]
+name = "general"
+mission = "Discover novel GitHub repos across AI, developer tools, and open source"
+domains = ["AI", "agents", "developer-tools", "open-source"]
+# Domain-specific novelty biases (boost score for matching domains)
+# [pulse.profile.novelty_bias]
+# memory = 0.15
+# agents = 0.10
+
+# ── PROFILE PRESETS (uncomment one, or create your own) ──
+#
+# Agent Memory Specialist:
+# [pulse.profile]
+# name = "agent-memory"
+# mission = "Discover repos that enhance agent memory, RAG, and knowledge persistence"
+# domains = ["memory", "RAG", "vector-db", "embeddings", "knowledge-graph"]
+# [pulse.profile.novelty_bias]
+# memory = 0.15
+# RAG = 0.10
+#
+# Inter-Agent Communication:
+# [pulse.profile]
+# name = "agent-comms"
+# mission = "Discover repos for agent-to-agent communication, orchestration, and multi-agent systems"
+# domains = ["multi-agent", "orchestration", "message-passing", "pub-sub", "swarm"]
+# [pulse.profile.novelty_bias]
+# orchestration = 0.15
+# multi-agent = 0.10
+#
+# Code Quality & Testing:
+# [pulse.profile]
+# name = "code-quality"
+# mission = "Discover repos for testing frameworks, linting, static analysis, and code review"
+# domains = ["testing", "linting", "static-analysis", "code-review", "CI-CD"]
+# [pulse.profile.novelty_bias]
+# testing = 0.15
+# static-analysis = 0.10
 
 # ---------------------------------------------------------------------------
 # Local LLM providers (Ollama / MLX-LM)

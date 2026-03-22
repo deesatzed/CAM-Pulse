@@ -1,5 +1,7 @@
 # Clawamorphosis (CAM) — Codebase Assimilation Machine
 
+> **CAM-PULSE** is the Phase 3 evolution of [Clawamorphosis](https://github.com/deesatzed/clawamorphosis). Same core engine, now with autonomous X-powered discovery.
+
 **The only Claw variant that ships real, verifiable code changes — because it never trusts its own narration.**
 
 CAM is a multi-agent autonomous codebase engineering system. It inspects, learns from, transforms, and validates entire repositories — then proves what it did with actual workspace diffs, not agent storytelling.
@@ -83,6 +85,81 @@ cam pulse report
 **Architecture**: X-Scout (xAI Responses API) -> Novelty Filter (URL dedup + semantic distance) -> Assimilation Pipeline (git clone + RepoMiner) -> PR Bridge (fleet registration + enhancement queuing). Circuit breaker with exponential backoff. Budget gate ($10/day default). Self-improvement loop mines CAM's own source periodically.
 
 **Docker deployment**: `docker compose -f pulse/docker-compose.pulse.yml up --build`
+
+**Important**: The `x_search` tool requires the **grok-4 family** of models. grok-3 does not support server-side tools. Set `xai_model = "grok-4"` in `claw.toml` under `[pulse]`.
+
+### First Pulse: Live Scan Results (March 21, 2026)
+
+The first live scan was executed on March 21, 2026 using `grok-4` with the keyword `"AI agent framework new repo github.com"`. Results:
+
+```text
+$ cam pulse scan --keywords "AI agent framework new repo github.com" --from-date 2026-03-21
+
+X-Scout scan complete: 1 keywords -> 3 unique repos
+
+Discovered:
+  1. https://github.com/langchain-ai/langchain
+  2. https://github.com/Significant-Gravitas/AutoGPT
+  3. https://github.com/huggingface/transformers
+
+Scan saved: scan_id=pulse-20260321-...
+```
+
+This was a real API call to xAI's Responses API using `httpx`, with `x_search` as a native tool. The timeout was increased from 30s to 120s during testing after discovering that grok-4 with x_search requires longer processing time.
+
+### PULSE Configuration
+
+1. **Get an xAI API key** from https://console.x.ai/
+2. **Copy the env template**: `cp .env.example .env` and fill in your keys
+3. **Set the model** in `claw.toml`:
+   ```toml
+   [pulse]
+   enabled = true
+   xai_model = "grok-4-1-fast-non-reasoning"  # Budget pick: $0.20/M tokens
+   ```
+4. **Run preflight**: `cam pulse preflight`
+
+Or use the interactive setup: `cam setup` (now includes PULSE configuration).
+
+**API keys needed**:
+| Key | Purpose | Where to get it |
+|---|---|---|
+| `XAI_API_KEY` | PULSE X-Scout scanning via Grok | https://console.x.ai/ |
+| `OPENROUTER_API_KEY` | Multi-agent LLM routing (mining/analysis) | https://openrouter.ai/keys |
+| `GOOGLE_API_KEY` | Embeddings for novelty scoring (`gemini-embedding-2-preview`, 384 dims) | https://aistudio.google.com/apikey |
+
+**Embedding model**: `gemini-embedding-2-preview` (384 dimensions, Google API). Configured in `claw.toml` under `[embeddings]`. For local-only mode, CAM falls back to sentence-transformers or MLX embeddings — no cloud API needed.
+
+**Budget controls** (three layers):
+- **Per-scan**: `max_cost_per_scan_usd = 0.50` (default)
+- **Per-day**: `max_cost_per_day_usd = 10.0` (default)
+- **Per-agent**: `max_budget_usd` in each `[agents.*]` section
+
+**Mission profiles** — focus your instance on a specific domain:
+```toml
+[pulse.profile]
+name = "agent-memory"
+mission = "Discover repos that enhance agent memory, RAG, and knowledge persistence"
+domains = ["memory", "RAG", "vector-db", "embeddings"]
+[pulse.profile.novelty_bias]
+memory = 0.15
+RAG = 0.10
+```
+
+Profiles enrich search keywords with domain terms and boost novelty scores for matching discoveries. See `claw.toml` for preset examples.
+
+**Budget-safe execution** (after PULSE discovers repos):
+```bash
+cam create /path/to/repo \
+  --repo-mode fixed \
+  --request "Add comprehensive test suite" \
+  --check "pytest -q" \
+  --execute \
+  --accept-preflight-defaults \
+  --namespace-safe-retry \
+  --max-minutes 10
+```
+Per-agent `max_budget_usd` in `claw.toml` is the hard stop.
 
 ---
 
@@ -658,7 +735,7 @@ These are the preferred expert paths. The older flat commands still work as comp
 | Phase 1: Drop-In Skill | **Complete** | SKILL.md, issue templates, namespace fix, reliability pipeline |
 | Phase 2: Local-First | **Complete** | Docker, Ollama/MLX-LM, torch-free mode, 1,735 tests |
 | Phase 3: PULSE | **In Progress** | CAM-PULSE X-powered discovery swarm, novelty filter, auto-assimilation, TUI dashboard |
-| Phase 4: Enterprise | Planned | Sandbox enforcement, audit logs, budget hardening, benchmark leaderboard |
+| Phase 4: Enterprise | Planned | Sandbox enforcement, audit logs, budget hardening, webhook/Slack notifications for high-novelty discoveries, benchmark leaderboard |
 | Phase 5: Premier | Planned | Python2-to-FastAPI showpiece, self-evolving maintainer mode, community rollout |
 
 ---

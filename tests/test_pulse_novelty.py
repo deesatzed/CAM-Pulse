@@ -1,7 +1,7 @@
 """Tests for CAM-PULSE novelty filter."""
 
 import pytest
-from claw.core.config import DatabaseConfig, PulseConfig
+from claw.core.config import DatabaseConfig, PulseConfig, PulseProfileConfig
 from claw.db.engine import DatabaseEngine
 from claw.pulse.models import PulseDiscovery
 from claw.pulse.novelty import NoveltyFilter
@@ -104,3 +104,102 @@ class TestNoveltyFilter:
         nf = NoveltyFilter(pulse_engine, embedding_engine=None, config=PulseConfig())
         score = await nf._semantic_novelty("some text")
         assert score == 1.0
+
+
+class TestDomainBias:
+    @pytest.mark.asyncio
+    async def test_no_bias_when_no_profile(self, pulse_engine):
+        nf = NoveltyFilter(pulse_engine, config=PulseConfig())
+        disc = PulseDiscovery(
+            github_url="https://github.com/new/repo",
+            canonical_url="https://github.com/new/repo",
+            x_post_text="A memory management tool for agents",
+        )
+        score = await nf.score(disc)
+        # Without profile bias, score should be base: 0.5 + 0.5*1.0 = 1.0
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_bias_boosts_matching_domain(self, pulse_engine):
+        config = PulseConfig(
+            profile=PulseProfileConfig(
+                name="agent-memory",
+                novelty_bias={"memory": 0.15},
+            ),
+        )
+        nf = NoveltyFilter(pulse_engine, config=config)
+        disc = PulseDiscovery(
+            github_url="https://github.com/new/memrepo",
+            canonical_url="https://github.com/new/memrepo",
+            x_post_text="A memory management tool for agents",
+        )
+        score = await nf.score(disc)
+        # Base 1.0 + 0.15 bias = 1.0 (capped)
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_bias_does_not_exceed_one(self, pulse_engine):
+        config = PulseConfig(
+            profile=PulseProfileConfig(
+                name="test",
+                novelty_bias={"memory": 0.50},
+            ),
+        )
+        nf = NoveltyFilter(pulse_engine, config=config)
+        disc = PulseDiscovery(
+            github_url="https://github.com/new/memrepo2",
+            canonical_url="https://github.com/new/memrepo2",
+            x_post_text="memory management system",
+        )
+        score = await nf.score(disc)
+        assert score <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_no_bias_when_domain_not_in_text(self, pulse_engine):
+        config = PulseConfig(
+            profile=PulseProfileConfig(
+                name="agent-memory",
+                novelty_bias={"memory": 0.15},
+            ),
+        )
+        nf = NoveltyFilter(pulse_engine, config=config)
+        disc = PulseDiscovery(
+            github_url="https://github.com/new/webrepo",
+            canonical_url="https://github.com/new/webrepo",
+            x_post_text="A web framework for building APIs",
+        )
+        score = await nf.score(disc)
+        # No match for "memory" in text, so no bias applied
+        assert score == 1.0  # base score without bias
+
+    @pytest.mark.asyncio
+    async def test_highest_bias_wins(self, pulse_engine):
+        """When multiple domains match, highest bias is used (not cumulative)."""
+        config = PulseConfig(
+            profile=PulseProfileConfig(
+                name="multi",
+                novelty_bias={"memory": 0.05, "rag": 0.20},
+            ),
+        )
+        nf = NoveltyFilter(pulse_engine, config=config)
+        disc = PulseDiscovery(
+            github_url="https://github.com/new/ragmem",
+            canonical_url="https://github.com/new/ragmem",
+            x_post_text="A memory-augmented RAG system",
+            keywords_matched=["memory rag"],
+        )
+        # _apply_domain_bias should use max(0.05, 0.20) = 0.20
+        bias = nf._apply_domain_bias(0.75, disc)
+        assert bias == pytest.approx(0.95)
+
+    def test_apply_domain_bias_no_config(self, pulse_engine):
+        """Without config, no bias applied."""
+        import asyncio
+        nf = NoveltyFilter(pulse_engine, config=None)
+        disc = PulseDiscovery(
+            github_url="https://github.com/a/b",
+            canonical_url="https://github.com/a/b",
+            x_post_text="memory tool",
+        )
+        result = nf._apply_domain_bias(0.8, disc)
+        assert result == 0.8

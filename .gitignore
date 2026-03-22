@@ -34,6 +34,12 @@ data/
 # Reference implementation (not part of CLAW)
 ralfed/
 
+# Environment files (but allow the template)
+.env
+.env.local
+.env.*.local
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
