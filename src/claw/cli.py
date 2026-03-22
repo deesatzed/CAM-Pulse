@@ -7948,16 +7948,26 @@ def pulse_scan(
     from_date: Optional[str] = typer.Option(None, "--from-date", help="Start date (YYYY-MM-DD)"),
     to_date: Optional[str] = typer.Option(None, "--to-date", help="End date (YYYY-MM-DD)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Scan and filter only, skip assimilation"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show debug logging (API calls, responses)"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
     """One-shot X scan: discover GitHub repos, filter, and assimilate."""
     import asyncio
+
+    _setup_logging(verbose)
 
     async def _run():
         engine, cfg = await _pulse_engine()
         try:
             orch = await _pulse_orchestrator(engine, cfg)
             kw_list = [k.strip() for k in keywords.split(",")] if keywords else None
+
+            # Show what we're about to do
+            display_kw = kw_list or cfg.pulse.keywords
+            console.print(f"[dim]Scanning X via {cfg.pulse.xai_model} with {len(display_kw)} keyword(s)...[/dim]")
+            for kw in display_kw:
+                console.print(f"[dim]  → {kw}[/dim]")
+
             result = await orch.run_single_scan(
                 keywords=kw_list,
                 from_date=from_date,
@@ -7965,6 +7975,13 @@ def pulse_scan(
                 dry_run=dry_run,
             )
             console.print(orch.build_scan_report(result))
+
+            # If 0 results, give the user useful context
+            if result.get("discovered", 0) == 0:
+                console.print(f"[dim]Tip: 0 discoveries can mean:[/dim]")
+                console.print(f"[dim]  • No X posts matched your keywords for this date range[/dim]")
+                console.print(f"[dim]  • Try broader keywords or a wider date range[/dim]")
+                console.print(f"[dim]  • Run with --verbose to see the raw API response[/dim]")
         finally:
             await engine.close()
 
