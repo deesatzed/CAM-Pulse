@@ -48,6 +48,7 @@ from claw.miner import (
     _discover_repos,
     _relevance_to_priority,
     parse_findings,
+    _repair_json,
     serialize_repo,
 )
 
@@ -562,6 +563,98 @@ class TestParseFindings:
         assert finding.acceptance_checks == ["npm test -- --runInBand"]
         assert finding.rollback_steps == ["git restore src/app.ts"]
         assert finding.preconditions == ["Node 20 installed"]
+
+
+# ===========================================================================
+# 2b. _repair_json() — JSON repair for malformed LLM output
+# ===========================================================================
+
+class TestRepairJson:
+    """Tests for _repair_json() — handles common LLM JSON errors."""
+
+    def test_trailing_comma_in_array(self):
+        """Trailing comma before ] is fixed."""
+        text = '[{"title": "a", "description": "b"},]'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["title"] == "a"
+
+    def test_trailing_comma_in_object(self):
+        """Trailing comma before } is fixed."""
+        text = '[{"title": "a", "description": "b",}]'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_truncated_array_at_last_bracket(self):
+        """Truncated response with trailing text after ] is recovered."""
+        text = '[{"title": "a", "description": "b"}] some trailing garbage'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_truncated_midway_extracts_complete_objects(self):
+        """When array is cut mid-object, complete objects before the cut are extracted."""
+        text = '[{"title": "a", "description": "b"}, {"title": "c", "descr'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["title"] == "a"
+
+    def test_multiple_objects_extracted(self):
+        """Multiple complete objects are extracted from a broken array."""
+        text = '[{"title": "a", "description": "b"}, {"title": "c", "description": "d"}, {"title": "e"'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["title"] == "a"
+        assert result[1]["title"] == "c"
+
+    def test_valid_json_returns_as_is(self):
+        """Already-valid JSON is returned unchanged."""
+        text = '[{"title": "a", "description": "b"}]'
+        # This won't normally be called on valid JSON, but should still work
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_completely_invalid_returns_none(self):
+        """Totally unparseable text returns None."""
+        result = _repair_json("this is not json at all")
+        assert result is None
+
+    def test_empty_string_returns_none(self):
+        """Empty string returns None."""
+        result = _repair_json("")
+        assert result is None
+
+    def test_nested_objects_handled(self):
+        """Objects with nested braces are correctly extracted."""
+        text = '[{"title": "a", "meta": {"key": "val"}}, {"title": "b"'
+        result = _repair_json(text)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["meta"]["key"] == "val"
+
+    def test_parse_findings_uses_repair(self):
+        """parse_findings integrates _repair_json for broken LLM output."""
+        # Simulate a real LLM failure: trailing comma + truncation
+        broken = '[{"title": "Pattern X", "description": "Does Y", "category": "testing", "relevance_score": 0.8,}]'
+        results = parse_findings(broken, "test-repo")
+        assert len(results) == 1
+        assert results[0].title == "Pattern X"
+
+    def test_parse_findings_recovers_partial_array(self):
+        """parse_findings recovers findings from truncated LLM output."""
+        broken = """[
+            {"title": "First", "description": "Desc1", "category": "testing", "relevance_score": 0.9},
+            {"title": "Second", "description": "Desc2", "category": "architecture", "relevance_score": 0.8},
+            {"title": "Third", "description": "Inc"""
+        results = parse_findings(broken, "test-repo")
+        assert len(results) >= 2
+        assert results[0].title == "First"
+        assert results[1].title == "Second"
 
 
 # ===========================================================================

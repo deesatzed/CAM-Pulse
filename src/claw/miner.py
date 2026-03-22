@@ -309,6 +309,63 @@ def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> t
     return "".join(parts), file_count
 
 
+def _repair_json(text: str) -> Optional[list]:
+    """Attempt to repair common LLM JSON errors.
+
+    Tries progressively more aggressive fixes:
+    1. Strip trailing commas before ] or }
+    2. Truncate at last valid ] and re-parse
+    3. Parse individual objects from the array
+    """
+    import re as _re
+
+    # Fix 1: Remove trailing commas (e.g., {"a": 1,} or [1, 2,])
+    fixed = _re.sub(r",\s*([}\]])", r"\1", text)
+    try:
+        result = json.loads(fixed)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Fix 2: Truncate at last complete array bracket
+    last_bracket = fixed.rfind("]")
+    if last_bracket > 0:
+        truncated = fixed[:last_bracket + 1]
+        try:
+            result = json.loads(truncated)
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # Fix 3: Extract individual JSON objects and build array
+    objects = []
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{" and depth == 0:
+            start = i
+            depth = 1
+        elif ch == "{":
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                fragment = text[start:i + 1]
+                try:
+                    obj = json.loads(fragment)
+                    objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = None
+
+    if objects:
+        return objects
+
+    return None
+
+
 def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
     """Extract MiningFinding objects from LLM JSON response.
 
@@ -341,8 +398,14 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        logger.warning("Failed to parse mining findings JSON: %s", e)
-        return []
+        # Attempt JSON repair for common LLM errors
+        repaired = _repair_json(cleaned)
+        if repaired is not None:
+            data = repaired
+            logger.info("Repaired malformed JSON from LLM (original error: %s)", e)
+        else:
+            logger.warning("Failed to parse mining findings JSON: %s", e)
+            return []
 
     if not isinstance(data, list):
         logger.warning("Mining findings response is not a JSON array")
