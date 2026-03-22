@@ -5868,6 +5868,14 @@ def setup(
     console.print(f"\n[bold]CLAW Setup[/bold]")
     console.print(f"  Config: {config_path}\n")
 
+    # Load .env file so API keys are available during setup
+    import os
+    from dotenv import load_dotenv
+    env_path = config_path.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
+        console.print(f"  [dim]Loaded .env from {env_path}[/dim]\n")
+
     # Load current config
     with open(config_path) as f:
         raw = _toml.load(f)
@@ -5875,35 +5883,48 @@ def setup(
     agents_section = raw.setdefault("agents", {})
     changed = False
 
+    # Check which routing keys are available
+    or_key = os.getenv("OPENROUTER_API_KEY", "")
+    has_openrouter = bool(or_key)
+
     # --- Agent configuration ---
+    # Each agent can be used via its native key OR via OpenRouter
     agent_info = {
         "claude": {
-            "label": "Claude Code (Anthropic)",
-            "key_env": "ANTHROPIC_API_KEY",
-            "default_mode": "cli",
-            "model_hint": "e.g. claude-sonnet-4-6, claude-opus-4-6",
+            "label": "Claude (Anthropic)",
+            "native_key_env": "ANTHROPIC_API_KEY",
+            "model_hint": "e.g. anthropic/claude-sonnet-4-6, anthropic/claude-opus-4-6",
         },
         "codex": {
             "label": "Codex (OpenAI)",
-            "key_env": "OPENAI_API_KEY",
-            "default_mode": "cli",
-            "model_hint": "e.g. codex-mini-latest, o4-mini",
+            "native_key_env": "OPENAI_API_KEY",
+            "model_hint": "e.g. openai/codex-mini-latest, openai/o4-mini",
         },
         "gemini": {
             "label": "Gemini (Google)",
-            "key_env": "GOOGLE_API_KEY",
-            "default_mode": "api",
-            "model_hint": "e.g. gemini-2.5-pro, gemini-2.5-flash",
+            "native_key_env": "GOOGLE_API_KEY",
+            "model_hint": "e.g. google/gemini-2.5-pro, google/gemini-2.5-flash",
         },
         "grok": {
             "label": "Grok (xAI)",
-            "key_env": "XAI_API_KEY",
-            "default_mode": "api",
-            "model_hint": "e.g. grok-4-1-fast-non-reasoning, grok-4.20-0309-reasoning",
+            "native_key_env": "XAI_API_KEY",
+            "model_hint": "e.g. x-ai/grok-4-1-fast-non-reasoning, x-ai/grok-4.20-0309-reasoning",
         },
     }
 
     for agent_name, info in agent_info.items():
+        native_key_env = info["native_key_env"]
+        has_native = bool(os.getenv(native_key_env, ""))
+
+        # Skip agents that have no usable key (neither native nor OpenRouter)
+        if not has_native and not has_openrouter:
+            current = agents_section.get(agent_name, {})
+            if current.get("enabled", False):
+                agents_section.setdefault(agent_name, {})["enabled"] = False
+                changed = True
+            console.print(f"[dim]--- {info['label']} --- skipped (no {native_key_env} or OPENROUTER_API_KEY)[/dim]\n")
+            continue
+
         console.print(f"[bold cyan]--- {info['label']} ---[/bold cyan]")
 
         current = agents_section.get(agent_name, {})
@@ -5911,15 +5932,11 @@ def setup(
         current_model = current.get("model")
         current_budget = current.get("max_budget_usd", 1.0)
 
-        # Check if API key is set in environment
-        import os
-        key_env = info["key_env"]
-        key_present = bool(os.getenv(key_env, ""))
-        key_status = "[green]set[/green]" if key_present else "[red]not set[/red]"
-        console.print(f"  API key ({key_env}): {key_status}")
-
-        if not key_present:
-            console.print(f"  [dim]Set it with: export {key_env}=your-key-here[/dim]")
+        # Show key status
+        if has_native:
+            console.print(f"  {native_key_env}: [green]set[/green]")
+        if has_openrouter:
+            console.print(f"  OPENROUTER_API_KEY: [green]set[/green] (can route to {agent_name})")
 
         # Enable/disable
         enable_str = console.input(
@@ -5937,6 +5954,21 @@ def setup(
                 changed = True
             console.print(f"  [dim]{agent_name}: disabled[/dim]\n")
             continue
+
+        # Mode selection — offer openrouter if available
+        current_mode = current.get("mode", "openrouter" if has_openrouter else "api")
+        available_modes = ["openrouter", "api", "cli", "local"]
+        mode_display = "/".join(available_modes)
+        mode_input = console.input(
+            f"  Mode ({mode_display}) [{current_mode}]: "
+        ).strip().lower()
+        mode = mode_input if mode_input in available_modes else current_mode
+
+        # Set the correct api_key_env based on mode
+        if mode == "openrouter":
+            key_env = "OPENROUTER_API_KEY"
+        else:
+            key_env = native_key_env
 
         # Model selection
         console.print(f"  Model ({info['model_hint']}):")
@@ -5956,13 +5988,6 @@ def setup(
         except ValueError:
             console.print(f"  [yellow]Invalid budget, keeping {current_budget}[/yellow]")
             budget = current_budget
-
-        # Mode
-        current_mode = current.get("mode", info["default_mode"])
-        mode_input = console.input(
-            f"  Mode (cli/api) [{current_mode}]: "
-        ).strip().lower()
-        mode = mode_input if mode_input in ("cli", "api", "cloud") else current_mode
 
         # Write to config
         agent_section = agents_section.setdefault(agent_name, {})
@@ -5988,14 +6013,13 @@ def setup(
         status_parts.append(f"budget=${budget:.2f}")
         console.print(f"  [green]{agent_name}: {', '.join(status_parts)}[/green]\n")
 
-    # --- OpenRouter API key (used by LLM client for verification/planning) ---
+    # --- OpenRouter summary ---
     console.print(f"[bold cyan]--- OpenRouter (LLM Client) ---[/bold cyan]")
-    import os
-    or_key = os.getenv("OPENROUTER_API_KEY", "")
-    or_status = "[green]set[/green]" if or_key else "[red]not set[/red]"
+    or_status = "[green]set[/green]" if has_openrouter else "[red]not set[/red]"
     console.print(f"  API key (OPENROUTER_API_KEY): {or_status}")
-    if not or_key:
+    if not has_openrouter:
         console.print(f"  [dim]Set it with: export OPENROUTER_API_KEY=your-key-here[/dim]")
+        console.print(f"  [dim]Or add to .env file. Most agents route through OpenRouter.[/dim]")
     console.print()
 
     # --- CAM-PULSE configuration ---
