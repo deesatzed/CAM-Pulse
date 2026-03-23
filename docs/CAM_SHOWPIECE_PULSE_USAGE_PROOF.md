@@ -191,16 +191,35 @@ tests/test_guardrails.py::test_runtime_configurable_chain_can_be_extended PASSED
 4 passed
 ```
 
-### Smart Mining: README-First + Domain-Aware
+### Multi-Pass Mining Pipeline (v8 — 2026-03-23)
 
-As of this version, mining no longer dumps files alphabetically. Files are serialized in priority order:
+Mining is no longer a single monolithic LLM call. The pipeline now runs in three passes:
 
-1. **README** — the repo's self-description (so the LLM understands context first)
-2. **Config files** (pyproject.toml, package.json, etc.) — project structure
-3. **Core source** (src/, lib/, top-level modules) — the actual patterns
-4. **Tests, docs, examples** — lower priority (may be truncated for large repos)
+**Pass 1: Domain Classification (rule-based, free)**
+- Extracts README + config files from serialized content
+- Keyword-matches against 10 domain categories (`ai_integration`, `architecture`, `memory`, `security`, etc.)
+- Detects language from config files (pyproject.toml → Python, package.json → JS/TS, etc.)
+- Estimates complexity: small (<50 files), medium (50-200), large (>200)
+- **Zero LLM cost** — pure heuristic
 
-Additionally, the mining prompt now includes **existing knowledge context** — both from the same repo (dedup) and from semantically similar methodologies across all repos (domain awareness). This tells the LLM "focus on what's NOVEL, not what we already know."
+**Pass 2: Knowledge Overlap Assessment (embedding search, cheap)**
+- Searches existing KB for what we already know from this repo (`_check_already_mined`)
+- Semantic search across ALL repos for similar domain patterns (`_assess_knowledge_overlap`)
+- Computes `overlap_score` (0.0 = virgin domain, 1.0 = heavily covered)
+- Identifies `suggested_focus` — under-represented categories that need more coverage
+
+**Pass 3: Focused Deep-Dive Mining (LLM call, domain-aware)**
+- Structured context injected: domain classification, known patterns, focus directives
+- Adaptive token budget: small=2,048, medium=4,096, large=6,144
+- README-first file ordering (tier 0-3 priority)
+- "DO NOT repeat known patterns. Prioritize novel findings in under-represented categories."
+
+**Log output** during mining:
+```
+Pass 1 — domain: ai_integration, language: python, complexity: medium
+Pass 2 — repo-known: 6, domain-known: 8, overlap: 0.40, focus: ['testing', 'security']
+Extracted 9 findings from bytedance/deer-flow
+```
 
 ### What This Proves vs. What It Doesn't
 

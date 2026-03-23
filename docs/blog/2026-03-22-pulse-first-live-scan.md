@@ -112,24 +112,98 @@ Every methodology is stored with:
 
 ---
 
+## Update: Knowledge Application Proven (March 23, 2026)
+
+The follow-up question was: "You proved CAM can discover and store patterns, but does it actually USE them?"
+
+### Prescreened Ingestion: 9 Repos, 52 More Methodologies
+
+Beyond X-Scout discovery, we ingested 9 curated repos via `cam pulse ingest`:
+
+| Repo | Methodologies | Highlights |
+|---|---|---|
+| `heroui-inc/heroui` | 6 | CSS variables, compound components, deferred value |
+| `louislva/claude-peers-mcp` | 6 | Signal-0 liveness, scoped peer discovery, auto-summary |
+| `pascalorg/editor` | 9 | Event bus, dirty-node recomputation, spatial index |
+| `bytedance/deer-flow` | 9 | Pre-tool guardrails, middleware chain, loop detection |
+| `github/spec-kit` | 10 | Agent registry, preset templates, ZIP path guards |
+| `Kludex/starlette` | 8 | ASGI middleware, typed lifespan state, route mounting |
+| `0xK3vin/MegaMemory` | 4 | Knowledge graph, embeddings, timeline merge |
+| `K-Dense-AI/k-dense-byok` | 0 | Null content handled gracefully |
+| `joewinke/jat` | 0 | Nothing novel (legitimate) |
+
+### The Proof: Knowledge Injection + Working Code
+
+**Task**: "Build a pre-tool-call guardrail system with pluggable policy checks, a runtime-configurable middleware chain, and loop detection that force-stops repeated tool calls."
+
+**What happened**:
+1. `MicroClaw.evaluate()` searched the knowledge base and retrieved 3 methodologies from `bytedance/deer-flow`
+2. Full methodology content (implementation sketch, solution code, activation triggers) was injected into the agent prompt as a `## Retrieved Knowledge` section
+3. The agent built 157 lines of working code: `GuardrailEngine`, `MiddlewareChain`, `detect_repeated_tool_calls()`
+4. All 4 tests passed
+5. Attribution: 3 patterns traced to mined source
+
+**Result**: `Retrieved=3 | Used=3 | Attributed=3 | Success=1 | Quality=0.85 | Tests: 4/4 passing`
+
+This closes the loop: **mine -> store -> retrieve -> inject -> build -> verify -> attribute**
+
+### Multi-Pass Mining Pipeline
+
+Mining is no longer a single monolithic LLM call. The new 3-pass approach:
+
+- **Pass 1**: Rule-based domain classification (10 categories, keyword matching, zero cost)
+- **Pass 2**: Knowledge overlap assessment (embedding search, identifies what we already know)
+- **Pass 3**: Focused LLM mining with domain-specific context and adaptive token budget
+
+README-first file ordering ensures the LLM sees the project's self-description before diving into code.
+
+### Cross-Repo Knowledge Synthesis: Plugin Event System
+
+The strongest proof yet: CAM retrieves patterns from **3 different mined repos** and synthesizes them into one working module.
+
+**Task**: "Build a plugin event system with typed event bus, middleware chain, plugin loader with lifecycle hooks, and loop detection."
+
+**What happened**:
+1. Semantic search retrieved 3 methodologies (knowledge compounds across builds)
+2. Agent built 258 lines of working code across 5 modules
+3. Event bus with priority ordering + wildcards (from `pascalorg/editor` patterns)
+4. Middleware chain that inspects/modifies/blocks events (from `bytedance/deer-flow` patterns)
+5. Plugin loader with directory discovery + lifecycle hooks (from `heroui-inc/heroui` patterns)
+6. Loop detection preventing infinite re-emission cycles (from `bytedance/deer-flow` patterns)
+7. All 5 tests passed
+8. CLI demo runs with visible output
+
+**Result**: `Retrieved=3 | Used=3 | Attributed=3 | Quality=0.82 | Tests: 5/5 passing`
+
+**Key insight**: Knowledge compounds. Patterns mined from external repos feed into Build A, Build A gets stored, then Build B benefits from both the original patterns and Build A's output. The system gets smarter across generations.
+
+---
+
 ## Try It
 
 ```bash
 # Clone and install
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis && python3 -m venv .venv && source .venv/bin/activate
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse && python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Set your keys
 cp .env.example .env
-# Edit .env with your XAI_API_KEY and OPENROUTER_API_KEY
+# Edit .env with your XAI_API_KEY, OPENROUTER_API_KEY, GOOGLE_API_KEY
 
 # Run a scan
 cam pulse scan --keywords "AI agent framework"
 
+# Ingest a specific repo
+cam pulse ingest https://github.com/bytedance/deer-flow
+
 # Search what CAM learned
-cam learn search "multi-agent routing" -v -n 10
-cam learn search "error handling patterns" -v -n 10
+cam learn search "middleware chain" -v -n 10
+cam learn search "guardrail pattern" -v -n 10
+
+# Build something using the knowledge
+cam create /tmp/my-project --execute --agent claude \
+  --request "Build a pre-tool-call guardrail system with pluggable policy checks"
 ```
 
 ---
@@ -137,7 +211,7 @@ cam learn search "error handling patterns" -v -n 10
 ## Current Test Suite
 
 ```text
-1840 passed, 6 skipped
+1868 passed, 6 skipped
 ```
 
-Includes 14 new tests added for `_repair_json` and retryable discoveries.
+Includes 133 new tests since Phase 2: multi-pass mining (13), `_repair_json` (12), PULSE discoveries (2), knowledge injection, infrastructure protection, null content handling, and more.

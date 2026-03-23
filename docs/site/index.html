@@ -11,7 +11,7 @@
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="CAM-PULSE">
-  <meta name="twitter:description" content="First live scan: 16/16 repos assimilated, 86 new methodologies, 100% JSON repair rate. The autonomous X-powered code discovery engine.">
+  <meta name="twitter:description" content="CAM-PULSE: Discovers code patterns, learns from them, and applies them to your builds with proof. Free, open source, runs locally. 1,868 tests. 8 proven showpieces. Retrieved=3, Used=3, Attributed=3.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -692,6 +692,8 @@
       background: rgba(255,51,102,0.04);
     }
     .claw-compare-table .pulse-row td { color: var(--text-primary); }
+    .claw-compare-table .pulse-col { background: rgba(0,255,170,0.06); }
+    .claw-compare-table .pulse-cost { color: var(--cyan); font-weight: 700; }
     .check-yes { color: var(--cyan); font-weight: 700; }
     .check-no { color: #f85149; }
     .check-partial { color: #d29922; }
@@ -728,8 +730,8 @@
         Phase 3 &mdash; Now Live
       </div>
       <h1 class="hero-title gradient-text">CAM-PULSE</h1>
-      <p class="hero-tagline">The autonomous, X-powered code vacuum that never sleeps.</p>
-      <p class="hero-subtitle">Perpetual Unified Learning Swarm Engine</p>
+      <p class="hero-tagline">Discovers code patterns. Learns from them. Applies them to your work &mdash; with proof.</p>
+      <p class="hero-subtitle">The autonomous, X-powered code intelligence engine that gets smarter every time you use it.</p>
       <div class="hero-buttons">
         <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-primary">
           <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -739,7 +741,7 @@
       </div>
       <div class="hero-metrics">
         <div class="hero-metric">
-          <div class="value">1,840</div>
+          <div class="value">1,868</div>
           <div class="label">Tests Passing</div>
         </div>
         <div class="hero-metric">
@@ -748,15 +750,19 @@
         </div>
         <div class="hero-metric">
           <div class="value">1,800+</div>
-          <div class="label">Methodologies</div>
+          <div class="label">Methodologies Learned</div>
         </div>
         <div class="hero-metric">
           <div class="value">16/16</div>
           <div class="label">First Scan Assimilated</div>
         </div>
         <div class="hero-metric">
-          <div class="value">100%</div>
-          <div class="label">JSON Repair Rate</div>
+          <div class="value">8</div>
+          <div class="label">Proven Showpieces</div>
+        </div>
+        <div class="hero-metric">
+          <div class="value">$0</div>
+          <div class="label">Free &amp; Open Source</div>
         </div>
       </div>
     </div>
@@ -815,8 +821,8 @@
           <div class="card comparison-card reveal reveal-delay-3">
             <div class="comparison-icon icon-solution">&#10003;</div>
             <div>
-              <h4>Mines and remembers forever</h4>
-              <p>1,800+ methodologies stored in persistent SQLite. Knowledge compounds across repos.</p>
+              <h4>Mines, remembers, and APPLIES</h4>
+              <p>1,800+ methodologies stored, retrieved, and injected into agent prompts. Proven: Retrieved=3, Used=3, Attributed=3 with passing tests.</p>
             </div>
           </div>
         </div>
@@ -828,7 +834,7 @@
   <section id="architecture">
     <div class="container">
       <h2 class="reveal">How CAM-PULSE Works</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto 0;">Five stages. Fully autonomous. Loops forever.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto 0;">Five stages. Multi-pass mining. Knowledge injection. Loops forever.</p>
 
       <div class="pipeline reveal">
         <div class="pipeline-node glow-1">
@@ -845,8 +851,8 @@
         <span class="pipeline-arrow">&rarr;</span>
         <div class="pipeline-node glow-3">
           <span class="node-icon">&#x2699;</span>
-          <h4>Assimilator</h4>
-          <p>Clone + mine repo</p>
+          <h4>3-Pass Miner</h4>
+          <p>Classify &rarr; overlap &rarr; mine</p>
         </div>
         <span class="pipeline-arrow">&rarr;</span>
         <div class="pipeline-node glow-4">
@@ -890,7 +896,7 @@
       <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Every number here is from a real command run or test suite, not a marketing claim.</p>
       <div class="grid-6">
         <div class="card metric-card reveal reveal-delay-1">
-          <div class="number"><span class="counter" data-target="1840">0</span></div>
+          <div class="number"><span class="counter" data-target="1868">0</span></div>
           <div class="metric-label">Automated tests passing</div>
         </div>
         <div class="card metric-card reveal reveal-delay-2">
@@ -910,7 +916,7 @@
           <div class="metric-label">Methodologies mined</div>
         </div>
         <div class="card metric-card reveal reveal-delay-3">
-          <div class="number"><span class="counter" data-target="5">0</span></div>
+          <div class="number"><span class="counter" data-target="8">0</span></div>
           <div class="metric-label">Proven showpieces</div>
         </div>
       </div>
@@ -1011,7 +1017,7 @@ Failed:      <span class="terminal-green">0</span>
   <section id="showpieces">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Proven, Not Just Claimed</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Five end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Eight end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
 
       <div class="grid-3" style="margin-bottom: 24px;">
         <!-- Showpiece 1: Repo Upgrade Advisor -->
@@ -1116,6 +1122,71 @@ Provenance: 8 unique source repos<br>
 Harness: scripts/test_cross_repo_intelligence.sh</code>
           </div>
         </div>
+
+        <!-- Showpiece 6: PULSE Usage Proof (Knowledge Application) -->
+        <div class="card showpiece-card reveal reveal-delay-3">
+          <span class="showpiece-number">06</span>
+          <div class="showpiece-type" style="color: var(--crimson);">Knowledge Application Proof</div>
+          <h4>PULSE Usage Proof</h4>
+          <p>The definitive proof that PULSE-mined knowledge is not just stored &mdash; it is <strong>retrieved, injected into agent prompts, and used to produce working code with passing tests</strong>. Full methodology content (implementation sketch, solution code, activation triggers) injected as <code>## Retrieved Knowledge</code> section.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">Retrieved=3</span>
+            <span class="showpiece-tag">Used=3</span>
+            <span class="showpiece-tag">Attributed=3</span>
+            <span class="showpiece-tag">4/4 tests pass</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Live Run Results (March 23, 2026)</div>
+            <code>Task: Pre-tool-call guardrail system<br>
+Retrieved: 3 methodologies from bytedance/deer-flow<br>
+Agent output: 157 lines, 4 files, quality 0.85<br>
+Tests: 4/4 passing (pytest -v)<br>
+Attribution: 3 patterns traced to mined source</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 7: Multi-Pass Mining Pipeline -->
+        <div class="card showpiece-card reveal reveal-delay-1">
+          <span class="showpiece-number">07</span>
+          <div class="showpiece-type" style="color: var(--purple);">Smart Mining</div>
+          <h4>Multi-Pass Mining Pipeline</h4>
+          <p>Three-pass mining replaces the monolithic single-LLM-call approach. Pass 1: rule-based domain classification (free). Pass 2: knowledge overlap assessment (embedding search). Pass 3: focused deep-dive with domain-specific directives and adaptive token budget.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">3-pass pipeline</span>
+            <span class="showpiece-tag">domain-aware</span>
+            <span class="showpiece-tag">adaptive budget</span>
+            <span class="showpiece-tag">README-first</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Pipeline Stages</div>
+            <code>Pass 1: Domain classification (10 categories, 0 cost)<br>
+Pass 2: KB overlap (overlap_score, suggested_focus)<br>
+Pass 3: LLM mining with structured context<br>
+Token budget: small=2K, medium=4K, large=6K<br>
+9 prescreened repos, 52 methodologies ingested</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 8: Plugin Event System (Cross-Repo Synthesis) -->
+        <div class="card showpiece-card reveal reveal-delay-2">
+          <span class="showpiece-number">08</span>
+          <div class="showpiece-type" style="color: var(--cyan);">Knowledge Synthesis</div>
+          <h4>Plugin Event System</h4>
+          <p>Cross-repo knowledge synthesis: CAM retrieves patterns from 3 mined repos and builds a cohesive plugin event system with typed event bus, middleware chain, plugin loader, and loop detection. 258 lines of working code, 5/5 tests passing.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">cross-repo</span>
+            <span class="showpiece-tag">knowledge compounding</span>
+            <span class="showpiece-tag">5/5 tests</span>
+            <span class="showpiece-tag">CLI demo</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Live Results</div>
+            <code>Retrieved=3 | Used=3 | Attributed=3 | Quality=0.82<br>
+258 source lines across 5 modules<br>
+Event bus + middleware + plugin loader + loop detection<br>
+Knowledge compounds: Build A patterns inform Build B</code>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1129,7 +1200,7 @@ Harness: scripts/test_cross_repo_intelligence.sh</code>
         <div class="card backend-card reveal reveal-delay-1">
           <span class="backend-icon">&#x2601;</span>
           <h4>OpenRouter</h4>
-          <span class="model-name">openai/gpt-5.4-mini</span>
+          <span class="model-name">User-configured via .env</span>
           <p>Access to Claude, GPT, Gemini, and dozens more via OpenRouter's unified gateway.</p>
           <div class="routing-tags">
             <span class="routing-tag">analysis</span>
@@ -1139,7 +1210,7 @@ Harness: scripts/test_cross_repo_intelligence.sh</code>
         <div class="card backend-card reveal reveal-delay-2">
           <span class="backend-icon">&#x2726;</span>
           <h4>Google Gemini</h4>
-          <span class="model-name">minimax/minimax-m2.7</span>
+          <span class="model-name">gemini-embedding-2-preview</span>
           <p>Embeddings, full repo comprehension, and deep dependency analysis.</p>
           <div class="routing-tags">
             <span class="routing-tag">dependency analysis</span>
@@ -1149,8 +1220,8 @@ Harness: scripts/test_cross_repo_intelligence.sh</code>
         <div class="card backend-card reveal reveal-delay-3">
           <span class="backend-icon">&#x2717;</span>
           <h4>xAI Grok</h4>
-          <span class="model-name">x-ai/grok-4.20-beta</span>
-          <p>Native X search, quick fixes, and live web lookup. Powers the PULSE X-Scout.</p>
+          <span class="model-name">grok-4 family</span>
+          <p>Native X search via x_search tool, quick fixes, and live web lookup. Powers the PULSE X-Scout.</p>
           <div class="routing-tags">
             <span class="routing-tag">quick fixes</span>
             <span class="routing-tag">web lookup</span>
@@ -1172,86 +1243,80 @@ Harness: scripts/test_cross_repo_intelligence.sh</code>
     </div>
   </section>
 
-  <!-- ═══════════════ WHY NOT ANOTHER CLAW ═══════════════ -->
+  <!-- ═══════════════ HOW CAM COMPARES ═══════════════ -->
   <section id="claw-compare">
     <div class="container">
-      <h2 class="reveal" style="text-align:center;">Why Not Another Claw?</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">There are many Claw variants. Here is what each actually does &mdash; and what only CAM and CAM-PULSE do.</p>
+      <h2 class="reveal" style="text-align:center;">How CAM-PULSE Compares</h2>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Every tool generates code. Only CAM verifies it worked, remembers what it learned, and discovers new patterns autonomously.</p>
 
       <div class="reveal" style="overflow-x: auto;">
         <table class="claw-compare-table">
           <thead>
             <tr>
-              <th>Variant</th>
-              <th>Validates Diffs</th>
-              <th>Persistent Memory</th>
-              <th>Cross-Repo Learning</th>
-              <th>Preflight Contracts</th>
-              <th>Namespace Guards</th>
-              <th>Real-Time Discovery</th>
-              <th>Local Mode</th>
+              <th>Capability</th>
+              <th>GitHub Copilot</th>
+              <th>Cursor</th>
+              <th>Windsurf</th>
+              <th>Aider</th>
+              <th class="pulse-col">CAM-PULSE</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="variant-name">nanobot</td>
+              <td class="variant-name">Verifies diffs actually happened</td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-partial">~</span></td>
+              <td><span class="check-yes">&#10003; Fails if nothing changed</span></td>
             </tr>
             <tr>
-              <td class="variant-name">ZeroClaw</td>
+              <td class="variant-name">Persistent cross-repo memory</td>
               <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~ Workspace only</span></td>
+              <td><span class="check-partial">~ Session only</span></td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-yes">&#10003; 1,800+ methodologies</span></td>
             </tr>
             <tr>
-              <td class="variant-name">NemoClaw</td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-partial">~</span></td>
+              <td class="variant-name">Discovers new patterns autonomously</td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-partial">~</span></td>
+              <td><span class="check-yes">&#10003; X-Scout + auto-assimilation</span></td>
             </tr>
             <tr>
-              <td class="variant-name">PicoClaw</td>
+              <td class="variant-name">Applies learned knowledge to builds</td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-no">&times;</span></td>
-              <td><span class="check-partial">~</span></td>
+              <td><span class="check-yes">&#10003; Retrieved&#8594;Injected&#8594;Attributed</span></td>
             </tr>
-            <tr class="cam-row">
-              <td class="variant-name">CAM</td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
+            <tr>
+              <td class="variant-name">Runs 100% local, zero cloud</td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-no">&times;</span></td>
+              <td><span class="check-partial">~ Some models</span></td>
+              <td><span class="check-yes">&#10003; Ollama + MLX-LM</span></td>
             </tr>
-            <tr class="pulse-row">
-              <td class="variant-name">CAM-PULSE</td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
-              <td><span class="check-yes">&#10003;</span></td>
+            <tr>
+              <td class="variant-name">Reports honest failures</td>
+              <td><span class="check-no">Silent</span></td>
+              <td><span class="check-no">Silent</span></td>
+              <td><span class="check-no">Silent</span></td>
+              <td><span class="check-partial">~ Partial</span></td>
+              <td><span class="check-yes">&#10003; 0% lift reported</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">Cost</td>
+              <td>$19/mo</td>
+              <td>$20/mo</td>
+              <td>$0&ndash;40/mo</td>
+              <td>Free + API costs</td>
+              <td class="pulse-cost"><strong>Free + open source</strong></td>
             </tr>
           </tbody>
         </table>

@@ -94,6 +94,77 @@ class MiningFinding:
 
 
 @dataclass
+class KnowledgeOverlap:
+    """Structured result of knowledge-base overlap assessment (Pass 2)."""
+    repo_known_titles: list[str] = field(default_factory=list)
+    domain_known_titles: list[str] = field(default_factory=list)
+    domain_known_categories: list[str] = field(default_factory=list)
+    overlap_score: float = 0.0
+    suggested_focus: list[str] = field(default_factory=list)
+
+
+# Domain keyword signals for rule-based classification (Pass 1).
+# Each key is a category from _VALID_CATEGORIES; values are keywords to scan for.
+_DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "ai_integration": [
+        "agent", "llm", "prompt", "model", "openai", "anthropic", "gpt",
+        "claude", "gemini", "langchain", "transformer", "inference",
+        "chat", "completion", "embedding", "fine-tune", "rag",
+    ],
+    "architecture": [
+        "middleware", "plugin", "router", "pipeline", "microservice",
+        "event-driven", "message queue", "dependency injection", "decorator",
+        "state machine", "orchestrat", "workflow", "dispatcher",
+    ],
+    "memory": [
+        "embedding", "vector", "rag", "retrieval", "knowledge graph",
+        "cache", "index", "faiss", "chromadb", "pinecone", "weaviate",
+        "semantic search", "similarity",
+    ],
+    "code_quality": [
+        "lint", "format", "type check", "mypy", "ruff", "eslint",
+        "prettier", "refactor", "code review", "static analysis",
+    ],
+    "cli_ux": [
+        "cli", "command line", "terminal", "argparse", "typer", "click",
+        "rich", "tui", "interactive", "prompt_toolkit",
+    ],
+    "testing": [
+        "test", "pytest", "jest", "unittest", "fixture", "coverage",
+        "property-based", "hypothesis", "mock", "integration test",
+    ],
+    "data_processing": [
+        "etl", "pipeline", "stream", "batch", "transform", "ingest",
+        "dataframe", "pandas", "polars", "spark", "parquet", "csv",
+    ],
+    "security": [
+        "auth", "encrypt", "token", "permission", "oauth", "jwt",
+        "rbac", "cors", "csrf", "sanitiz", "xss", "injection",
+        "certificate", "tls", "ssl",
+    ],
+    "algorithm": [
+        "sort", "search", "graph", "tree", "optimization", "heuristic",
+        "dynamic programming", "backtrack", "a-star", "dijkstra",
+        "genetic", "bayesian", "monte carlo",
+    ],
+    "cross_cutting": [
+        "logging", "metrics", "observability", "feature flag",
+        "config", "telemetry", "tracing", "monitoring",
+    ],
+}
+
+# Config file names that signal specific languages.
+_LANGUAGE_SIGNALS: dict[str, str] = {
+    "pyproject.toml": "python", "setup.py": "python", "setup.cfg": "python",
+    "requirements.txt": "python", "pipfile": "python",
+    "package.json": "javascript", "tsconfig.json": "typescript",
+    "cargo.toml": "rust", "go.mod": "go", "go.sum": "go",
+    "pom.xml": "java", "build.gradle": "java", "build.gradle.kts": "kotlin",
+    "gemfile": "ruby", "mix.exs": "elixir", "project.clj": "clojure",
+}
+
+
+@dataclass
 class RepoMiningResult:
     """Results from mining a single repo."""
     repo_name: str
@@ -949,42 +1020,48 @@ class RepoMiner:
             repo_name, file_count, len(repo_content.encode()),
         )
 
-        # Check what CLAW already knows from this repo
-        existing_knowledge = await self._check_already_mined(repo_name)
+        # === PASS 1: Domain Classification (rule-based, free) ===
+        domain_info = self._classify_repo_domain(repo_content, file_count)
+        logger.info(
+            "Pass 1 — domain: %s, language: %s, complexity: %s",
+            domain_info["primary_domain"],
+            domain_info["language"],
+            domain_info["complexity"],
+        )
 
-        # Build prompt
+        # === PASS 2: Knowledge Overlap Assessment (embedding search, cheap) ===
+        overlap = await self._assess_knowledge_overlap(repo_name, domain_info)
+        logger.info(
+            "Pass 2 — repo-known: %d, domain-known: %d, overlap: %.2f, focus: %s",
+            len(overlap.repo_known_titles),
+            len(overlap.domain_known_titles),
+            overlap.overlap_score,
+            overlap.suggested_focus,
+        )
+
+        # === PASS 3: Focused Deep-Dive Mining (LLM call, domain-aware) ===
         template = self._get_prompt_template()
         prompt = template.replace("{repo_content}", repo_content)
 
-        # Include existing knowledge context to avoid rediscovering patterns
-        context_lines: list[str] = []
-        if existing_knowledge:
-            context_lines.append("# Context: CLAW already knows the following from this repo:")
-            for title in existing_knowledge:
-                context_lines.append(f"- {title}")
-
-        # Domain-aware context: search for similar knowledge across ALL repos
-        domain_knowledge = await self._find_domain_knowledge(repo_content[:2000])
-        if domain_knowledge:
-            context_lines.append("\n# CLAW also knows these related patterns from other repos:")
-            for dk_title in domain_knowledge:
-                context_lines.append(f"- {dk_title}")
-
+        # Build structured context from Pass 1 + Pass 2
+        context_lines = self._build_mining_context(domain_info, overlap)
         if context_lines:
-            context_lines.append(
-                "\n# Instructions: DO NOT repeat the above. "
-                "Focus on patterns that are NOVEL or DIFFERENT from what CLAW already knows."
-            )
             prompt = "\n".join(context_lines) + "\n\n" + prompt
 
-        # Call LLM
+        # Adaptive token budget based on repo complexity
+        token_budget = {
+            "small": 2048,
+            "medium": 4096,
+            "large": 6144,
+        }.get(domain_info["complexity"], 4096)
+
         model = self._get_mining_model()
         try:
             response: LLMResponse = await self.llm_client.complete(
                 messages=[LLMMessage(role="user", content=prompt)],
                 model=model,
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=token_budget,
             )
         except Exception as e:
             duration = time.monotonic() - start
@@ -1145,6 +1222,176 @@ class RepoMiner:
                     logger.warning("Assimilation failed for %s: %s", methodology_id, e)
 
         await asyncio.gather(*(_run(methodology_id) for methodology_id in methodology_ids))
+
+    # ------------------------------------------------------------------
+    # Multi-pass mining helpers
+    # ------------------------------------------------------------------
+
+    def _classify_repo_domain(
+        self, repo_content: str, file_count: int
+    ) -> dict[str, Any]:
+        """Pass 1: Lightweight domain classification from serialized repo content.
+
+        Uses keyword matching on README + config files (already serialized first
+        due to priority ordering) to classify the repo's domain. No LLM call.
+
+        Returns:
+            Dict with primary_domain, secondary_domains, language, complexity,
+            and readme_summary.
+        """
+        content_lower = repo_content[:20_000].lower()  # scan first ~20KB
+
+        # --- Extract README section ---
+        readme_summary = ""
+        readme_marker = "--- file: readme"
+        idx = content_lower.find(readme_marker)
+        if idx != -1:
+            # Find end of README section (next file marker or 3000 chars)
+            next_file = repo_content.find("--- FILE:", idx + 10)
+            end = next_file if next_file != -1 else min(idx + 3000, len(repo_content))
+            readme_summary = repo_content[idx:end].strip()
+
+        # --- Detect language from config files ---
+        language = "unknown"
+        for config_name, lang in _LANGUAGE_SIGNALS.items():
+            if f"--- file: {config_name}" in content_lower or f"/{config_name}" in content_lower:
+                language = lang
+                break
+
+        # --- Keyword-based domain scoring ---
+        scores: dict[str, int] = {}
+        scan_text = (readme_summary + "\n" + repo_content[:10_000]).lower()
+        for category, keywords in _DOMAIN_KEYWORDS.items():
+            score = sum(1 for kw in keywords if kw in scan_text)
+            if score > 0:
+                scores[category] = score
+
+        # Sort by score descending
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        primary_domain = ranked[0][0] if ranked else "cross_cutting"
+        secondary_domains = [cat for cat, _ in ranked[1:4] if _ >= 2]
+
+        # --- Complexity estimate ---
+        if file_count < 50:
+            complexity = "small"
+        elif file_count <= 200:
+            complexity = "medium"
+        else:
+            complexity = "large"
+
+        return {
+            "primary_domain": primary_domain,
+            "secondary_domains": secondary_domains,
+            "language": language,
+            "complexity": complexity,
+            "readme_summary": readme_summary[:2000],
+        }
+
+    async def _assess_knowledge_overlap(
+        self, repo_name: str, domain_info: dict[str, Any]
+    ) -> KnowledgeOverlap:
+        """Pass 2: Structured assessment of what the KB already covers in this domain.
+
+        Combines repo-specific dedup (what we mined from this repo before) with
+        domain-wide semantic search (what we know about similar topics from other repos).
+
+        Returns:
+            KnowledgeOverlap with scores and suggested focus categories.
+        """
+        # Repo-specific: what we already mined from this exact repo
+        repo_known = await self._check_already_mined(repo_name)
+
+        # Domain-wide: semantic search using README excerpt
+        domain_titles: list[str] = []
+        domain_categories: list[str] = []
+        readme_excerpt = domain_info.get("readme_summary", "")
+        if self.semantic_memory and readme_excerpt.strip():
+            try:
+                similar = await self.semantic_memory.find_similar(
+                    readme_excerpt[:2000], limit=10
+                )
+                for s in similar:
+                    if s.methodology and s.methodology.problem_description:
+                        domain_titles.append(s.methodology.problem_description[:120])
+                        # Extract category from tags
+                        for tag in (s.methodology.tags or []):
+                            if tag.startswith("category:"):
+                                cat = tag.removeprefix("category:")
+                                if cat not in domain_categories:
+                                    domain_categories.append(cat)
+            except Exception as e:
+                logger.debug("Domain overlap search failed: %s", e)
+
+        # Compute overlap score: ratio of covered categories
+        all_categories = list(_VALID_CATEGORIES)
+        covered = set(domain_categories)
+        overlap_score = len(covered) / len(all_categories) if all_categories else 0.0
+
+        # Suggested focus: categories not well-covered AND relevant to this repo
+        repo_domains = set(
+            [domain_info["primary_domain"]]
+            + domain_info.get("secondary_domains", [])
+        )
+        # Include all categories but prioritize those related to the repo's domain
+        suggested = [
+            cat for cat in all_categories
+            if cat not in covered
+        ]
+        # Put repo-relevant gaps first
+        relevant_gaps = [c for c in suggested if c in repo_domains]
+        other_gaps = [c for c in suggested if c not in repo_domains]
+        suggested_focus = relevant_gaps + other_gaps
+
+        return KnowledgeOverlap(
+            repo_known_titles=repo_known,
+            domain_known_titles=domain_titles,
+            domain_known_categories=domain_categories,
+            overlap_score=round(overlap_score, 2),
+            suggested_focus=suggested_focus[:5],  # top 5 gaps
+        )
+
+    def _build_mining_context(
+        self, domain_info: dict[str, Any], overlap: KnowledgeOverlap
+    ) -> list[str]:
+        """Build structured context lines for the mining LLM prompt.
+
+        Combines Pass 1 domain classification and Pass 2 overlap assessment
+        into directives that guide the mining LLM to focus on novel findings.
+        """
+        lines: list[str] = []
+
+        # Domain classification (Pass 1)
+        lines.append("# Domain Classification")
+        lines.append(f"Primary domain: {domain_info['primary_domain']}")
+        if domain_info.get("secondary_domains"):
+            lines.append(f"Secondary domains: {', '.join(domain_info['secondary_domains'])}")
+        lines.append(f"Language: {domain_info['language']}")
+        lines.append(f"Complexity: {domain_info['complexity']}")
+
+        # Knowledge overlap (Pass 2)
+        if overlap.repo_known_titles:
+            lines.append(
+                f"\n# Already mined from this repo ({len(overlap.repo_known_titles)} patterns):"
+            )
+            for title in overlap.repo_known_titles:
+                lines.append(f"- {title}")
+
+        if overlap.domain_known_titles:
+            lines.append("\n# CLAW knows these related patterns from OTHER repos:")
+            for title in overlap.domain_known_titles[:8]:
+                lines.append(f"- {title}")
+
+        # Focus directives
+        if overlap.suggested_focus:
+            lines.append("\n# PRIORITY: Focus mining on these under-represented categories:")
+            for cat in overlap.suggested_focus:
+                lines.append(f"- {cat}")
+
+        lines.append(
+            "\n# Instructions: DO NOT repeat known patterns. "
+            "Prioritize novel findings in under-represented categories."
+        )
+        return lines
 
     async def _find_domain_knowledge(self, readme_excerpt: str) -> list[str]:
         """Search existing knowledge base for patterns similar to this repo's domain.
