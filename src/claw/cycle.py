@@ -1033,42 +1033,81 @@ class MicroClaw(ClawCycle):
             # Reset to PENDING for retry
             await self.ctx.repository.update_task_status(task.id, TaskStatus.PENDING)
 
+            # Infrastructure failures (agent output format, missing API key, HTTP
+            # errors) are NOT the methodology's fault.  Only penalize methodologies
+            # when the failure is content-related (the approach itself was wrong).
+            _INFRASTRUCTURE_ERRORS = frozenset({
+                "structured_execution_failed",
+                "structured_output_missing",
+                "file_operations_missing",
+                "no_model",
+                "no_api_key",
+                "timeout",
+                "TimeoutError",
+                "ConnectError",
+            })
+            is_infrastructure_failure = (
+                error_sig in _INFRASTRUCTURE_ERRORS
+                or error_sig.startswith("http_")
+            )
+
             if self.ctx.semantic_memory is not None:
                 for methodology_id, relevance in used_methodologies:
                     try:
-                        await self.ctx.repository.log_methodology_usage(
-                            MethodologyUsageEntry(
-                                task_id=task.id,
-                                methodology_id=methodology_id,
-                                project_id=self.project_id,
-                                stage="used_in_outcome",
-                                agent_id=agent_id,
-                                success=False,
-                                expectation_match_score=verification.expectation_match_score,
-                                quality_score=verification.quality_score,
-                                relevance_score=relevance,
-                                notes="Retrieved methodology inferred in failed outcome",
+                        if is_infrastructure_failure:
+                            # Log for audit trail but do NOT penalize the methodology
+                            await self.ctx.repository.log_methodology_usage(
+                                MethodologyUsageEntry(
+                                    task_id=task.id,
+                                    methodology_id=methodology_id,
+                                    project_id=self.project_id,
+                                    stage="used_in_outcome",
+                                    agent_id=agent_id,
+                                    success=False,
+                                    expectation_match_score=verification.expectation_match_score,
+                                    quality_score=verification.quality_score,
+                                    relevance_score=relevance,
+                                    notes=f"Infrastructure failure ({error_sig}); methodology not penalized",
+                                )
                             )
-                        )
-                        await self.ctx.repository.log_methodology_usage(
-                            MethodologyUsageEntry(
-                                task_id=task.id,
-                                methodology_id=methodology_id,
-                                project_id=self.project_id,
-                                stage="outcome_attributed",
-                                agent_id=agent_id,
-                                success=False,
-                                expectation_match_score=verification.expectation_match_score,
-                                quality_score=verification.quality_score,
-                                relevance_score=relevance,
-                                notes="Failed outcome attributed to retrieved methodology",
+                            logger.info(
+                                "Skipping methodology penalty for %s: infrastructure failure (%s)",
+                                methodology_id[:8], error_sig,
                             )
-                        )
-                        await self.ctx.semantic_memory.record_outcome(
-                            methodology_id,
-                            success=False,
-                            retrieval_relevance=relevance,
-                        )
+                        else:
+                            await self.ctx.repository.log_methodology_usage(
+                                MethodologyUsageEntry(
+                                    task_id=task.id,
+                                    methodology_id=methodology_id,
+                                    project_id=self.project_id,
+                                    stage="used_in_outcome",
+                                    agent_id=agent_id,
+                                    success=False,
+                                    expectation_match_score=verification.expectation_match_score,
+                                    quality_score=verification.quality_score,
+                                    relevance_score=relevance,
+                                    notes="Retrieved methodology inferred in failed outcome",
+                                )
+                            )
+                            await self.ctx.repository.log_methodology_usage(
+                                MethodologyUsageEntry(
+                                    task_id=task.id,
+                                    methodology_id=methodology_id,
+                                    project_id=self.project_id,
+                                    stage="outcome_attributed",
+                                    agent_id=agent_id,
+                                    success=False,
+                                    expectation_match_score=verification.expectation_match_score,
+                                    quality_score=verification.quality_score,
+                                    relevance_score=relevance,
+                                    notes="Failed outcome attributed to retrieved methodology",
+                                )
+                            )
+                            await self.ctx.semantic_memory.record_outcome(
+                                methodology_id,
+                                success=False,
+                                retrieval_relevance=relevance,
+                            )
                     except Exception as e:
                         logger.warning(
                             "Failed to record failed methodology usage for %s: %s",
