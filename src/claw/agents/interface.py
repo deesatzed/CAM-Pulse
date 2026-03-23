@@ -243,6 +243,33 @@ class AgentInterface(ABC):
         start = time.monotonic()
 
         try:
+            # Build messages — add system message when structured output is needed
+            messages: list[dict[str, str]] = []
+            needs_structured = self.can_use_internal_workspace_executor()
+            if needs_structured:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "You are a code generation agent. You MUST return ONLY valid JSON "
+                        "with no markdown fences, no prose, no explanation outside the JSON object. "
+                        "The JSON must have this exact shape:\n"
+                        '{"summary": "short explanation of changes", '
+                        '"file_operations": [{"path": "relative/path.ext", "action": "write", '
+                        '"content": "full file contents"}]}\n'
+                        "Rules: use only relative paths, action is write or delete, "
+                        "content must be the complete file contents (not a diff or snippet)."
+                    ),
+                })
+            messages.append({"role": "user", "content": prompt})
+
+            payload: dict[str, object] = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max(4096, int(getattr(self, "max_tokens", 16384) or 16384)),
+            }
+            if needs_structured:
+                payload["response_format"] = {"type": "json_object"}
+
             async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
                 response = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
@@ -252,11 +279,7 @@ class AgentInterface(ABC):
                         "HTTP-Referer": "https://github.com/deesatzed/clawamorphosis",
                         "X-Title": "CLAW",
                     },
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": max(4096, int(getattr(self, "max_tokens", 4096) or 4096)),
-                    },
+                    json=payload,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -331,15 +354,38 @@ class AgentInterface(ABC):
         start = time.monotonic()
 
         try:
+            # Build messages — add system message when structured output is needed
+            local_messages: list[dict[str, str]] = []
+            local_needs_structured = self.can_use_internal_workspace_executor()
+            if local_needs_structured:
+                local_messages.append({
+                    "role": "system",
+                    "content": (
+                        "You are a code generation agent. You MUST return ONLY valid JSON "
+                        "with no markdown fences, no prose, no explanation outside the JSON object. "
+                        "The JSON must have this exact shape:\n"
+                        '{"summary": "short explanation of changes", '
+                        '"file_operations": [{"path": "relative/path.ext", "action": "write", '
+                        '"content": "full file contents"}]}\n'
+                        "Rules: use only relative paths, action is write or delete, "
+                        "content must be the complete file contents (not a diff or snippet)."
+                    ),
+                })
+            local_messages.append({"role": "user", "content": prompt})
+
+            local_payload: dict[str, object] = {
+                "model": model,
+                "messages": local_messages,
+                "max_tokens": max(4096, int(getattr(self, "max_tokens", 16384) or 16384)),
+            }
+            if local_needs_structured:
+                local_payload["response_format"] = {"type": "json_object"}
+
             async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
                 response = await client.post(
                     endpoint,
                     headers={"Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": max(4096, int(getattr(self, "max_tokens", 4096) or 4096)),
-                    },
+                    json=local_payload,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -482,6 +528,33 @@ class AgentInterface(ABC):
                 parts.append(f"- {hint}")
 
         if self.can_use_internal_workspace_executor():
+            # Include workspace file contents so the model knows what exists
+            ws = self._resolve_workspace(task)
+            if ws:
+                workspace_root = Path(ws)
+                if workspace_root.is_dir():
+                    file_parts: list[str] = []
+                    total_chars = 0
+                    max_chars = 12000  # Cap to leave room for output tokens
+                    for fpath in sorted(workspace_root.rglob("*")):
+                        if not fpath.is_file():
+                            continue
+                        rel = fpath.relative_to(workspace_root)
+                        if ".git" in rel.parts or "__pycache__" in rel.parts or "node_modules" in rel.parts:
+                            continue
+                        try:
+                            content = fpath.read_text(errors="replace")
+                        except OSError:
+                            continue
+                        if total_chars + len(content) > max_chars:
+                            file_parts.append(f"\n--- {rel} (truncated, {len(content)} chars) ---")
+                            break
+                        file_parts.append(f"\n--- {rel} ---\n{content}")
+                        total_chars += len(content)
+                    if file_parts:
+                        parts.append("\n## Existing Repository Files")
+                        parts.extend(file_parts)
+
             parts.append(
                 "\n## Required Output Format\n"
                 "Return only valid JSON with this shape:\n"

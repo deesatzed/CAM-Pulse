@@ -121,6 +121,7 @@ class AgentConfig(BaseModel):
     model: Optional[str] = None  # User-set; never hardcoded
     max_budget_usd: float = 1.0
     local_base_url: Optional[str] = None  # Override base_url for local mode
+    max_tokens: int = 16384  # Token limit for model responses
 
 
 class RoutingConfig(BaseModel):

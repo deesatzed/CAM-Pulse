@@ -35,9 +35,11 @@ class ClaudeCodeAgent(AgentInterface):
         timeout: int = 600,
         max_budget_usd: float = 1.0,
         workspace_dir: Optional[str] = None,
+        max_tokens: int = 16384,
     ):
         super().__init__(agent_id="claude", name="Claude Code Agent")
         self.mode = mode
+        self.max_tokens = max_tokens
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
         self.model = model  # User-set, never hardcoded
         self.timeout = timeout

@@ -117,57 +117,62 @@ No other AI coding tool:
 
 This showpiece proves the complete loop, not just storage.
 
-## Proven Results
+## Proven Results (Live Run 2026-03-23)
 
-### Phase 1: X-Scout Discovery (2026-03-22)
+### The Definitive Proof: Working Code + Passing Tests
 
-Two runs confirmed the full attribution chain for X-Scout-discovered repos:
+**Task ID**: `b1d4edef-d4f1-43f0-8968-196236c29b4d`
 
-**Run 1** (manual, task ID `a1408905-14b2-4455-840b-9419a746220c`):
+**Task**: "Add scoped peer discovery with signal-0 process liveness checks to the broker. Add enum-constrained message schemas for peer communication and auto-summary generation for completed sessions. Include tests."
+
+**Result**:
 ```
-Retrieved=3 | Used=3 | Attributed=3
+Retrieved=3 | Used=2 | Attributed=2 | Success=1
+Verification: approved=True | Quality: 0.82 | Expectation Match: 1.00
+Files written: 4 (README.md, src/peer_mesh/__init__.py, src/peer_mesh/broker.py, tests/test_broker.py)
+Tests: 4/4 passing
 ```
-Attributed methodologies from: `bug-ops/zeph`, `jackwener/opencli`, `cronusl-1141/ai-company`
 
-**Run 2** (automated script, task ID `fcaa1748-ff04-49dc-a902-e175b3dca2bb`):
+**What the agent produced** (159 lines of working code):
+
+| Pattern | Code Evidence | Methodology Source |
+|---------|--------------|-------------------|
+| Signal-0 liveness | `os.kill(pid, 0)` with ProcessLookupError/PermissionError handling | Mined from `louislva/claude-peers-mcp` |
+| Scoped peer discovery | `discover(scope=...)` filters by scope + liveness | Mined from `louislva/claude-peers-mcp` |
+| Enum-constrained schemas | `PeerMessageType(str, Enum)` with `from_dict()` validation | Mined from `louislva/claude-peers-mcp` |
+| Auto-summary generation | `summarize_session()` / `complete_session()` | Mined from `louislva/claude-peers-mcp` |
+
+**Test verification** (`pytest tests/ -v`):
 ```
-Retrieved=3 | Used=3 | Attributed=3
+tests/test_broker.py::test_scoped_discovery_filters_by_scope_and_liveness PASSED
+tests/test_broker.py::test_is_alive_uses_signal_zero PASSED
+tests/test_broker.py::test_enum_constrained_peer_message_schema PASSED
+tests/test_broker.py::test_completed_session_generates_summary PASSED
+4 passed
 ```
-Attributed methodologies from: `sbhooley/ainativelang`, `cronusl-1141/ai-company` (2 methodologies)
 
-### Phase 2: Prescreened Ingestion via `cam pulse ingest` (2026-03-23)
+### What This Proves vs. What It Doesn't
 
-Three repos were ingested directly using `cam pulse ingest` (bypassing X-Scout):
-- `0xK3vin/MegaMemory` — 4 methodologies mined
-- `heroui-inc/heroui` — 6 methodologies mined
-- `louislva/claude-peers-mcp` — 6 methodologies mined
+**Proves**:
+- PULSE-mined methodologies are retrieved from the knowledge base during `cam create --execute`
+- The agent receives methodology hints in its prompt via `past_solutions`
+- The agent produces working code with passing tests (not just a text plan)
+- The code demonstrates patterns that match mined methodology descriptions
+- The verification pipeline approves the output (quality score 0.82)
 
-Three additional runs proved the newly ingested methodologies are retrieved and attributed:
+**Honest limitations**:
+- Attribution uses token overlap between agent output and methodology metadata. This is a lexical signal, not a causal proof that the agent "read and applied" the methodology.
+- The semantic search returns the top 3 most similar methodologies. Not all ingested repos will appear in every run — it depends on the task description and competition from 100+ other methodologies.
+- The `Success=1` flag indicates the overall task succeeded AND the methodology was used in the output — but the specific causal contribution of each methodology to each line of code is not tracked.
 
-**Run 3** (task ID `0e3f6f8d-34cc-4bc3-97fa-8b0026c6463a`):
-```
-Retrieved=3 | Used=3 | Attributed=3
-```
-Task: Agent mesh coordinator with deferred value, heartbeat monitoring, scheduled tasks.
-Attributed: `egeuysall/brain`, **`heroui-inc/heroui`** (Deferred Value Pattern), `devwebxyn/securemcp-lite`
+### Prescreened Ingestion Context
 
-**Run 4** (task ID `c61e0000-daf3-4a48-a4ff-2e3ee1c397ae`):
-```
-Retrieved=3 | Used=3 | Attributed=3
-```
-Task: Singleton broker with scoped peer discovery, signal-0 liveness, knowledge graph.
-Attributed: `devwebxyn/securemcp-lite`, **`louislva/claude-peers-mcp`** (Process Liveness), `jackwener/opencli`
+Three repos were ingested via `cam pulse ingest` (bypassing X-Scout):
+- `0xK3vin/MegaMemory` — 4 methodologies mined (knowledge graph, embeddings, timeline, merge)
+- `heroui-inc/heroui` — 6 methodologies mined (CSS variables, compound components, deferred value, sub-agents, env validation, URL-state)
+- `louislva/claude-peers-mcp` — 6 methodologies mined (auto-summary, MCP tool schema, non-blocking startup, process liveness, scoped peer discovery, singleton broker)
 
-**Run 5** (task ID `07b75456-b4bb-4e04-a682-940a4d5e4769`):
-```
-Retrieved=3 | Used=3 | Attributed=3
-```
-Task: Knowledge graph with typed concepts, timeline logging, merge conflict detection.
-Attributed: **`heroui-inc/heroui`** (URL-State Persistence + Compound Component), `cronusl-1141/ai-company`
-
-### Summary
-
-5 runs, 15 retrievals, 15 attributions. Two newly ingested repos (`heroui-inc/heroui`, `louislva/claude-peers-mcp`) were independently retrieved and attributed — proving that `cam pulse ingest` feeds directly into the active knowledge loop. The complete pipeline works for both X-Scout discovery and prescreened ingestion.
+The proof run targeted vocabulary from `louislva/claude-peers-mcp` patterns. The agent produced code that implements signal-0 liveness, scoped discovery, enum schemas, and auto-summaries — all patterns mined from that repo.
 
 ## Outputs
 

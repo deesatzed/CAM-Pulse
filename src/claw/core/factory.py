@@ -306,6 +306,7 @@ def _create_agent(
             timeout=agent_cfg.timeout,
             max_budget_usd=agent_cfg.max_budget_usd,
             workspace_dir=workspace_dir,
+            max_tokens=agent_cfg.max_tokens,
         )
 
     if name == "codex":
@@ -315,7 +316,7 @@ def _create_agent(
             api_key=api_key,
             model=agent_cfg.model,
             timeout=agent_cfg.timeout,
-            max_tokens=getattr(agent_cfg, "max_tokens", 4096),
+            max_tokens=agent_cfg.max_tokens,
             workspace_dir=workspace_dir,
         )
 
@@ -327,6 +328,7 @@ def _create_agent(
             model=agent_cfg.model,
             timeout=agent_cfg.timeout,
             workspace_dir=workspace_dir,
+            max_tokens=agent_cfg.max_tokens,
         )
 
     if name == "grok":
@@ -338,6 +340,7 @@ def _create_agent(
             timeout=agent_cfg.timeout,
             max_budget_usd=agent_cfg.max_budget_usd,
             workspace_dir=workspace_dir,
+            max_tokens=agent_cfg.max_tokens,
         )
 
     logger.warning("Unknown agent name: '%s'", name)

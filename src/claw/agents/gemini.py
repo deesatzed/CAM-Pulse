@@ -52,9 +52,11 @@ class GeminiAgent(AgentInterface):
         model: Optional[str] = None,
         timeout: int = 600,
         workspace_dir: Optional[str] = None,
+        max_tokens: int = 16384,
     ):
         super().__init__(agent_id="gemini", name="Gemini Agent")
         self.mode = mode
+        self.max_tokens = max_tokens
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY", "")
         self.model = model  # User-set, never hardcoded
         self.timeout = timeout
