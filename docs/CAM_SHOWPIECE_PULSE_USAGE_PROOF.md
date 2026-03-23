@@ -16,12 +16,12 @@ This showpiece closes the loop:
 ## The Full Knowledge Loop
 
 ```
-DISCOVER (X-Scout)
-    |
-    v
-FILTER (novelty)
-    |
-    v
+DISCOVER (X-Scout)          INGEST (prescreened URLs)
+    |                            |
+    v                            v
+FILTER (novelty)            PRESET (high novelty)
+    \                          /
+     v                        v
 MINE (LLM extracts patterns)
     |
     v
@@ -117,9 +117,11 @@ No other AI coding tool:
 
 This showpiece proves the complete loop, not just storage.
 
-## Proven Results (Live Run 2026-03-22)
+## Proven Results
 
-Two automated runs confirmed the full attribution chain:
+### Phase 1: X-Scout Discovery (2026-03-22)
+
+Two runs confirmed the full attribution chain for X-Scout-discovered repos:
 
 **Run 1** (manual, task ID `a1408905-14b2-4455-840b-9419a746220c`):
 ```
@@ -133,7 +135,39 @@ Retrieved=3 | Used=3 | Attributed=3
 ```
 Attributed methodologies from: `sbhooley/ainativelang`, `cronusl-1141/ai-company` (2 methodologies)
 
-Both runs: 3 PULSE-mined methodologies retrieved, presented to agent, used in outcome, and attributed. The knowledge loop is closed.
+### Phase 2: Prescreened Ingestion via `cam pulse ingest` (2026-03-23)
+
+Three repos were ingested directly using `cam pulse ingest` (bypassing X-Scout):
+- `0xK3vin/MegaMemory` — 4 methodologies mined
+- `heroui-inc/heroui` — 6 methodologies mined
+- `louislva/claude-peers-mcp` — 6 methodologies mined
+
+Three additional runs proved the newly ingested methodologies are retrieved and attributed:
+
+**Run 3** (task ID `0e3f6f8d-34cc-4bc3-97fa-8b0026c6463a`):
+```
+Retrieved=3 | Used=3 | Attributed=3
+```
+Task: Agent mesh coordinator with deferred value, heartbeat monitoring, scheduled tasks.
+Attributed: `egeuysall/brain`, **`heroui-inc/heroui`** (Deferred Value Pattern), `devwebxyn/securemcp-lite`
+
+**Run 4** (task ID `c61e0000-daf3-4a48-a4ff-2e3ee1c397ae`):
+```
+Retrieved=3 | Used=3 | Attributed=3
+```
+Task: Singleton broker with scoped peer discovery, signal-0 liveness, knowledge graph.
+Attributed: `devwebxyn/securemcp-lite`, **`louislva/claude-peers-mcp`** (Process Liveness), `jackwener/opencli`
+
+**Run 5** (task ID `07b75456-b4bb-4e04-a682-940a4d5e4769`):
+```
+Retrieved=3 | Used=3 | Attributed=3
+```
+Task: Knowledge graph with typed concepts, timeline logging, merge conflict detection.
+Attributed: **`heroui-inc/heroui`** (URL-State Persistence + Compound Component), `cronusl-1141/ai-company`
+
+### Summary
+
+5 runs, 15 retrievals, 15 attributions. Two newly ingested repos (`heroui-inc/heroui`, `louislva/claude-peers-mcp`) were independently retrieved and attributed — proving that `cam pulse ingest` feeds directly into the active knowledge loop. The complete pipeline works for both X-Scout discovery and prescreened ingestion.
 
 ## Outputs
 
