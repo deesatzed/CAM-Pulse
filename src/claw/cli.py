@@ -8187,6 +8187,161 @@ def pulse_preflight(
         raise typer.Exit(1)
 
 
+def _normalize_github_url(raw_url: str) -> Optional[str]:
+    """Normalize a GitHub URL to canonical form: https://github.com/{owner}/{repo}.
+
+    Strips trailing /, .git, query params, fragments. Lowercases owner/repo.
+    Returns None if the URL is not a valid GitHub repo URL.
+    """
+    import re
+    from urllib.parse import urlparse
+
+    url = raw_url.strip()
+
+    # Parse and rebuild
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if host not in ("github.com", "www.github.com"):
+        return None
+
+    path = parsed.path.strip("/")
+    # Remove .git suffix
+    if path.endswith(".git"):
+        path = path[:-4]
+    # Remove trailing slashes and extra path segments (tree/main, blob/...)
+    parts = path.split("/")
+    if len(parts) < 2:
+        return None
+
+    owner, repo = parts[0], parts[1]
+    if not owner or not repo:
+        return None
+
+    # Validate characters
+    if not re.match(r'^[A-Za-z0-9_.-]+$', owner) or not re.match(r'^[A-Za-z0-9_.-]+$', repo):
+        return None
+
+    return f"https://github.com/{owner.lower()}/{repo.lower()}"
+
+
+@pulse_app.command(name="ingest")
+def pulse_ingest(
+    urls: list[str] = typer.Argument(..., help="GitHub repo URLs to ingest"),
+    novelty: float = typer.Option(0.95, "--novelty", "-n", help="Preset novelty score (0.0-1.0)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-ingest even if already assimilated"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Ingest prescreened GitHub repos directly, bypassing X-Scout discovery."""
+    import asyncio
+
+    _setup_logging(verbose)
+
+    async def _run():
+        from datetime import UTC, datetime
+
+        engine, cfg = await _pulse_engine()
+        try:
+            orch = await _pulse_orchestrator(engine, cfg)
+            assimilator = orch.assimilator
+            novelty_filter = orch.novelty
+
+            scan_id = f"ingest-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+            total_methodologies = 0
+            ingested = 0
+            skipped = 0
+            errors = []
+
+            # Log scan start
+            await engine.execute(
+                "INSERT INTO pulse_scan_log (id, keywords) VALUES (?, ?)",
+                [scan_id, '["prescreened"]'],
+            )
+
+            console.print(f"\n[bold]PULSE Ingest[/bold] — {len(urls)} prescreened repo(s)")
+            console.print(f"  Novelty score: {novelty}")
+            console.print(f"  Scan ID: {scan_id}\n")
+
+            for raw_url in urls:
+                canonical = _normalize_github_url(raw_url)
+                if not canonical:
+                    console.print(f"  [red]SKIP[/red] {raw_url} — not a valid GitHub repo URL")
+                    errors.append(f"{raw_url}: invalid URL")
+                    continue
+
+                repo_label = canonical.replace("https://github.com/", "")
+
+                # Dedup check
+                already_known = await novelty_filter.is_already_known(canonical)
+                if already_known and not force:
+                    console.print(f"  [yellow]KNOWN[/yellow] {repo_label} — already assimilated (use --force to re-ingest)")
+                    skipped += 1
+                    continue
+                elif already_known:
+                    console.print(f"  [yellow]FORCE[/yellow] {repo_label} — re-ingesting despite existing record")
+
+                # Create discovery
+                from claw.pulse.models import PulseDiscovery
+
+                disc = PulseDiscovery(
+                    github_url=raw_url,
+                    canonical_url=canonical,
+                    x_post_text="Prescreened by user",
+                    keywords_matched=["prescreened"],
+                    novelty_score=novelty,
+                    scan_id=scan_id,
+                )
+
+                try:
+                    await assimilator.save_discovery(disc)
+                    result = await assimilator.assimilate(disc, "pulse-default")
+
+                    if result.success:
+                        ingested += 1
+                        total_methodologies += len(result.methodology_ids)
+                        console.print(
+                            f"  [green]OK[/green] {repo_label} — "
+                            f"{result.findings_count} findings, "
+                            f"{len(result.methodology_ids)} methodologies"
+                        )
+                    else:
+                        errors.append(f"{repo_label}: {result.error}")
+                        console.print(f"  [red]FAIL[/red] {repo_label} — {result.error}")
+                except Exception as e:
+                    errors.append(f"{repo_label}: {e}")
+                    console.print(f"  [red]ERROR[/red] {repo_label} — {e}")
+
+            # Log scan complete
+            await engine.execute(
+                """UPDATE pulse_scan_log
+                   SET completed_at = ?, repos_discovered = ?, repos_novel = ?,
+                       repos_assimilated = ?, error_detail = ?
+                   WHERE id = ?""",
+                [
+                    datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    len(urls),
+                    len(urls) - skipped,
+                    ingested,
+                    json.dumps(errors) if errors else None,
+                    scan_id,
+                ],
+            )
+
+            # Summary
+            console.print(f"\n[bold]Summary[/bold]")
+            console.print(f"  Ingested: {ingested}/{len(urls)}")
+            console.print(f"  Methodologies: {total_methodologies}")
+            if skipped:
+                console.print(f"  Skipped (already known): {skipped}")
+            if errors:
+                console.print(f"  Errors: {len(errors)}")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
 def app_main() -> None:
     """Entry point for the installed CLI."""
     app()
