@@ -379,6 +379,9 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
     Returns:
         List of validated MiningFinding objects.
     """
+    if not llm_response:
+        logger.warning("Empty or None LLM response for %s — returning no findings", repo_name)
+        return []
     cleaned = llm_response.strip()
 
     # Strip markdown code fences if present

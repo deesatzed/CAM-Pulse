@@ -221,6 +221,12 @@ class LLMClient:
                 data = resp.json()
 
                 content = data["choices"][0]["message"]["content"]
+                if content is None:
+                    refusal = data["choices"][0]["message"].get("refusal")
+                    if refusal:
+                        raise LLMError(f"Model refused to respond: {refusal}")
+                    logger.warning("LLM returned null content (model=%s)", data.get("model"))
+                    content = ""
                 model = data.get("model", payload.get("model", "unknown"))
                 usage = data.get("usage", {})
                 tokens = usage.get("total_tokens", 0)
