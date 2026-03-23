@@ -240,6 +240,19 @@ class AgentInterface(ABC):
             )
 
         prompt = self._build_openrouter_prompt(task, context)
+        knowledge_sections = prompt.count("### Pattern:")
+        self.logger.debug(
+            "Prompt for task %s: %d chars, %d knowledge sections, model=%s",
+            getattr(getattr(task, "task", None), "id", "?")[:8],
+            len(prompt),
+            knowledge_sections,
+            model,
+        )
+        if knowledge_sections > 0:
+            self.logger.info(
+                "Injected %d PULSE methodology pattern(s) into agent prompt",
+                knowledge_sections,
+            )
         start = time.monotonic()
 
         try:
@@ -526,6 +539,71 @@ class AgentInterface(ABC):
             parts.append("\n## Hints from Past Solutions")
             for hint in task.hints:
                 parts.append(f"- {hint}")
+
+        # Inject full methodology context from retrieved knowledge
+        if context is not None:
+            past_solutions = getattr(context, "past_solutions", None) or []
+            if past_solutions:
+                knowledge_parts: list[str] = []
+                knowledge_chars = 0
+                max_knowledge_chars = 4000
+                for methodology in past_solutions:
+                    if knowledge_chars >= max_knowledge_chars:
+                        break
+                    section_lines: list[str] = []
+                    # Problem description — what this pattern solves
+                    desc = getattr(methodology, "problem_description", "") or ""
+                    if desc:
+                        section_lines.append(f"### Pattern: {desc[:200]}")
+                    # Source provenance
+                    tags = getattr(methodology, "tags", []) or []
+                    source_tags = [t for t in tags if t.startswith("source:")]
+                    if source_tags:
+                        section_lines.append(f"Source: {source_tags[0].removeprefix('source:')}")
+                    # Capability data — rich structured context
+                    cap_raw = getattr(methodology, "capability_data", None)
+                    cap = {}
+                    if isinstance(cap_raw, dict):
+                        cap = cap_raw
+                    elif isinstance(cap_raw, str) and cap_raw not in ("", "null"):
+                        try:
+                            parsed = json.loads(cap_raw)
+                            if isinstance(parsed, dict):
+                                cap = parsed
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    applicability = cap.get("applicability")
+                    applicability_sketch = ""
+                    if isinstance(applicability, dict):
+                        applicability_sketch = applicability.get("sketch", "")
+                    impl_sketch = cap.get("implementation_sketch") or applicability_sketch
+                    triggers = cap.get("activation_triggers") or []
+                    if impl_sketch:
+                        section_lines.append(f"Implementation approach: {str(impl_sketch)[:600]}")
+                    if triggers:
+                        trigger_str = ", ".join(str(t) for t in triggers[:5]) if isinstance(triggers, list) else str(triggers)[:200]
+                        section_lines.append(f"When to apply: {trigger_str}")
+                    # Solution code / methodology notes — the actual pattern
+                    sol = getattr(methodology, "solution_code", "") or ""
+                    notes = getattr(methodology, "methodology_notes", "") or ""
+                    pattern_text = sol or notes
+                    if pattern_text and not impl_sketch:
+                        section_lines.append(f"Pattern details:\n{pattern_text[:1500]}")
+                    elif pattern_text and impl_sketch:
+                        section_lines.append(f"Reference:\n{pattern_text[:800]}")
+                    if section_lines:
+                        section = "\n".join(section_lines)
+                        if knowledge_chars + len(section) > max_knowledge_chars:
+                            break
+                        knowledge_parts.append(section)
+                        knowledge_chars += len(section)
+                if knowledge_parts:
+                    parts.append("\n## Retrieved Knowledge (from PULSE-mined methodologies)")
+                    parts.append(
+                        "The following patterns were retrieved from the knowledge base. "
+                        "Use these as guidance for your implementation where applicable."
+                    )
+                    parts.extend(knowledge_parts)
 
         if self.can_use_internal_workspace_executor():
             # Include workspace file contents so the model knows what exists

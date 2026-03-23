@@ -253,8 +253,46 @@ class RepoScanLedger:
         self._save()
 
 
+# File names that should appear first so the LLM understands the repo's purpose.
+_README_NAMES: set[str] = {"readme.md", "readme.rst", "readme.txt", "readme"}
+
+# Config/manifest files that reveal project structure and dependencies.
+_CONFIG_NAMES: set[str] = {
+    "pyproject.toml", "setup.py", "setup.cfg", "package.json",
+    "cargo.toml", "go.mod", "pom.xml", "build.gradle",
+}
+
+# Directories containing tests, docs, examples — lower priority.
+_LOW_PRIORITY_DIRS: set[str] = {
+    "tests", "test", "spec", "specs", "docs", "doc", "examples", "example",
+    "benchmarks", "benchmark", "fixtures", "scripts", "tools", "demo",
+}
+
+
+def _file_priority(rel_path: Path) -> int:
+    """Return sort priority for a file (lower = earlier in serialization).
+
+    Tier 0: README — the repo's self-description
+    Tier 1: Config/manifest files — project structure
+    Tier 2: Core source files (src/, lib/, top-level modules)
+    Tier 3: Tests, docs, examples, scripts
+    """
+    name_lower = rel_path.name.lower()
+    if name_lower in _README_NAMES:
+        return 0
+    if name_lower in _CONFIG_NAMES:
+        return 1
+    if any(part in _LOW_PRIORITY_DIRS for part in rel_path.parts):
+        return 3
+    return 2
+
+
 def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> tuple[str, int]:
     """Read all source files in a directory and concatenate with file headers.
+
+    Files are ordered by priority: README first, then config files, then core
+    source, then tests/docs/examples. This ensures the LLM sees the project's
+    self-description and structure before diving into code.
 
     Filters by common code extensions, skips binary/build directories,
     and limits total size to max_bytes.
@@ -271,21 +309,26 @@ def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> t
         logger.warning("Repo path is not a directory: %s", repo_path)
         return "", 0
 
+    # Collect eligible files with priority ordering
+    eligible: list[tuple[int, Path, Path]] = []  # (priority, rel_path, abs_path)
+    for filepath in root.rglob("*"):
+        if not filepath.is_file():
+            continue
+        rel = filepath.relative_to(root)
+        if any(part in _SKIP_DIRS for part in rel.parts):
+            continue
+        if filepath.suffix.lower() not in _CODE_EXTENSIONS:
+            continue
+        eligible.append((_file_priority(rel), rel, filepath))
+
+    # Sort by priority then alphabetically within each tier
+    eligible.sort(key=lambda t: (t[0], str(t[1])))
+
     parts: list[str] = []
     total_bytes = 0
     file_count = 0
 
-    for filepath in sorted(root.rglob("*")):
-        if not filepath.is_file():
-            continue
-
-        rel = filepath.relative_to(root)
-        if any(part in _SKIP_DIRS for part in rel.parts):
-            continue
-
-        if filepath.suffix.lower() not in _CODE_EXTENSIONS:
-            continue
-
+    for _prio, rel, filepath in eligible:
         try:
             content = filepath.read_text(encoding="utf-8", errors="replace")
         except (OSError, PermissionError) as exc:
@@ -914,13 +957,25 @@ class RepoMiner:
         prompt = template.replace("{repo_content}", repo_content)
 
         # Include existing knowledge context to avoid rediscovering patterns
+        context_lines: list[str] = []
         if existing_knowledge:
-            context_block = (
-                "\n\n# Context: CLAW already knows the following from this repo:\n"
-                + "\n".join(f"- {title}" for title in existing_knowledge)
-                + "\n\n# Instructions: DO NOT repeat the above. Focus on patterns not yet captured.\n"
+            context_lines.append("# Context: CLAW already knows the following from this repo:")
+            for title in existing_knowledge:
+                context_lines.append(f"- {title}")
+
+        # Domain-aware context: search for similar knowledge across ALL repos
+        domain_knowledge = await self._find_domain_knowledge(repo_content[:2000])
+        if domain_knowledge:
+            context_lines.append("\n# CLAW also knows these related patterns from other repos:")
+            for dk_title in domain_knowledge:
+                context_lines.append(f"- {dk_title}")
+
+        if context_lines:
+            context_lines.append(
+                "\n# Instructions: DO NOT repeat the above. "
+                "Focus on patterns that are NOVEL or DIFFERENT from what CLAW already knows."
             )
-            prompt = context_block + prompt
+            prompt = "\n".join(context_lines) + "\n\n" + prompt
 
         # Call LLM
         model = self._get_mining_model()
@@ -1090,6 +1145,30 @@ class RepoMiner:
                     logger.warning("Assimilation failed for %s: %s", methodology_id, e)
 
         await asyncio.gather(*(_run(methodology_id) for methodology_id in methodology_ids))
+
+    async def _find_domain_knowledge(self, readme_excerpt: str) -> list[str]:
+        """Search existing knowledge base for patterns similar to this repo's domain.
+
+        Uses the first ~2000 chars of repo content (typically README) as a semantic
+        query to find what we already know in this domain across ALL repos.
+
+        Returns:
+            List of methodology titles/descriptions (max 5, truncated to 120 chars).
+        """
+        if not self.semantic_memory or not readme_excerpt.strip():
+            return []
+        try:
+            similar = await self.semantic_memory.find_similar(
+                readme_excerpt[:2000], limit=5
+            )
+            titles = []
+            for s in similar:
+                if s.methodology and s.methodology.problem_description:
+                    titles.append(s.methodology.problem_description[:120])
+            return titles
+        except Exception as e:
+            logger.debug("Domain knowledge search failed: %s", e)
+            return []
 
     async def _check_already_mined(self, repo_name: str) -> list[str]:
         """Check what CLAW already knows from a repo.
