@@ -1,4 +1,4 @@
-"""CAM CLI — Typer-based command line interface for Clawamorphosis.
+"""CAM CLI — Typer-based command line interface for CAM-PULSE.
 
 Primary workflows:
   evaluate <repo>        — inspect one repo and score improvement potential

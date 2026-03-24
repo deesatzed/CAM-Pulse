@@ -1,4 +1,4 @@
-"""Capability Assimilation Engine for CWM (Clawamorphosis).
+"""Capability Assimilation Engine for CAM-PULSE.
 
 When CWM ingests ANY new capability (via mining, self-consumption, or task
 completion), this engine:

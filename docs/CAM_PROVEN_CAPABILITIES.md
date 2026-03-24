@@ -29,8 +29,8 @@ The important distinction is that CAM is not supposed to be a passive knowledge 
 Verified flow:
 
 ```bash
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

@@ -7,7 +7,7 @@ Use this when you do not want the full command reference and just need the comma
 ## Start Here
 
 ```bash
-cd clawamorphosis
+cd CAM-Pulse
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

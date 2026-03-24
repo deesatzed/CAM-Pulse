@@ -289,7 +289,7 @@ class AgentInterface(ABC):
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
-                        "HTTP-Referer": "https://github.com/deesatzed/clawamorphosis",
+                        "HTTP-Referer": "https://github.com/deesatzed/CAM-Pulse",
                         "X-Title": "CLAW",
                     },
                     json=payload,

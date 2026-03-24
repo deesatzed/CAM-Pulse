@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Clawamorphosis (CAM) are documented here.
+All notable changes to CAM-PULSE are documented here.
 
 ---
 

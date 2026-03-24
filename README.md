@@ -1,6 +1,6 @@
-# Clawamorphosis (CAM) — Codebase Assimilation Machine
+# CAM-PULSE — Codebase Assimilation Machine
 
-> **CAM-PULSE** is the Phase 3 evolution of [Clawamorphosis](https://github.com/deesatzed/clawamorphosis). Same core engine, now with autonomous X-powered discovery.
+> **CAM-PULSE**: Autonomous code intelligence engine. Discovers repos from X, mines reusable patterns, and applies them to your builds — with proof.
 
 **The only Claw variant that ships real, verifiable code changes — because it never trusts its own narration.**
 
@@ -23,7 +23,7 @@ CAM is a multi-agent autonomous codebase engineering system. It inspects, learns
 
 ---
 
-## Why Clawamorphosis Stands Out
+## Why CAM-PULSE Stands Out
 
 Most AI coding agents generate text about code. CAM generates code, then *checks whether it actually worked*.
 
@@ -220,8 +220,8 @@ Per-agent `max_budget_usd` in `claw.toml` is the hard stop.
 ### Option A: Full install (includes ML dependencies)
 
 ```bash
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -230,8 +230,8 @@ pip install -e ".[dev]"
 ### Option B: Lightweight install (no torch, API-only embeddings)
 
 ```bash
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -242,8 +242,8 @@ Uses Gemini API for embeddings instead of local sentence-transformers. Requires 
 ### Option C: Docker
 
 ```bash
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
 docker compose up --build
 ```
 
@@ -474,8 +474,8 @@ That last point matters. CAM is built to fail honestly instead of pretending the
 ### Standard (full ML dependencies)
 
 ```bash
-git clone https://github.com/deesatzed/clawamorphosis.git
-cd clawamorphosis
+git clone https://github.com/deesatzed/CAM-Pulse.git
+cd CAM-Pulse
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

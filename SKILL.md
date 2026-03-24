@@ -1,6 +1,6 @@
 ---
 name: 'cam-enhance'
-description: 'Invoke Clawamorphosis (CAM) to inspect, mine, ideate, create, validate, and benchmark a codebase with real, verifiable changes.'
+description: 'Invoke CAM-PULSE to inspect, mine, ideate, create, validate, and benchmark a codebase with real, verifiable changes.'
 measurable_outcome: 'Execute cam evaluate + cam create --execute + cam validate on a target repo and produce a passing validation report.'
 allowed-tools:
   - Bash
