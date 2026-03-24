@@ -1,16 +1,14 @@
 # CAM-PULSE
 
-### Discovers code patterns from the wild. Learns from them. Applies them to your builds — with proof.
+### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**1,881 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **$0 — MIT licensed**
+**1,881 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
 
----
+> **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
 
-> Every AI coding tool forgets what it learned the moment your session ends.
->
-> CAM-PULSE doesn't. It scans X/Twitter for GitHub repos via Grok, mines reusable patterns from them,
-> stores everything in a persistent knowledge base, and **injects that knowledge into your next build** —
-> then proves which pattern influenced which code, with attribution.
+<p align="center">
+  <img src="demos/cam-pulse-demo.gif" alt="CAM-PULSE demo: cam mine-self --quick showing language breakdown, domain signals, and test results" width="700">
+</p>
 
 ---
 
@@ -64,7 +62,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+  which pattern → which code
 ```
 
-**No other tool does this.** Copilot, Cursor, Windsurf, and Aider all start from scratch every session. They don't discover, don't remember, and don't prove what they used.
+We haven't found another tool that does all of this. Copilot, Cursor, Windsurf, and Aider generate code — but they don't discover new repos, don't remember patterns across sessions, and don't prove which pattern influenced which output.
 
 ---
 
@@ -307,6 +305,22 @@ cam learn search "multiclaw-self"
 - **`--quick`** mode shows file stats, language breakdown, and domain signals — zero LLM cost
 - Cross-path dedup means `project-v1` in `/old/` and `project-v2` in `/new/` collapse to the best version
 
+### Run Perpetual Discovery
+```bash
+# Start the daemon — scans X every 30 minutes, mines new repos automatically
+cam pulse daemon
+
+# Custom interval
+cam pulse daemon --interval 15
+
+# View scan history
+cam pulse scans
+cam pulse report
+
+# Docker swarm deployment with multiple scouts
+docker compose -f pulse/docker-compose.pulse.yml up -d
+```
+
 ### Verify and Audit
 ```bash
 # Validate that changes actually happened
@@ -396,6 +410,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 - Local mode (Ollama/MLX-LM) works but hasn't been battle-tested as deeply as OpenRouter mode
 - Code coverage at 79% (target: >90%, action plan in progress)
 - Knowledge retrieval quality depends on the diversity of mined repos
+- Mined methodologies record source repo URL and discovery date. License-aware mining (pre-mine license detection and compatibility gating) is on the roadmap
 
 ---
 
@@ -412,6 +427,8 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ---
 
 ## Documentation
+
+**Landing page**: [deesatzed.github.io/CAM-Pulse](https://deesatzed.github.io/CAM-Pulse/)
 
 | Doc | Purpose |
 |-----|---------|
