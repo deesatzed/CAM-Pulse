@@ -4372,8 +4372,7 @@ async def _quickstart_async(
                 start = _time.monotonic()
                 task_ctx = await micro.evaluate(active_task)
                 decision = await micro.decide(task_ctx)
-                acted = await micro.act(decision)
-                verified = await micro.verify(acted)
+                verified = await micro._act_with_correction(decision)
                 await micro.learn(verified)
                 duration = _time.monotonic() - start
 

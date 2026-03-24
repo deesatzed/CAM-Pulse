@@ -930,11 +930,11 @@ class Verifier:
         """
         # Python projects
         if (workspace / "pyproject.toml").exists() or (workspace / "setup.py").exists():
-            return "pytest", ["--tb=short", "-q"]
+            return "pytest", ["--tb=short"]
         if (workspace / "requirements.txt").exists():
             # Check if tests dir exists
             if any((workspace / d).exists() for d in ["tests", "test"]):
-                return "pytest", ["--tb=short", "-q"]
+                return "pytest", ["--tb=short"]
 
         # Node.js projects
         if (workspace / "package.json").exists():

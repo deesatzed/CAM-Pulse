@@ -230,6 +230,10 @@ class TestPreflightAnswerHandling:
                     VerificationResult(approved=True, violations=[], recommendations=[], quality_score=0.95),
                 )
 
+            async def _act_with_correction(self, decision):
+                acted = await self.act(decision)
+                return await self.verify(acted)
+
             async def learn(self, verified):
                 return None
 
@@ -334,6 +338,10 @@ class TestPreflightAnswerHandling:
                     acted[2],
                     VerificationResult(approved=True, violations=[], recommendations=[], quality_score=0.95),
                 )
+
+            async def _act_with_correction(self, decision):
+                acted = await self.act(decision)
+                return await self.verify(acted)
 
             async def learn(self, verified):
                 return None
