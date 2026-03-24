@@ -281,6 +281,32 @@ cam evaluate /path/to/repo --mode quick
 cam mine /path/to/repos --max-repos 10 --depth 2
 ```
 
+### Mine Your Own Code
+
+Most AI tools only learn from the internet. CAM learns from **your own forgotten codebases,
+unfinished builds, and archived projects** sitting on your drives.
+
+```bash
+# Quick preview: see what CAM finds in your own project (no LLM calls)
+cam mine-self --quick
+
+# Full self-mining: extract reusable patterns from your own code
+cam mine-self
+
+# Scan multiple directories at once — your entire workspace
+cam mine-workspace /Volumes/Projects /Volumes/Archive --scan-only    # preview first
+cam mine-workspace /Volumes/Projects /Volumes/Archive --max-repos 15 # mine them
+
+# Search patterns mined from your own code
+cam learn search "multiclaw-self"
+```
+
+**What makes this different:**
+- **`mine-workspace`** scans multiple directories, deduplicates across paths (handles symlinks/overlapping roots), and uses higher defaults for workspace-scale scanning
+- **`mine-self`** mines the current project and tags findings with `[self]` for filtering
+- **`--quick`** mode shows file stats, language breakdown, and domain signals — zero LLM cost
+- Cross-path dedup means `project-v1` in `/old/` and `project-v2` in `/new/` collapse to the best version
+
 ### Verify and Audit
 ```bash
 # Validate that changes actually happened

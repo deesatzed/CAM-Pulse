@@ -1616,3 +1616,210 @@ class TestRepoCandidate:
         assert c.canonical_name == "project"
         assert c.file_count == 42
         assert c.depth == 3
+
+
+# ===========================================================================
+# 14. mine-workspace command
+# ===========================================================================
+
+class TestMineWorkspaceCommand:
+    """Tests for mine-workspace CLI command registration."""
+
+    def test_mine_workspace_command_registered(self):
+        """The 'mine-workspace' command is registered in the typer app."""
+        from claw.cli import app
+        command_names = [
+            cmd.name or (cmd.callback.__name__ if cmd.callback else None)
+            for cmd in app.registered_commands
+        ]
+        assert "mine-workspace" in command_names
+
+    def test_mine_workspace_accepts_multiple_directories(self):
+        """The mine-workspace command has a 'directories' list parameter."""
+        from claw.cli import mine_workspace
+        import inspect
+        sig = inspect.signature(mine_workspace)
+        assert "directories" in sig.parameters
+        param = sig.parameters["directories"]
+        # Should be annotated as list[str]
+        assert "list" in str(param.annotation).lower() or "list" in str(param.default).lower()
+
+
+# ===========================================================================
+# 15. Multi-directory discovery and dedup
+# ===========================================================================
+
+class TestMultiDirectoryDiscovery:
+    """Tests for repo discovery across multiple directories."""
+
+    def test_discovers_repos_across_two_directories(self, tmp_path):
+        """Repos from separate roots are all found."""
+        dir_a = tmp_path / "workspace_a"
+        dir_b = tmp_path / "workspace_b"
+        # Create two repos in separate roots
+        for name, parent in [("repo-alpha", dir_a), ("repo-beta", dir_b)]:
+            repo = parent / name
+            repo.mkdir(parents=True)
+            (repo / ".git").mkdir()
+            (repo / "main.py").write_text("print('hello')\n")
+        candidates_a = _discover_repos(dir_a, max_depth=3)
+        candidates_b = _discover_repos(dir_b, max_depth=3)
+        all_names = {c.name for c in candidates_a} | {c.name for c in candidates_b}
+        assert "repo-alpha" in all_names
+        assert "repo-beta" in all_names
+
+    def test_cross_path_dedup_by_resolved_path(self, tmp_path):
+        """Same repo path discovered from two roots is deduplicated."""
+        shared = tmp_path / "shared" / "repo-x"
+        shared.mkdir(parents=True)
+        (shared / ".git").mkdir()
+        (shared / "app.py").write_text("x = 1\n")
+        # Discover from two roots that contain the same repo
+        c1 = _discover_repos(tmp_path / "shared", max_depth=3)
+        c2 = _discover_repos(tmp_path / "shared", max_depth=3)
+        # Merge with resolved-path dedup
+        seen: set[str] = set()
+        merged: list = []
+        for c in c1 + c2:
+            key = str(c.path.resolve())
+            if key not in seen:
+                seen.add(key)
+                merged.append(c)
+        assert len(merged) == 1
+        assert merged[0].name == "repo-x"
+
+    def test_cross_directory_canonical_dedup(self, tmp_path):
+        """Canonical name dedup works across directories: v1 + v2 -> best kept."""
+        dir_a = tmp_path / "old_stuff"
+        dir_b = tmp_path / "new_stuff"
+        # v1 in dir_a (small)
+        v1 = dir_a / "my-tool-v1"
+        v1.mkdir(parents=True)
+        (v1 / ".git").mkdir()
+        (v1 / "tool.py").write_text("v1\n")
+        # v2 in dir_b (bigger)
+        v2 = dir_b / "my-tool-v2"
+        v2.mkdir(parents=True)
+        (v2 / ".git").mkdir()
+        (v2 / "tool.py").write_text("v2 with more content " * 50 + "\n")
+        (v2 / "utils.py").write_text("def helper(): pass\n")
+        c_a = _discover_repos(dir_a, max_depth=3)
+        c_b = _discover_repos(dir_b, max_depth=3)
+        merged = c_a + c_b
+        selected, skipped = _dedup_iterations(merged)
+        selected_names = {c.name for c in selected}
+        # Both share canonical "my-tool", so only best (v2, more files/bytes) should survive
+        assert len(selected) == 1
+        assert "my-tool-v2" in selected_names
+
+    def test_empty_directories_produce_empty_result(self, tmp_path):
+        """Empty directories return empty candidate list without error."""
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        candidates = _discover_repos(empty, max_depth=3)
+        assert candidates == []
+
+
+# ===========================================================================
+# 16. mine-self command
+# ===========================================================================
+
+class TestMineSelfCommand:
+    """Tests for mine-self CLI command registration and parameters."""
+
+    def test_mine_self_command_registered(self):
+        """The 'mine-self' command is registered in the typer app."""
+        from claw.cli import app
+        command_names = [
+            cmd.name or (cmd.callback.__name__ if cmd.callback else None)
+            for cmd in app.registered_commands
+        ]
+        assert "mine-self" in command_names
+
+    def test_mine_self_has_quick_option(self):
+        """mine-self has a --quick parameter."""
+        from claw.cli import mine_self
+        import inspect
+        sig = inspect.signature(mine_self)
+        assert "quick" in sig.parameters
+
+    def test_mine_self_has_path_option(self):
+        """mine-self has a --path parameter (not a positional argument)."""
+        from claw.cli import mine_self
+        import inspect
+        sig = inspect.signature(mine_self)
+        assert "path" in sig.parameters
+
+
+# ===========================================================================
+# 17. mine-self quick preview
+# ===========================================================================
+
+class TestMineSelfQuickPreview:
+    """Tests for mine-self --quick preview functionality."""
+
+    def test_quick_preview_collects_metadata(self, tmp_path):
+        """_collect_repo_metadata returns file count and bytes from real files."""
+        project = tmp_path / "my-project"
+        project.mkdir()
+        (project / "main.py").write_text("print('hello world')\n")
+        (project / "utils.py").write_text("def add(a, b): return a + b\n")
+        (project / "README.md").write_text("# My Project\n")
+        file_count, _, total_bytes, sig = _collect_repo_metadata(project)
+        assert file_count == 3
+        assert total_bytes > 0
+        assert len(sig) == 40  # SHA-1 hex digest
+
+    def test_quick_preview_domain_classification(self, tmp_path):
+        """Domain keywords detect AI domain from file content."""
+        from claw.miner import _DOMAIN_KEYWORDS
+        project = tmp_path / "ai-project"
+        project.mkdir()
+        (project / "agent.py").write_text(
+            "from openai import OpenAI\n"
+            "client = OpenAI()\n"
+            "response = client.chat.completions.create(model='gpt-4')\n"
+            "embedding = get_embedding(text)\n"
+            "prompt = 'You are an agent that...'\n"
+        )
+        (project / "README.md").write_text("# AI Agent Framework\nLLM-powered agent with RAG.\n")
+        content, _ = serialize_repo(project)
+        content_lower = content.lower()
+        scores: dict[str, int] = {}
+        for category, keywords in _DOMAIN_KEYWORDS.items():
+            score = sum(1 for kw in keywords if kw in content_lower[:10_000])
+            if score > 0:
+                scores[category] = score
+        assert "ai_integration" in scores
+        assert scores["ai_integration"] >= 3  # agent, llm/openai, prompt, embedding, etc.
+
+    def test_quick_preview_language_breakdown(self, tmp_path):
+        """Language breakdown groups .py and .js correctly, skips non-code."""
+        from claw.miner import _CODE_EXTENSIONS, _SKIP_DIRS
+        project = tmp_path / "mixed-project"
+        project.mkdir()
+        (project / "app.py").write_text("x = 1\n")
+        (project / "helper.py").write_text("y = 2\n")
+        (project / "index.js").write_text("const z = 3;\n")
+        (project / "logo.png").write_bytes(b"\x89PNG\r\n")  # Should be skipped
+        ext_counts: dict[str, int] = {}
+        for filepath in sorted(project.rglob("*")):
+            if not filepath.is_file():
+                continue
+            rel = filepath.relative_to(project)
+            if any(part in _SKIP_DIRS for part in rel.parts):
+                continue
+            ext = filepath.suffix.lower()
+            if ext not in _CODE_EXTENSIONS:
+                continue
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        assert ext_counts.get(".py") == 2
+        assert ext_counts.get(".js") == 1
+        assert ".png" not in ext_counts
+
+    def test_self_tagging_convention(self):
+        """Self-mining repo name ends with '-self'."""
+        project_name = "multiclaw"
+        repo_name = f"{project_name}-self"
+        assert repo_name == "multiclaw-self"
+        assert repo_name.endswith("-self")

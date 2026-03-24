@@ -143,10 +143,10 @@ def _required_api_keys_for_command(config: Any, command_name: str) -> list[tuple
     command = command_name.strip().lower()
     requirements: list[tuple[str, str]] = []
 
-    if command in {"mine", "ideate"}:
+    if command in {"mine", "mine-workspace", "mine-self", "ideate"}:
         requirements.append(("OPENROUTER_API_KEY", "OpenRouter LLM access"))
 
-    if command == "mine" and _uses_remote_gemini_embeddings(config):
+    if command in {"mine", "mine-workspace", "mine-self"} and _uses_remote_gemini_embeddings(config):
         key_name = getattr(config.embeddings, "api_key_env", "") or "GOOGLE_API_KEY"
         requirements.append((str(key_name), "Gemini embeddings for methodology persistence"))
 
@@ -162,7 +162,7 @@ def _required_api_keys_for_command(config: Any, command_name: str) -> list[tuple
 
 def _select_live_llm_model(config: Any, command_name: str) -> str:
     command = command_name.strip().lower()
-    if command == "mine":
+    if command in {"mine", "mine-workspace", "mine-self"}:
         for agent_name in ("claude", "gemini", "codex", "grok"):
             agent_cfg = config.agents.get(agent_name)
             if agent_cfg and agent_cfg.enabled and agent_cfg.model:
@@ -242,7 +242,7 @@ async def _run_live_key_checks(config: Any, command_name: str) -> list[dict[str,
         finally:
             await llm_client.close()
 
-    if command == "mine" and _uses_remote_gemini_embeddings(config):
+    if command in {"mine", "mine-workspace", "mine-self"} and _uses_remote_gemini_embeddings(config):
         try:
             engine = EmbeddingEngine(config.embeddings)
             vector = engine.encode("cam keycheck live probe")
@@ -5529,6 +5529,665 @@ async def _mine_async(
             console.print(task_table)
 
         console.print(f"\n[dim]Use 'claw results' to view tasks, 'claw enhance .' to work on them.[/dim]")
+
+    finally:
+        await ctx.close()
+
+
+@app.command(name="mine-workspace")
+def mine_workspace(
+    directories: list[str] = typer.Argument(..., help="One or more directory paths to scan for repos"),
+    target: str = typer.Option(".", "--target", "-t", help="Target project path (defaults to current directory)"),
+    max_repos: int = typer.Option(20, "--max-repos", help="Maximum number of repos to mine across all directories"),
+    min_relevance: float = typer.Option(0.6, "--min-relevance", help="Minimum relevance score for task generation (0.4-1.0)"),
+    tasks: bool = typer.Option(True, "--tasks/--no-tasks", help="Generate enhancement tasks from findings"),
+    depth: int = typer.Option(8, "--depth", "-d", help="Max directory depth for repo discovery"),
+    dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Dedup repo iterations by canonical name"),
+    skip_known: bool = typer.Option(True, "--skip-known/--no-skip-known", help="Skip repos already mined when unchanged"),
+    force_rescan: bool = typer.Option(False, "--force-rescan", help="Ignore the mining ledger and rescan selected repos"),
+    changed_only: bool = typer.Option(False, "--changed-only", help="Only show/mine repos that are new or changed"),
+    scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
+    live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys"),
+    max_minutes: int = typer.Option(30, "--max-minutes", help="Wall-clock time guardrail for mining"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Mine repos across multiple directories at once.
+
+    Scans several directories for git repos and source trees, deduplicates
+    across all paths (handles symlinks and overlapping roots), and mines
+    each unique repo. Higher default depth (8) and max-repos (20) than
+    single-directory mining.
+
+    Examples:
+        cam mine-workspace /Volumes/Projects /Volumes/Archive --scan-only
+        cam mine-workspace ~/code ~/experiments --depth 4 --max-repos 10
+    """
+    _setup_logging(verbose)
+
+    # Validate all directories
+    dir_paths: list[Path] = []
+    for d in directories:
+        p = _resolve_operator_path(d)
+        if not p.exists():
+            console.print(f"[red]Directory does not exist: {p}[/red]")
+            raise typer.Exit(1)
+        if not p.is_dir():
+            console.print(f"[red]Path is not a directory: {p}[/red]")
+            raise typer.Exit(1)
+        dir_paths.append(p)
+
+    if max_repos < 1:
+        console.print("[red]--max-repos must be at least 1[/red]")
+        raise typer.Exit(1)
+    if not (0.4 <= min_relevance <= 1.0):
+        console.print("[red]--min-relevance must be between 0.4 and 1.0[/red]")
+        raise typer.Exit(1)
+    if depth < 1:
+        console.print("[red]--depth must be at least 1[/red]")
+        raise typer.Exit(1)
+    if max_minutes < 1:
+        console.print("[red]--max-minutes must be at least 1[/red]")
+        raise typer.Exit(1)
+
+    if scan_only:
+        _mine_workspace_scan_only(dir_paths, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
+        return
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    _fail_if_missing_api_keys(cfg, "mine-workspace")
+    if live_keycheck:
+        _fail_if_live_key_checks_fail(cfg, "mine-workspace")
+
+    try:
+        asyncio.run(asyncio.wait_for(
+            _mine_workspace_async(
+                dir_paths, target, max_repos, min_relevance, tasks, config,
+                depth, dedup, skip_known, force_rescan, changed_only,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Mining timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
+
+
+def _mine_workspace_scan_only(
+    dir_paths: list[Path],
+    depth: int,
+    dedup: bool,
+    max_repos: int,
+    config_path: Optional[str],
+    skip_known: bool,
+    force_rescan: bool,
+    changed_only: bool,
+) -> None:
+    """Preview repos discovered across multiple directories (no LLM calls)."""
+    from datetime import datetime
+    from claw.core.config import load_config
+    from claw.miner import RepoScanLedger, _default_scan_ledger_path, _discover_repos, _dedup_iterations
+
+    console.print(f"\n[bold]CAM Workspace Scanner (scan-only)[/bold]")
+    console.print(f"  Directories: {len(dir_paths)}")
+    for p in dir_paths:
+        console.print(f"    - {p}")
+    console.print(f"  Depth: {depth}")
+    console.print(f"  Dedup: {dedup}")
+    console.print(f"  Skip unchanged: {skip_known}")
+    console.print(f"  Force rescan: {force_rescan}")
+    console.print(f"  Changed only: {changed_only}")
+    console.print()
+
+    # Discover repos from each directory and merge
+    console.print("[cyan]Scanning directories for repos...[/cyan]")
+    all_candidates: list = []
+    source_map: dict[str, str] = {}  # resolved path -> scan root name
+    seen_resolved: set[str] = set()
+
+    for dir_path in dir_paths:
+        candidates = _discover_repos(dir_path, max_depth=depth)
+        for c in candidates:
+            try:
+                resolved = str(c.path.resolve())
+            except OSError:
+                resolved = str(c.path)
+            if resolved not in seen_resolved:
+                seen_resolved.add(resolved)
+                all_candidates.append(c)
+                source_map[resolved] = dir_path.name
+
+    if not all_candidates:
+        console.print("[yellow]No repositories or source trees found in any directory.[/yellow]")
+        return
+
+    cfg = load_config(Path(config_path) if config_path else None)
+    ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
+
+    skipped: list = []
+    selected = all_candidates
+    if dedup:
+        selected, skipped = _dedup_iterations(all_candidates)
+
+    effective = selected
+    if changed_only:
+        effective = [
+            c for c in selected
+            if ledger.should_mine(c, skip_known=skip_known, force_rescan=force_rescan)[0]
+        ]
+
+    table = Table(title=f"Workspace Repos ({len(all_candidates)} total, {len(effective)} eligible)")
+    table.add_column("#", justify="right", style="dim", width=4)
+    table.add_column("Name", style="cyan", max_width=30)
+    table.add_column("Source", style="blue", max_width=20)
+    table.add_column("Files", justify="right", style="green", width=6)
+    table.add_column("Size", justify="right", style="dim", width=8)
+    table.add_column("Kind", style="magenta", width=11)
+    table.add_column("Status", max_width=20)
+
+    skipped_ids = {id(s[0]) for s in skipped}
+    ledger_selected = 0
+
+    for i, c in enumerate(all_candidates, 1):
+        if c.total_bytes >= 1024 * 1024:
+            size_str = f"{c.total_bytes / (1024 * 1024):.1f}MB"
+        elif c.total_bytes >= 1024:
+            size_str = f"{c.total_bytes / 1024:.0f}KB"
+        else:
+            size_str = f"{c.total_bytes}B"
+
+        try:
+            resolved = str(c.path.resolve())
+        except OSError:
+            resolved = str(c.path)
+        src = source_map.get(resolved, "?")
+
+        ledger_should_mine, ledger_reason = ledger.should_mine(
+            c, skip_known=skip_known, force_rescan=force_rescan,
+        )
+
+        if id(c) in skipped_ids:
+            reason = next(r for s, r in skipped if id(s) == id(c))
+            status = f"[dim]skipped: {reason[:18]}[/dim]"
+        elif not ledger_should_mine:
+            status = "[yellow]already mined[/yellow]"
+        elif ledger_reason == "changed":
+            ledger_selected += 1
+            status = "[green]changed -> rescan[/green]"
+        elif ledger_reason == "forced":
+            ledger_selected += 1
+            status = "[green]force rescan[/green]"
+        else:
+            ledger_selected += 1
+            status = "[green]selected[/green]"
+
+        if changed_only and (id(c) in skipped_ids or not ledger_should_mine):
+            continue
+
+        table.add_row(str(i), c.name, src, str(c.file_count), size_str, c.source_kind, status)
+
+    console.print(table)
+
+    console.print(f"\n[bold]Summary[/bold]")
+    console.print(f"  Directories scanned: {len(dir_paths)}")
+    console.print(f"  Total discovered: {len(all_candidates)}")
+    console.print(f"  Eligible after filters: {len(effective)}")
+    console.print(f"  Skipped (dedup): {len(skipped)}")
+    console.print(f"  Cross-path duplicates removed: {sum(len(_discover_repos(p, max_depth=depth)) for p in dir_paths) - len(all_candidates)}")
+    if max_repos < ledger_selected:
+        console.print(f"  Will mine (--max-repos): {max_repos}")
+    else:
+        console.print(f"  Will mine: {ledger_selected}")
+
+    console.print(f"\n[dim]Remove --scan-only to mine these repos.[/dim]")
+
+
+async def _mine_workspace_async(
+    dir_paths: list[Path],
+    target: str,
+    max_repos: int,
+    min_relevance: float,
+    generate_tasks: bool,
+    config_path: Optional[str],
+    max_depth: int = 8,
+    dedup_iterations: bool = True,
+    skip_known: bool = True,
+    force_rescan: bool = False,
+    changed_only: bool = False,
+) -> None:
+    """Mine repos across multiple directories."""
+    from claw.core.factory import ClawFactory
+    from claw.core.models import Project
+    from claw.miner import _discover_repos, _dedup_iterations, MiningReport, RepoMiningResult
+
+    config_p = Path(config_path) if config_path else None
+    target_path = Path(target).resolve()
+    ctx = await ClawFactory.create(config_path=config_p, workspace_dir=target_path)
+
+    try:
+        project_name = target_path.name
+        project = await ctx.repository.get_project_by_name(project_name)
+        if project is None:
+            project = Project(name=project_name, repo_path=str(target_path))
+            project = await ctx.repository.create_project(project)
+
+        # Discover + merge + dedup across all directories
+        all_candidates: list = []
+        seen_resolved: set[str] = set()
+        for dir_path in dir_paths:
+            candidates = _discover_repos(dir_path, max_depth=max_depth)
+            for c in candidates:
+                try:
+                    resolved = str(c.path.resolve())
+                except OSError:
+                    resolved = str(c.path)
+                if resolved not in seen_resolved:
+                    seen_resolved.add(resolved)
+                    all_candidates.append(c)
+
+        if not all_candidates:
+            console.print("[yellow]No repos found in any directory.[/yellow]")
+            return
+
+        skipped_dedup: list = []
+        selected = all_candidates
+        if dedup_iterations:
+            selected, skipped_dedup = _dedup_iterations(all_candidates)
+
+        # Apply ledger filtering
+        mining_plan: list = []
+        for candidate in selected:
+            should_mine, reason = ctx.miner.scan_ledger.should_mine(
+                candidate, skip_known=skip_known or changed_only, force_rescan=force_rescan,
+            )
+            if should_mine:
+                mining_plan.append(candidate)
+
+        to_mine = mining_plan[:max_repos]
+
+        console.print(f"\n[bold]CAM Workspace Mining[/bold]")
+        console.print(f"  Directories: {len(dir_paths)}")
+        for p in dir_paths:
+            console.print(f"    - {p}")
+        console.print(f"  Target: {project.name} ({target_path})")
+        console.print(f"  Total discovered: {len(all_candidates)}")
+        console.print(f"  Selected after dedup: {len(selected)}")
+        console.print(f"  Eligible after ledger: {len(mining_plan)}")
+        console.print(f"  Will mine: {len(to_mine)}")
+        console.print()
+
+        if not to_mine:
+            console.print("[yellow]No new or changed repos to mine.[/yellow]")
+            return
+
+        report = MiningReport()
+
+        def on_repo_complete(repo_name: str, result: Any) -> None:
+            n_findings = len(result.findings) if result.findings else 0
+            if result.error:
+                console.print(f"  [red]x {repo_name}: {result.error}[/red]")
+            elif result.skipped:
+                console.print(f"  [yellow]- {repo_name}: skipped ({result.skip_reason})[/yellow]")
+            else:
+                console.print(
+                    f"  [green]+ {repo_name}[/green]: "
+                    f"{n_findings} findings, {result.files_analyzed} files, "
+                    f"{result.tokens_used} tokens, {result.duration_seconds:.1f}s"
+                )
+
+        console.print("[cyan]Mining repositories...[/cyan]")
+        import time
+        start = time.monotonic()
+
+        for candidate in to_mine:
+            try:
+                result = await ctx.miner.mine_repo(candidate.path, candidate.name, project.id)
+                report.repo_results.append(result)
+                report.repos_scanned += 1
+                report.total_findings += len(result.findings)
+                report.total_cost_usd += result.cost_usd
+                report.total_tokens += result.tokens_used
+                if not result.error and not result.skipped:
+                    ctx.miner.scan_ledger.record_result(candidate, result)
+                on_repo_complete(candidate.name, result)
+            except Exception as e:
+                err_result = RepoMiningResult(
+                    repo_name=candidate.name, repo_path=str(candidate.path), error=str(e),
+                )
+                report.repo_results.append(err_result)
+                report.repos_scanned += 1
+                on_repo_complete(candidate.name, err_result)
+
+        # Generate tasks from all findings
+        if generate_tasks:
+            all_findings = []
+            for result in report.repo_results:
+                all_findings.extend(result.findings)
+            if all_findings:
+                tasks = await ctx.miner._generate_tasks(
+                    all_findings, project.id, min_relevance,
+                )
+                report.tasks = tasks
+                report.tasks_generated = len(tasks)
+
+        report.total_duration_seconds = time.monotonic() - start
+
+        # Display results
+        results_table = Table(title="Workspace Mining Results")
+        results_table.add_column("Repo", style="cyan", max_width=25)
+        results_table.add_column("Files", justify="right", style="dim", width=6)
+        results_table.add_column("Findings", justify="right", style="green", width=9)
+        results_table.add_column("Tokens", justify="right", style="yellow", width=8)
+        results_table.add_column("Time", justify="right", style="dim", width=8)
+        results_table.add_column("Status", max_width=20)
+
+        for result in report.repo_results:
+            if result.skipped:
+                status = f"[yellow]skipped: {result.skip_reason}[/yellow]"
+            else:
+                status = "[green]OK[/green]" if not result.error else f"[red]{result.error[:18]}[/red]"
+            results_table.add_row(
+                result.repo_name, str(result.files_analyzed),
+                str(len(result.findings)), str(result.tokens_used),
+                f"{result.duration_seconds:.1f}s", status,
+            )
+
+        console.print()
+        console.print(results_table)
+
+        console.print(f"\n[bold]Summary[/bold]")
+        console.print(f"  Repos mined: {report.repos_scanned}")
+        console.print(f"  Total findings: {report.total_findings}")
+        console.print(f"  Tasks generated: {report.tasks_generated}")
+        console.print(f"  Total tokens: {report.total_tokens}")
+        console.print(f"  Total time: {report.total_duration_seconds:.1f}s")
+
+        if report.tasks:
+            console.print(f"\n[bold]Generated Tasks[/bold]")
+            task_table = Table()
+            task_table.add_column("Title", style="cyan", max_width=60)
+            task_table.add_column("Priority", justify="right", style="yellow", width=8)
+            task_table.add_column("Type", style="dim", width=16)
+            task_table.add_column("Agent", style="green", width=8)
+
+            for task in report.tasks:
+                task_table.add_row(
+                    task.title[:58], str(task.priority),
+                    task.task_type or "-", task.recommended_agent or "-",
+                )
+            console.print(task_table)
+
+        console.print(f"\n[dim]Use 'claw results' to view tasks, 'claw enhance .' to work on them.[/dim]")
+
+    finally:
+        await ctx.close()
+
+
+@app.command(name="mine-self")
+def mine_self(
+    path: str = typer.Option(".", "--path", "-p", help="Project root to mine (defaults to cwd)"),
+    target: str = typer.Option(None, "--target", "-t", help="Target project for findings (defaults to same project)"),
+    min_relevance: float = typer.Option(0.5, "--min-relevance", help="Minimum relevance score for task generation"),
+    tasks: bool = typer.Option(True, "--tasks/--no-tasks", help="Generate enhancement tasks from findings"),
+    quick: bool = typer.Option(False, "--quick", "-q", help="Quick preview: file stats + domain signals, no LLM"),
+    live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys"),
+    max_minutes: int = typer.Option(10, "--max-minutes", help="Wall-clock time guardrail for mining"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Mine the current project's own code for reusable patterns.
+
+    Point CAM at itself (or any single project) to discover patterns,
+    architecture decisions, and reusable techniques within its own code.
+    Findings are tagged with a [self] suffix for easy filtering.
+
+    Use --quick for a fast preview (no LLM calls) showing file stats,
+    language breakdown, and domain signal classification.
+
+    Examples:
+        cam mine-self --quick               # Fast preview of current project
+        cam mine-self --path /my/project     # Mine a specific project
+        cam mine-self --no-tasks             # Extract patterns without tasks
+    """
+    _setup_logging(verbose)
+
+    project_path = _resolve_operator_path(path)
+    if not project_path.exists():
+        console.print(f"[red]Project path does not exist: {project_path}[/red]")
+        raise typer.Exit(1)
+    if not project_path.is_dir():
+        console.print(f"[red]Path is not a directory: {project_path}[/red]")
+        raise typer.Exit(1)
+
+    if not (0.4 <= min_relevance <= 1.0):
+        console.print("[red]--min-relevance must be between 0.4 and 1.0[/red]")
+        raise typer.Exit(1)
+
+    if quick:
+        _mine_self_quick(project_path)
+        return
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    _fail_if_missing_api_keys(cfg, "mine-self")
+    if live_keycheck:
+        _fail_if_live_key_checks_fail(cfg, "mine-self")
+
+    effective_target = target if target else path
+
+    try:
+        asyncio.run(asyncio.wait_for(
+            _mine_self_async(
+                project_path, effective_target, min_relevance, tasks, config,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Self-mining timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
+
+
+def _mine_self_quick(project_path: Path) -> None:
+    """Quick preview of a project: file stats + domain signals, no LLM calls."""
+    from claw.miner import (
+        _collect_repo_metadata, serialize_repo, _CODE_EXTENSIONS,
+        _SKIP_DIRS, _DOMAIN_KEYWORDS, _LANGUAGE_SIGNALS,
+    )
+
+    console.print(f"\n[bold]CAM Self-Mining Quick Preview[/bold]")
+    console.print(f"  Project: {project_path.name}")
+    console.print(f"  Path: {project_path}")
+    console.print()
+
+    # Collect metadata
+    file_count, last_commit_ts, total_bytes, scan_signature = _collect_repo_metadata(project_path)
+
+    if total_bytes >= 1024 * 1024:
+        size_str = f"{total_bytes / (1024 * 1024):.1f} MB"
+    elif total_bytes >= 1024:
+        size_str = f"{total_bytes / 1024:.0f} KB"
+    else:
+        size_str = f"{total_bytes} B"
+
+    console.print(f"[bold]Project Stats[/bold]")
+    console.print(f"  Source files: {file_count}")
+    console.print(f"  Total size: {size_str}")
+    console.print(f"  Scan signature: {scan_signature[:12]}...")
+    console.print()
+
+    # Language breakdown
+    ext_counts: dict[str, int] = {}
+    ext_bytes: dict[str, int] = {}
+    try:
+        for filepath in sorted(project_path.rglob("*")):
+            if not filepath.is_file():
+                continue
+            rel = filepath.relative_to(project_path)
+            if any(part in _SKIP_DIRS for part in rel.parts):
+                continue
+            ext = filepath.suffix.lower()
+            if ext not in _CODE_EXTENSIONS:
+                continue
+            try:
+                stat = filepath.stat()
+            except OSError:
+                continue
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            ext_bytes[ext] = ext_bytes.get(ext, 0) + stat.st_size
+    except (PermissionError, OSError):
+        pass
+
+    if ext_counts:
+        lang_table = Table(title="Language Breakdown")
+        lang_table.add_column("Extension", style="cyan", width=12)
+        lang_table.add_column("Files", justify="right", style="green", width=8)
+        lang_table.add_column("Size", justify="right", style="dim", width=10)
+        lang_table.add_column("% of Code", justify="right", style="yellow", width=10)
+
+        for ext in sorted(ext_counts, key=lambda e: -ext_bytes.get(e, 0)):
+            pct = (ext_bytes[ext] / total_bytes * 100) if total_bytes > 0 else 0
+            if ext_bytes[ext] >= 1024:
+                sz = f"{ext_bytes[ext] / 1024:.0f} KB"
+            else:
+                sz = f"{ext_bytes[ext]} B"
+            lang_table.add_row(ext, str(ext_counts[ext]), sz, f"{pct:.1f}%")
+
+        console.print(lang_table)
+        console.print()
+
+    # Domain signal classification
+    repo_content, _ = serialize_repo(project_path)
+    if repo_content:
+        content_lower = repo_content.lower()
+        scores: dict[str, int] = {}
+        for category, keywords in _DOMAIN_KEYWORDS.items():
+            score = sum(1 for kw in keywords if kw in content_lower[:10_000])
+            if score > 0:
+                scores[category] = score
+
+        if scores:
+            ranked = sorted(scores.items(), key=lambda x: -x[1])
+            domain_table = Table(title="Domain Signals")
+            domain_table.add_column("Domain", style="cyan", max_width=20)
+            domain_table.add_column("Signal Strength", justify="right", style="yellow", width=16)
+            domain_table.add_column("Keywords Matched", justify="right", style="green", width=16)
+
+            max_score = ranked[0][1] if ranked else 1
+            for domain, score in ranked:
+                bar_len = int(score / max_score * 15)
+                bar = "█" * bar_len + "░" * (15 - bar_len)
+                domain_table.add_row(domain, bar, str(score))
+
+            console.print(domain_table)
+            console.print()
+
+        # Language detection
+        language = "unknown"
+        for config_name, lang in _LANGUAGE_SIGNALS.items():
+            if f"--- file: {config_name}" in content_lower or f"/{config_name}" in content_lower:
+                language = lang
+                break
+
+        if file_count < 50:
+            complexity = "small"
+        elif file_count <= 200:
+            complexity = "medium"
+        else:
+            complexity = "large"
+
+        console.print(f"[bold]Classification[/bold]")
+        console.print(f"  Primary language: {language}")
+        console.print(f"  Complexity: {complexity} ({file_count} files)")
+        if scores:
+            console.print(f"  Primary domain: {ranked[0][0]}")
+            if len(ranked) > 1:
+                console.print(f"  Secondary domains: {', '.join(d for d, _ in ranked[1:4])}")
+
+    console.print(f"\n[dim]Run 'cam mine-self' (without --quick) for full LLM-powered mining.[/dim]")
+
+
+async def _mine_self_async(
+    project_path: Path,
+    target: str,
+    min_relevance: float,
+    generate_tasks: bool,
+    config_path: Optional[str],
+) -> None:
+    """Mine a project's own code for reusable patterns."""
+    from claw.core.factory import ClawFactory
+    from claw.core.models import Project
+
+    config_p = Path(config_path) if config_path else None
+    target_path = Path(target).resolve()
+    ctx = await ClawFactory.create(config_path=config_p, workspace_dir=target_path)
+
+    try:
+        project_name = target_path.name
+        project = await ctx.repository.get_project_by_name(project_name)
+        if project is None:
+            project = Project(name=project_name, repo_path=str(target_path))
+            project = await ctx.repository.create_project(project)
+
+        repo_name = f"{project_path.name}-self"
+
+        console.print(f"\n[bold]CAM Self-Mining[/bold]")
+        console.print(f"  Project: {project_path.name}")
+        console.print(f"  Path: {project_path}")
+        console.print(f"  Repo name: {repo_name}")
+        console.print(f"  Target: {project.name} ({target_path})")
+        console.print(f"  Min relevance: {min_relevance}")
+        console.print(f"  Generate tasks: {generate_tasks}")
+        console.print()
+
+        console.print("[cyan]Mining own code for patterns...[/cyan]")
+        result = await ctx.miner.mine_repo(project_path, repo_name, project.id)
+
+        n_findings = len(result.findings) if result.findings else 0
+        if result.error:
+            console.print(f"[red]Mining failed: {result.error}[/red]")
+            raise typer.Exit(1)
+
+        # Display findings
+        if result.findings:
+            findings_table = Table(title=f"Self-Mining Findings ({n_findings})")
+            findings_table.add_column("Category", style="magenta", width=16)
+            findings_table.add_column("Title", style="cyan", max_width=50)
+            findings_table.add_column("Relevance", justify="right", style="yellow", width=10)
+
+            for finding in result.findings:
+                findings_table.add_row(
+                    finding.category, finding.title[:48],
+                    f"{finding.relevance_score:.2f}" if hasattr(finding, 'relevance_score') else "-",
+                )
+            console.print(findings_table)
+
+        console.print(f"\n[bold]Summary[/bold]")
+        console.print(f"  Files analyzed: {result.files_analyzed}")
+        console.print(f"  Findings: {n_findings}")
+        console.print(f"  Tokens used: {result.tokens_used}")
+        console.print(f"  Time: {result.duration_seconds:.1f}s")
+
+        # Generate tasks from findings
+        if generate_tasks and result.findings:
+            tasks = await ctx.miner._generate_tasks(
+                result.findings, project.id, min_relevance,
+            )
+            if tasks:
+                console.print(f"\n[bold]Self-Improvement Tasks ({len(tasks)})[/bold]")
+                task_table = Table()
+                task_table.add_column("Title", style="cyan", max_width=60)
+                task_table.add_column("Priority", justify="right", style="yellow", width=8)
+                task_table.add_column("Type", style="dim", width=16)
+
+                for task in tasks:
+                    task_table.add_row(
+                        task.title[:58], str(task.priority), task.task_type or "-",
+                    )
+                console.print(task_table)
+
+        console.print(f"\n[dim]Findings tagged as '{repo_name}'. Use 'cam learn search \"{repo_name}\"' to query.[/dim]")
 
     finally:
         await ctx.close()
