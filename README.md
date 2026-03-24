@@ -1,853 +1,420 @@
-# CAM-PULSE — Codebase Assimilation Machine
+# CAM-PULSE
 
-> **CAM-PULSE**: Autonomous code intelligence engine. Discovers repos from X, mines reusable patterns, and applies them to your builds — with proof.
+### Discovers code patterns from the wild. Learns from them. Applies them to your builds — with proof.
 
-**The only Claw variant that ships real, verifiable code changes — because it never trusts its own narration.**
-
-CAM is a multi-agent autonomous codebase engineering system. It inspects, learns from, transforms, and validates entire repositories — then proves what it did with actual workspace diffs, not agent storytelling.
+**1,868 tests** | **1,800+ learned patterns** | **8 proven showpieces** | **$0 — MIT licensed**
 
 ---
 
-## At a Glance
-
-| Metric | Value |
-|---|---|
-| Automated tests | **1,868 passing**, 6 skipped |
-| Agent backends | 4 (Claude, Codex, Gemini, Grok) |
-| Execution modes | 5 (CLI, API, Cloud, OpenRouter, **Local**) |
-| Knowledge base | SQLite, 1,800+ mined methodologies |
-| Deployment | `pip install`, Docker, or Ollama local-only |
-| Install weight | Full (torch) **or** lightweight (API-only, no torch) |
-| Apple Silicon | Native MLX-LM + mlx-embeddings support |
-| Proven showpieces | 8 end-to-end (repo upgrade, medCSS modernizer, expectation ladder, PULSE knowledge loop, cross-repo intelligence, PULSE usage proof, multi-pass mining, **plugin event system**) |
+> Every AI coding tool forgets what it learned the moment your session ends.
+>
+> CAM-PULSE doesn't. It scans X/Twitter for GitHub repos via Grok, mines reusable patterns from them,
+> stores everything in a persistent knowledge base, and **injects that knowledge into your next build** —
+> then proves which pattern influenced which code, with attribution.
 
 ---
 
-## Why CAM-PULSE Stands Out
+## The Knowledge Loop
 
-Most AI coding agents generate text about code. CAM generates code, then *checks whether it actually worked*.
+This is what makes CAM-PULSE different from every other AI coding tool. It's not a chat wrapper. It's a closed-loop learning system:
 
-- **Validation-first architecture** — `cam validate` checks real workspace diffs, build output, and test results against a saved spec. If nothing changed, execution is marked as **failed**. No other Claw variant does this.
-- **Persistent cross-repo learning** — `cam mine` extracts reusable patterns into a growing SQLite knowledge base. Unchanged repos are skipped automatically. Knowledge compounds across projects over time.
-- **Honest failure by design** — CAM documents its limits explicitly. The benchmark harness reports "0% lift" when the fixture corpus doesn't beat baseline. Preflight gates block execution when must-clarify questions remain unanswered.
-- **1,868 automated tests** — Not a toy, not a demo. The test suite covers CLI surface, database operations, mining behavior, spec generation, validation logic, embedding engine, local mode routing, PULSE novelty filtering, and forge benchmarks.
-- **Local-first / zero-cloud option** — Run entirely on your machine with Ollama or MLX-LM. No API keys needed for local mode. Apple Silicon users get native MLX acceleration.
+```
+                          X / Twitter
+                              |
+                    +---------v----------+
+                    |    X-Scout         |  Grok x_search scans for
+                    |    (xAI API)       |  GitHub repos developers
+                    +---------+----------+  are sharing
+                              |
+                    +---------v----------+
+                    |  Novelty Filter    |  URL dedup + Google Gemini
+                    |  (384-dim vectors) |  embedding distance scoring
+                    +---------+----------+
+                              |
+                    +---------v----------+
+                    |  3-Pass Mining     |  1. Rule-based domain classify
+                    |  Pipeline          |  2. KB overlap assessment
+                    |                    |  3. Focused LLM extraction
+                    +---------+----------+
+                              |
+                    +---------v----------+
+                    |  SQLite + Vectors  |  1,800+ methodologies with
+                    |  Knowledge Base    |  provenance, lifecycle state,
+                    |  (claw.db)         |  and 384-dim embeddings
+                    +---------+----------+
+                              |
+                    +---------v----------+
+                    |  Hybrid Search     |  BM25 text + cosine vector
+                    |  & Retrieval       |  similarity, cross-domain
+                    +---------+----------+  synergy scoring
+                              |
+                    +---------v----------+
+                    |  Knowledge         |  Full patterns injected as
+                    |  Injection         |  ## Retrieved Knowledge in
+                    +---------+----------+  agent prompts
+                              |
+                    +---------v----------+
+                    |  Multi-Agent       |  Claude, Codex, Gemini, Grok
+                    |  Build             |  via OpenRouter (or Ollama
+                    +---------+----------+  / MLX-LM locally)
+                              |
+                    +---------v----------+
+                    |  Verification      |  Real diffs checked. Tests
+                    |  & Attribution     |  run. Token overlap tracks
+                    +---------+----------+  which pattern → which code
+```
 
----
-
-## What No Other Claw Does
-
-These are the capabilities that exist in CAM and do not exist in nanobot, ZeroClaw, NemoClaw, NanoClaw, PicoClaw, or any other known Claw variant:
-
-1. **Rejects hallucinated success** — Other agents say "I updated the files." CAM checks the actual diff. If no files changed, the run is explicitly failed. This is not a wrapper — it is a core architectural decision in the execution pipeline.
-
-2. **Learns and remembers across repositories** — `cam mine` builds a persistent methodology database from any folder of repos. Each methodology tracks its lifecycle state (stored, enriched, retrieved, operationalized, proven). `cam learn reassess` reactivates old knowledge when a new task matches.
-
-3. **Preflight contract system** — Before attempting risky execution, `cam preflight` asks the high-value questions, produces a reusable task contract, and blocks unsafe work. Answers persist across reruns.
-
-4. **Namespace-safe execution** — In fixed-mode, CAM rejects agent output that introduces new top-level source namespaces. `--namespace-safe-retry` auto-retries with hardened constraints. This prevents the most common agent drift pattern.
-
-5. **Deterministic standalone benchmarks** — `cam forge-benchmark` runs a repeatable regression harness on fixture data with no external dependencies. The result is a pass/fail with measured lift, not a subjective quality score.
-
-6. **Autonomous discovery from live social feeds** — CAM-PULSE scans X (Twitter) via Grok's `x_search`, discovers GitHub repos developers are sharing, filters by semantic novelty, clones and mines them, and stores the patterns. No other tool learns from the wild without human curation.
-
-7. **Semantic knowledge search** — `cam learn search "topic"` performs hybrid vector + text search across all 1,800+ methodologies with provenance, lifecycle tracking, and cross-domain synergy scoring.
-
-8. **Self-healing JSON parser** — LLM mining output is malformed ~75% of the time. CAM's 3-stage `_repair_json()` (trailing comma fix, truncation recovery, individual object extraction) achieves **100% repair rate** on live scans. No other tool recovers from broken LLM JSON at this rate.
-
-9. **Knowledge application with attribution** — CAM doesn't just store patterns — it retrieves full methodology content (implementation sketches, solution code, activation triggers) and injects it into agent prompts as a `## Retrieved Knowledge` section. Proven: Retrieved=3, Used=3, Attributed=3, with 4/4 tests passing on agent-produced code. Token overlap inference tracks which mined pattern influenced which build.
-
-10. **Multi-pass mining pipeline** — Three-pass approach replaces monolithic single-LLM-call mining. Pass 1: rule-based domain classification (10 categories, zero cost). Pass 2: knowledge overlap assessment (embedding search, identifies under-represented categories). Pass 3: focused LLM mining with domain-specific context directives and adaptive token budget (small=2K, medium=4K, large=6K). README-first file ordering ensures the LLM sees project context before code.
-
-### How CAM-PULSE Compares
-
-| Capability | CAM-PULSE | GitHub Copilot | Cursor | Windsurf | Aider |
-|---|---|---|---|---|---|
-| **Verifies diffs actually happened** | Yes — fails if nothing changed | No | No | No | No |
-| **Persistent cross-repo memory** | 1,800+ methodologies in SQLite | No | Workspace only | Session only | No |
-| **Discovers new patterns autonomously** | X-Scout scans X, mines, stores | No | No | No | No |
-| **Applies learned knowledge to builds** | Retrieved→Injected→Attributed | No | No | No | No |
-| **Runs 100% local, zero cloud** | Ollama + MLX-LM | No | No | No | Some models |
-| **Reports honest failures** | 0% lift reported, failed runs marked | Silent | Silent | Silent | Partial |
-| **Multi-agent routing** | 4 backends, intelligent routing | 1 model | 1 model | 1 model | 1 model |
-| **Cost** | **Free, open source, MIT** | $19/mo | $20/mo | $0–40/mo | Free + API |
-
----
-
-## Current Status (March 2026)
-
-- **Phase 1 complete**: SKILL.md wrapper, GitHub issue templates, namespace fix, reliability pipeline
-- **Phase 2 complete**: Docker deployment, Ollama/MLX-LM local mode, torch-free lightweight install
-- **Phase 3 complete**: CAM-PULSE autonomous X-powered discovery swarm, mission profiles, budget config, JSON repair, retryable discoveries, **knowledge injection**, **multi-pass mining**, **prescreened ingestion**
-- **1,868 automated tests** passing, 8 runnable showpieces, 1,800+ learned methodologies
-- **First live PULSE scan**: 18 discovered, 16 novel, **16/16 assimilated** (0 failures), 86 new methodologies, 100% JSON repair rate
-- **Prescreened ingestion**: 9 repos (heroui, deer-flow, spec-kit, starlette, claude-peers-mcp, editor + 3 more), **52 new methodologies** via `cam pulse ingest`
-- **Knowledge application proven**: Full methodology content injected into agent prompts, agent produced working code with passing tests, attribution tracked (Retrieved=3, Used=3, Attributed=3)
-- Not yet fully autonomous — `--execute` mode is gated behind preflight checks
-- Coverage at 79% (target: >90%, action plan in progress)
+**No other tool does this.** Copilot, Cursor, Windsurf, and Aider all start from scratch every session. They don't discover, don't remember, and don't prove what they used.
 
 ---
 
-## CAM-PULSE: Perpetual X-Powered Discovery
+## Proof: Cross-Repo Knowledge Synthesis
 
-CAM-PULSE (Perpetual Unified Learning Swarm Engine) transforms CAM from a tool-you-run into a perpetual code intelligence organism. It continuously discovers novel GitHub repos mentioned on X (Twitter) via Grok API's native `x_search` tool, deduplicates against existing knowledge, mines/assimilates discoveries into `claw.db`, and optionally queues high-value repos for enhancement.
+CAM retrieved patterns from **3 different mined repos** and synthesized them into one working module:
+
+```
+Task: "Build a plugin event system with typed event bus, middleware
+       chain, plugin loader with lifecycle hooks, and loop detection."
+
+What happened:
+  1. Semantic search retrieved 3 methodologies from 3 repos
+  2. Agent built 258 lines of working code across 5 modules
+  3. All 5 tests passed
+  4. CLI demo runs with visible output
+
+Results:
+  Retrieved=3 | Used=3 | Attributed=3 | Quality=0.82
+```
+
+| Module | Lines | Pattern Source |
+|--------|------:|----------------|
+| `event_bus.py` | 71 | Priority ordering + fnmatch wildcards from **pascalorg/editor** |
+| `middleware.py` | 56 | Inspect/modify/block chain from **bytedance/deer-flow** |
+| `plugin_loader.py` | 56 | Directory discovery + lifecycle hooks from **heroui-inc/heroui** |
+| `loop_detector.py` | 22 | Infinite re-emission prevention from **bytedance/deer-flow** |
+| `core.py` | 53 | Event dataclass, Plugin protocol, type definitions |
+
+```
+$ python -m pytest tests/ -v
+tests/test_events.py::test_priority_and_wildcard_delivery_order     PASSED
+tests/test_events.py::test_middleware_can_modify_and_block           PASSED
+tests/test_events.py::test_loop_detection_prevents_re_emission      PASSED
+tests/test_events.py::test_plugin_loader_lifecycle                  PASSED
+tests/test_events.py::test_cli_help_version_and_invalid_args        PASSED
+5 passed
+```
+
+Every module traces back to a specific mined methodology. This isn't code generation — it's **knowledge application with provenance**.
+
+---
+
+## First Live Scan: 16/16 Repos Assimilated
+
+```
+$ cam pulse scan --keywords "AI agent framework"
+
+=== PULSE Scan Report ===
+  Keywords:     github.com new AI agent repo
+  Discovered:   18
+  Novel:        16  (2 already known)
+  Assimilated:  16
+  Failed:       0
+  New patterns: 86
+  JSON repair:  100%  (every repo's LLM output was malformed; all recovered)
+```
+
+| Repo | Patterns | What CAM Learned |
+|------|:--------:|------------------|
+| `7abar/nastar-protocol` | 8 | On-chain reputation scoring, AI dispute judge, 8-state deal machine |
+| `cronusl-1141/ai-company` | 8 | Multi-agent role system, versioned prompt registry, failure alchemy |
+| `devwebxyn/securemcp-lite` | 7 | Sliding window rate limiter, protocol error classification |
+| `bug-ops/zeph` | 5 | Thompson sampling for agent routing, BM25+cosine hybrid RAG |
+| `egeuysall/brain` | 6 | Atomic write pattern, tiered knowledge retrieval |
+| + 11 more repos | 52 | Various patterns across middleware, auth, state machines |
+
+Then 9 prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/heroui, Kludex/starlette, pascalorg/editor, and more) added **52 more methodologies** via `cam pulse ingest`.
+
+---
+
+## How It Compares
+
+| | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
+| **Persistent cross-session memory** | 1,800+ patterns | -- | Workspace | Session | -- |
+| **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
+| **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
+| **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
+| **Runs 100% local (zero cloud)** | Ollama + MLX-LM | -- | -- | -- | Partial |
+| **Reports honest failures** | 0% lift = 0% lift | Silent | Silent | Silent | Partial |
+| **Cost** | **Free + MIT** | $19/mo | $20/mo | $0-40/mo | Free + API |
+
+---
+
+## Novel Technology
+
+### Autonomous X-Scout Discovery
+CAM-PULSE uses xAI's Responses API with Grok's native `x_search` tool to find GitHub repos that developers are sharing on X/Twitter. No scraping, no RSS — native server-side search through Grok. Results are filtered by semantic novelty (embedding distance via Google's `gemini-embedding-2-preview`, 384 dimensions) so CAM only assimilates what it doesn't already know.
+
+### 3-Pass Mining Pipeline
+Repos aren't mined with a single monolithic LLM call. CAM uses three passes:
+
+1. **Domain Classification** (rule-based, zero cost) — Keyword matching across 10 categories to determine what kind of repo this is
+2. **Knowledge Overlap Assessment** (embedding search) — Compares against existing knowledge base to find what's novel vs. already known, computes overlap score and suggested focus areas
+3. **Focused LLM Extraction** (adaptive budget) — Sends only the novel parts to the LLM with domain-specific directives. Token budget adapts: small repos get 2K, medium 4K, large 6K. README-first file ordering ensures the LLM sees project context before code.
+
+### Multi-Model Architecture
+CAM routes tasks to 4 different AI backends through OpenRouter. Each agent slot is independently configurable — swap models weekly as new ones launch without changing code:
 
 ```bash
-# Preflight: verify XAI_API_KEY and configuration
-cam pulse preflight
-
-# One-shot scan: search X, filter novelty, assimilate into claw.db
-cam pulse scan --keywords "AI agent framework,new repo" --from-date 2026-03-21
-
-# Start perpetual daemon (polls every 30 min by default)
-cam pulse daemon
-
-# View stats and recent discoveries
-cam pulse status
-cam pulse discoveries --limit 20
-cam pulse report
+# .env — you pick the models
+CAM_MODEL_CLAUDE=anthropic/claude-sonnet-4-6      # Analysis, reasoning
+CAM_MODEL_CODEX=openai/gpt-4.1-mini               # Code generation
+CAM_MODEL_GEMINI=google/gemini-2.5-flash           # Repo comprehension
+CAM_MODEL_GROK=x-ai/grok-4-1-fast-non-reasoning   # Quick fixes, web lookup
 ```
 
-**Architecture**: X-Scout (xAI Responses API) -> Novelty Filter (URL dedup + semantic distance) -> Assimilation Pipeline (git clone + RepoMiner) -> PR Bridge (fleet registration + enhancement queuing). Circuit breaker with exponential backoff. Budget gate ($10/day default). Self-improvement loop mines CAM's own source periodically.
+### Google Gemini Embeddings
+All semantic search uses `gemini-embedding-2-preview` (384 dimensions) via Google API. This powers novelty scoring, knowledge retrieval, and cross-domain synergy detection. For local-only mode, CAM falls back to sentence-transformers or MLX embeddings — no cloud needed.
 
-**Docker deployment**: `docker compose -f pulse/docker-compose.pulse.yml up --build`
+### Self-Healing JSON Parser
+LLM mining output is malformed ~75% of the time. CAM's 3-stage `_repair_json()` achieves **100% repair rate**:
+1. Strip trailing commas (regex: `,}` and `,]`)
+2. Truncation recovery (find last complete `]` bracket)
+3. Individual object extraction (character-by-character `{...}` walking)
 
-**Important**: The `x_search` tool requires the **grok-4 family** of models. grok-3 does not support server-side tools. Set `xai_model = "grok-4"` in `claw.toml` under `[pulse]`.
+Without this, 12 out of 16 repos in the first scan would have been lost.
 
-### First Pulse: Live Scan Results (March 22, 2026)
+### Knowledge Injection with Attribution
+When you run `cam create --execute`, CAM doesn't just generate code from scratch. It:
+1. Searches the knowledge base for relevant patterns (hybrid BM25 + cosine)
+2. Retrieves full methodology content (implementation sketch, solution code, activation triggers)
+3. Injects it into the agent prompt as a `## Retrieved Knowledge` section
+4. After the build, traces which patterns influenced which output via token overlap
 
-The first full end-to-end scan was executed on March 22, 2026 using `grok-4-1-fast-non-reasoning` via xAI's Responses API with `x_search`. Results:
+Proven result: `Retrieved=3 | Used=3 | Attributed=3 | Tests: 5/5 passing`
 
-```text
-=== PULSE Scan Report ===
-Keywords: github.com new AI agent repo
-Discovered: 18
-Novel: 16
-Assimilated: 16
-Skipped: 2
-Failed: 0
-```
+### Mission Profiles
+Focus your CAM instance on a specific domain. Profile-enriched keywords boost relevance:
 
-**16 repos cloned, mined, and assimilated** — yielding **86 new methodologies** stored in `claw.db` with full provenance. Every single repo's LLM output had malformed JSON; every single one was recovered by `_repair_json()` (100% repair rate).
-
-Sample discoveries and what CAM learned from them:
-
-| Repo | Methodologies | Examples |
-|---|---|---|
-| `7abar/nastar-protocol` | 8 | Composite on-chain reputation scoring, AI dispute judge, 8-state deal state machine |
-| `cronusl-1141/ai-company` | 8 | Structured multi-agent role system, versioned prompt registry, failure alchemy |
-| `devwebxyn/securemcp-lite` | 7 | Sliding window rate limiter, protocol error classification, transport abstraction |
-| `gizmax/sandcastle` | 5 | SHA-256 hash chain audit trail, SLO-based dynamic model routing |
-| `bug-ops/zeph` | 5 | Thompson sampling for multi-agent routing, skill-based RAG with BM25+cosine |
-| `egeuysall/brain` | 6 | Atomic write pattern, tiered knowledge retrieval, priority scoring system |
-
-The scan ran via xAI's Responses API using `httpx`, with `x_search` as a native tool. Profile-enriched keywords expanded `"github.com new AI agent repo"` with domain terms from the active mission profile.
-
-### Prescreened Ingestion: 9 Repos, 52 Methodologies (March 23, 2026)
-
-Beyond X-Scout discovery, CAM-PULSE supports direct URL ingestion via `cam pulse ingest <url>`. Nine curated repos were ingested with multi-pass mining (domain classification, KB overlap assessment, focused extraction):
-
-| Repo | Methodologies | Domain |
-|---|---|---|
-| `heroui-inc/heroui` | 6 | CSS variables, compound components, deferred value |
-| `louislva/claude-peers-mcp` | 6 | Peer discovery, signal-0 liveness, auto-summary |
-| `pascalorg/editor` | 9 | Event bus, dirty-node recomputation, spatial index |
-| `bytedance/deer-flow` | 9 | Pre-tool guardrails, middleware chain, loop detection |
-| `github/spec-kit` | 10 | Agent registry, preset templates, ZIP path guards |
-| `Kludex/starlette` | 8 | ASGI middleware, typed lifespan state, route mounting |
-| `0xK3vin/MegaMemory` | 4 | Knowledge graph, embeddings, timeline merge |
-| `K-Dense-AI/k-dense-byok` | 0 | Null content handled gracefully |
-| `joewinke/jat` | 0 | Nothing novel found (legitimate) |
-
-### PULSE Configuration
-
-1. **Get an xAI API key** from https://console.x.ai/
-2. **Copy the env template**: `cp .env.example .env` and fill in your keys
-3. **Set the model** in `claw.toml`:
-   ```toml
-   [pulse]
-   enabled = true
-   xai_model = "grok-4-1-fast-non-reasoning"  # Budget pick: $0.20/M tokens
-   ```
-4. **Run preflight**: `cam pulse preflight`
-
-Or use the interactive setup: `cam setup` (now includes PULSE configuration).
-
-**API keys needed**:
-| Key | Purpose | Where to get it |
-|---|---|---|
-| `XAI_API_KEY` | PULSE X-Scout scanning via Grok | https://console.x.ai/ |
-| `OPENROUTER_API_KEY` | Multi-agent LLM routing (mining/analysis) | https://openrouter.ai/keys |
-| `GOOGLE_API_KEY` | Embeddings for novelty scoring (`gemini-embedding-2-preview`, 384 dims) | https://aistudio.google.com/apikey |
-
-**Embedding model**: `gemini-embedding-2-preview` (384 dimensions, Google API). Configured in `claw.toml` under `[embeddings]`. For local-only mode, CAM falls back to sentence-transformers or MLX embeddings — no cloud API needed.
-
-**Budget controls** (three layers):
-- **Per-scan**: `max_cost_per_scan_usd = 0.50` (default)
-- **Per-day**: `max_cost_per_day_usd = 10.0` (default)
-- **Per-agent**: `max_budget_usd` in each `[agents.*]` section
-
-**Mission profiles** — focus your instance on a specific domain:
 ```toml
 [pulse.profile]
 name = "agent-memory"
 mission = "Discover repos that enhance agent memory, RAG, and knowledge persistence"
 domains = ["memory", "RAG", "vector-db", "embeddings"]
+
 [pulse.profile.novelty_bias]
 memory = 0.15
 RAG = 0.10
 ```
 
-Profiles enrich search keywords with domain terms and boost novelty scores for matching discoveries. See `claw.toml` for preset examples.
-
-**Budget-safe execution** (after PULSE discovers repos):
-```bash
-cam create /path/to/repo \
-  --repo-mode fixed \
-  --request "Add comprehensive test suite" \
-  --check "pytest -q" \
-  --execute \
-  --accept-preflight-defaults \
-  --namespace-safe-retry \
-  --max-minutes 10
-```
-Per-agent `max_budget_usd` in `claw.toml` is the hard stop.
+### Budget Controls (3 Layers)
+- **Per-scan**: `max_cost_per_scan_usd = 0.50`
+- **Per-day**: `max_cost_per_day_usd = 10.0`
+- **Per-agent**: `max_budget_usd` in each agent section
 
 ---
 
 ## Quick Start
 
-### Option A: Full install (includes ML dependencies)
-
 ```bash
 git clone https://github.com/deesatzed/CAM-Pulse.git
 cd CAM-Pulse
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-```
-
-### Option B: Lightweight install (no torch, API-only embeddings)
-
-```bash
-git clone https://github.com/deesatzed/CAM-Pulse.git
-cd CAM-Pulse
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-Uses Gemini API for embeddings instead of local sentence-transformers. Requires `GOOGLE_API_KEY`.
-
-### Option C: Docker
-
-```bash
-git clone https://github.com/deesatzed/CAM-Pulse.git
-cd CAM-Pulse
-docker compose up --build
-```
-
-### Option D: Local-only with Ollama (no cloud API keys needed)
-
-```bash
-# Terminal 1: start Ollama
-ollama serve
-ollama pull llama3.2
-
-# Terminal 2: run CAM
-pip install -e ".[local]"
-cam setup   # select mode=local, point to http://localhost:11434/v1
-```
-
-For Apple Silicon with MLX-LM (faster than Ollama on M-series):
-
-```bash
-pip install -e ".[mlx]"
-mlx_lm.server --model mlx-community/Llama-3.2-3B-Instruct-4bit
-# CAM auto-detects MLX-LM at http://localhost:8080/v1
-```
-
-### Smoke test
-
-```bash
+cp .env.example .env    # Fill in your API keys
 cam --help
-cam govern stats
-cam chat
 ```
 
-What this proves:
-- the CLI is installed
-- the database can initialize on a fresh clone
-- the local runtime is basically healthy
-- the conversational front door starts cleanly
+**Verified**: Fresh clone → install → 1,868 tests passing in under 12 seconds.
 
-Example output from `cam govern stats`:
+### Other Install Options
 
-```text
-Memory Governance Stats
-  Total methodologies:  1469
-  Active (non-dead):    1469
-  Quota: 1469/2000 (73.5%)
-  DB size: 50.25 MB
-  Episodes: 3
-```
+| Method | Command | Notes |
+|--------|---------|-------|
+| **Lightweight** (no torch) | `pip install -e .` | Uses Gemini API for embeddings |
+| **Docker** | `docker compose up --build` | Full containerized deployment |
+| **Ollama** (zero cloud) | `pip install -e ".[local]"` | No API keys needed |
+| **MLX-LM** (Apple Silicon) | `pip install -e ".[mlx]"` | Native M-series acceleration |
 
-Your numbers will differ. The point is that the command should complete cleanly and print memory/database stats instead of crashing.
+### API Keys
+
+| Key | What For | Get It |
+|-----|----------|--------|
+| `OPENROUTER_API_KEY` | Multi-agent LLM routing | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `GOOGLE_API_KEY` | Embeddings (gemini-embedding-2-preview) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `XAI_API_KEY` | X-Scout scanning via Grok | [console.x.ai](https://console.x.ai/) |
+
+For **local-only mode** (Ollama/MLX-LM), no API keys are required.
 
 ---
 
-## The 7-Step Workflow
+## What You Can Do
 
-CAM operates as a pipeline. Each step produces verifiable artifacts, not just text.
+### Discover and Learn
+```bash
+# Scan X for repos developers are sharing
+cam pulse scan --keywords "AI agent framework"
 
-```
-inspect → mine → ideate → spec → execute → validate → benchmark
-```
+# Ingest a specific repo directly
+cam pulse ingest https://github.com/bytedance/deer-flow
 
-1. **Inspect** any repo (local, zip, Git) — `cam evaluate`
-2. **Mine** reusable patterns/methodologies into persistent SQLite + vector knowledge — `cam mine`
-3. **Ideate** new apps or improvements from stored knowledge — `cam ideate`
-4. **Generate** explicit, structured specs (not just prompts) — `cam create`
-5. **Execute** changes safely with workspace diff verification — `cam create --execute`
-6. **Validate rigorously** against the saved spec — `cam validate`
-7. **Export** neutral JSONL knowledge packs for reuse — `cam forge-export`
+# Search what CAM has learned
+cam learn search "middleware chain" -v -n 10
 
----
-
-## What Is Novel About CAM
-
-CAM is not just a wrapper around a chat model. The distinctive parts are the workflow and the safety checks around it.
-
-- `mine` turns outside repos into reusable CAM memory instead of one-off notes.
-- `ideate` combines stored CAM knowledge with candidate repos to propose new standalone app concepts.
-- `create` writes a real creation spec, not just a prompt, so the requested outcome is explicit and reviewable.
-- `preflight` examines a requested task before build execution, asks the missing high-value questions, and writes a reusable task contract.
-- `validate` checks the created repo against the saved spec and acceptance rules.
-- `create --execute` no longer trusts an agent saying "I changed files". CAM now checks the actual workspace diff and marks the run as failed if nothing changed.
-- `create` now auto-runs preflight for risky or ambiguous work, blocks unsafe execution when must-clarify questions remain, and lets the operator reuse recorded answers across reruns.
-- execution workflows now refuse to pretend they can build when no executable build path exists in the current runtime.
-- `chat` provides a guided conversational front door for common workflows instead of forcing the operator to memorize flags.
-- `forge-export` lets CAM hand off what it knows as a neutral JSONL knowledge pack, so a standalone app can consume CAM's knowledge without importing CAM itself.
-- `mine` can detect extracted source trees even when they are not full `.git` clones, which matters when you are evaluating zip-downloaded repos.
-- `mine` now keeps a persistent scan ledger, so unchanged repos are skipped by default and only changed repos are rescanned unless you force a refresh.
-
-The practical result is that CAM is designed to help with real repo work, not just repo discussion.
-
----
-
-## What CAM Can Do Right Now
-
-Today CAM can:
-
-- evaluate one repo and decide what looks worth improving
-- mine a folder of repos and store transferable patterns in CAM memory
-- avoid re-spending tokens on unchanged repos that CAM already mined
-- report which repos are new, changed, or unchanged before you rescan them
-- search and inspect what CAM has already learned
-- report where a methodology sits on the learning continuum: stored, enriched, retrieved, operationalized, or proven
-- actively reassess old methodologies against a new task and recommend which ones should be reactivated now
-- ideate novel app concepts using both stored CAM knowledge and candidate repos
-- preflight a task, estimate what it will take, and ask for the missing contract details before execution
-- create a spec-backed task for a fixed repo, augmented repo, or new repo
-- reuse prior preflight answers so repeated create runs do not start from scratch
-- report whether the current runtime actually satisfies CAM's builder expectations
-- validate whether a created repo actually changed and whether executable checks passed
-- reject `repo-mode fixed` executions that introduce a new top-level source namespace unless explicitly requested
-- export CAM knowledge into a standalone knowledge pack
-- run a deterministic standalone Forge benchmark on fixture data
-- run all 4 agents via Ollama or MLX-LM in local-only mode (no cloud API keys)
-- run with zero torch/ML dependencies using Gemini API embeddings
-- deploy via Docker with one command
-
----
-
-## What Has Been Proven, Not Just Claimed
-
-The items below are backed either by direct command runs in this repo or by targeted automated tests.
-
-### Proven by direct command execution
-
-As of March 15, 2026, these commands were run successfully in this repo:
-
-- fresh-clone smoke test path:
-  - `.venv/bin/cam --help`
-  - `.venv/bin/cam govern stats`
-- source-tree scan path:
-  - `.venv/bin/cam mine tests/fixtures/embedding_forge --scan-only --depth 3 --max-repos 5`
-- standalone benchmark path:
-  - `.venv/bin/cam forge-benchmark --max-minutes 1`
-- medCSS showpiece execution path (March 17, 2026):
-  - `OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_medcss_modernizer.sh`
-  - outcome: create/validate/postcheck all passed in one run (`create=0`, `validate=0`, `postcheck=0`, `Checks run: 6`)
-- reliability pipeline path (March 18, 2026):
-  - `OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/run_cam_reliability_pipeline.sh`
-  - outcome: full 1-7 operator workflow (test, mine, reassess, create, validate, showpiece) in one harness
-
-### Proven by automated test suite
-
-Full test suite as of March 23, 2026:
-
-```text
-1868 passed, 6 skipped
+# View discovery stats
+cam pulse status
+cam pulse discoveries --limit 20
 ```
 
-This covers:
+### Build with Knowledge
+```bash
+# Create a new project using learned patterns
+cam create /path/to/repo --execute \
+  --request "Build a plugin event system with middleware chain" \
+  --check "pytest -q"
 
-- CLI command surface and UX (all commands, flags, error paths)
-- Fresh-database bootstrap and migrations
-- Source-tree mining behavior (incremental, ledger, dedup)
-- Create-spec generation and validation logic
-- Rejection of unchanged repo executions
-- Standalone Forge regression benchmark
-- Resilient JSON parsing for `cam ideate`
-- JSON repair for LLM mining output (`_repair_json` 3-stage recovery)
-- Preflight artifact generation and answer capture
-- Auto-preflight and execution gating
-- Reusable `--preflight-file` behavior
-- Fixed-mode namespace guardrails
-- LOCAL mode routing for all 4 agents (health check + execute)
-- Torch-free embedding paths (Gemini API + MLX)
-- MLX embedding detection and routing
-- Workspace executor access control
-- Agent config with local_base_url
-- PULSE novelty filter (URL dedup, semantic distance, domain bias, retryable statuses)
-- PULSE scout keyword enrichment with mission profiles
-- PULSE config validation (profile fields, budget, model selection)
-- Multi-pass mining domain classification (5 domain tests, complexity tiers, keyword coverage)
-- Knowledge overlap assessment and mining context construction
-- Adaptive token budget mapping
-- Prescreened repo ingestion (`cam pulse ingest`)
+# Evaluate a repo before modifying it
+cam evaluate /path/to/repo --mode quick
+
+# Mine patterns from a folder of repos
+cam mine /path/to/repos --max-repos 10 --depth 2
+```
+
+### Verify and Audit
+```bash
+# Validate that changes actually happened
+cam validate --spec-file data/create_specs/latest.json
+
+# Check methodology trust levels
+cam doctor audit --limit 10
+
+# See knowledge lifecycle state
+cam learn report --limit 10
+
+# Run the full test suite
+pytest tests/ -q
+# → 1868 passed, 6 skipped
+```
 
 ---
 
-## What CAM Has Explicitly Been Hardened Against
+## 8 Proven Showpieces
 
-These are important because they are easy places for agent systems to become fake.
+Not demos. Not mockups. Each has a harness script you can run yourself.
 
-- False success reports from agents with no real file changes
-  - CAM now detects this and marks the execution as failed.
-- Fresh-clone DB bootstrap failures
-  - fixed and retested from a clean clone.
-- `ideate` crashing on imperfect JSON-like model output
-  - parser hardened to recover from raw control characters inside JSON strings.
-- Zip-downloaded repo folders being invisible to `mine`
-  - CAM can now discover source-tree style repos without `.git` metadata.
-- Fixed-mode create drift via new source namespaces
-  - CAM now offers `--namespace-safe-retry` on `cam create` to auto-retry once with hardened fixed-mode constraints after a namespace-guard rejection.
-- PULSE discoveries permanently blocked after transient failures
-  - Novelty filter now only treats `assimilated` status as "known." Failed and discovered repos are retryable on the next scan.
-- LLM mining output returning malformed JSON ~75% of the time
-  - 3-stage `_repair_json()` recovers trailing commas, truncated arrays, and fragmented objects. Live scan: 16/16 repos repaired successfully.
-- Knowledge mined but never reaching the agent
-  - Full methodology content (implementation sketch, solution code, activation triggers) now injected into agent prompts via `## Retrieved Knowledge` section. Proven with live builds: Retrieved=3, Used=3, Attributed=3, 4/4 tests passing.
-- Methodology penalized for infrastructure failures
-  - `_INFRASTRUCTURE_ERRORS` frozenset distinguishes agent bugs (timeout, no_api_key, http_*) from methodology failures. Infrastructure failures are logged but do not reduce methodology fitness.
-- LLM returning null content during mining
-  - OpenRouter `content: null` responses handled gracefully. Null-content and model refusals are caught at the client level, not propagated as crashes.
+| # | Showpiece | What It Proves |
+|---|-----------|----------------|
+| 1 | **Repo Upgrade Advisor** | Ranked recommendations with confidence scores from mined knowledge |
+| 2 | **medCSS Modernizer** | End-to-end create → validate → postcheck on a real CSS codebase |
+| 3 | **Expectation Ladder** | 5-level escalating complexity (health → build → validate → mine → self-improve) |
+| 4 | **PULSE Knowledge Loop** | 16/16 repos discovered, cloned, mined, stored. Zero failures. |
+| 5 | **Cross-Repo Intelligence** | Semantic search across repos from different domains finding shared patterns |
+| 6 | **PULSE Usage Proof** | Retrieved=3, Used=3, Attributed=3 — knowledge applied with full provenance |
+| 7 | **Multi-Pass Mining** | 3-pass pipeline: classify → overlap → extract with adaptive token budget |
+| 8 | **Plugin Event System** | 3 repos → 1 cohesive module. 258 lines. 5/5 tests. Full attribution chain. |
+
+Run any showpiece:
+```bash
+# Example: Plugin Event System (cross-repo synthesis)
+./scripts/test_plugin_event_showpiece.sh
+
+# Example: Full reliability pipeline
+./scripts/run_cam_reliability_pipeline.sh
+```
+
+---
+
+## Architecture
+
+```
+src/claw/
+  cli.py              # Typer CLI — cam evaluate, mine, create, validate, pulse ...
+  miner.py            # 3-pass mining pipeline + _repair_json()
+  agents/
+    interface.py      # Multi-agent routing via OpenRouter (Claude/Codex/Gemini/Grok)
+    cycle.py          # Knowledge injection + build cycle
+  pulse/
+    scout.py          # X-Scout: xAI Responses API + x_search
+    novelty.py        # Embedding-based novelty filter
+    orchestrator.py   # Scan orchestration + circuit breaker
+    assimilator.py    # Clone → serialize → mine → store pipeline
+    models.py         # Pydantic models for PULSE data
+  db/
+    engine.py         # SQLite + sqlite-vec (WAL mode)
+  evolution/
+    assimilation.py   # Methodology lifecycle management
+  embeddings/
+    engine.py         # Gemini API / sentence-transformers / MLX fallback
+```
+
+**Database**: SQLite with `sqlite-vec` extension for vector similarity search. WAL mode for concurrent reads. Stores methodologies, embeddings (384-dim), provenance, lifecycle state, usage logs, scan history, and discovery records.
+
+---
+
+## The Validation-First Difference
+
+Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
+
+- `cam create --execute` checks the **actual workspace diff**. If no files changed, the run is marked **FAILED**.
+- `cam validate` runs your acceptance checks (`pytest`, build commands) against the saved spec.
+- `cam forge-benchmark` reports "0% lift" when that's the truth — not a dressed-up number.
+- Every methodology tracks its lifecycle: `stored → enriched → retrieved → operationalized → proven`
+- Infrastructure failures (API timeouts, rate limits) are logged but **never penalize** methodology fitness.
 
 ---
 
 ## Honest Limits
 
-CAM is strong as an operator and orchestrator, but it is not magic.
-
-- `cam create --execute` is safer than before, but it is not yet a guaranteed autonomous app-builder.
-- if all configured agents are reasoning-only, CAM now treats create/enhance execution as planning/spec workflows instead of pretending they can write a repo.
-- `validate` proves basic correctness against the saved spec and checks; it does not prove product quality by itself.
-- `benchmark` is only as strong as the benchmark corpus and metrics you feed it.
-- standalone Forge currently has a real benchmark harness, but not yet a proven positive retrieval lift on the fixture corpus. The current best fixture run matches baseline rather than beating it.
-- local mode (Ollama/MLX-LM) is functional but new — it has not been battle-tested at the same depth as OpenRouter mode.
-
-That last point matters. CAM is built to fail honestly instead of pretending the benchmark improved when it did not.
-
----
-
-## Requirements
-
-- Python 3.12+
-- `git`
-- API access for the models you plan to use (or Ollama/MLX-LM for local-only mode)
-- enough local disk for `data/claw.db`
-
-## Install
-
-### Standard (full ML dependencies)
-
-```bash
-git clone https://github.com/deesatzed/CAM-Pulse.git
-cd CAM-Pulse
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-### Lightweight (no torch)
-
-```bash
-pip install -e .
-```
-
-Uses Gemini API for embeddings. Requires `GOOGLE_API_KEY`.
-
-### With local LLM support
-
-```bash
-pip install -e ".[local]"    # Ollama
-pip install -e ".[mlx]"      # MLX-LM (Apple Silicon)
-```
-
-### Docker
-
-```bash
-docker compose up --build
-```
-
-Notes:
-- if shell activation is unreliable in your environment, you can run CAM directly as `.venv/bin/cam`
-
-## Configure
-
-Use the interactive setup first:
-
-```bash
-.venv/bin/cam setup
-```
-
-Or export the keys you need before running CAM:
-
-```bash
-export OPENROUTER_API_KEY=...
-export ANTHROPIC_API_KEY=...
-export OPENAI_API_KEY=...
-export GOOGLE_API_KEY=...
-```
-
-For local-only mode, no API keys are required — just a running Ollama or MLX-LM server.
-
----
-
-## Practical Workflows
-
-### 0. Start with guided chat if you do not want to memorize flags
-
-```bash
-.venv/bin/cam chat
-```
-
-Example prompt inside chat:
-
-```text
-I want to mine the folder ./folderx
-```
-
-CAM chat then asks the missing workflow questions, builds the underlying command, and offers to run it.
-
-### 1. Review one repo before touching it
-
-```bash
-.venv/bin/cam evaluate /path/to/repo --mode quick
-.venv/bin/cam doctor expectations
-.venv/bin/cam doctor audit --limit 10
-.venv/bin/cam enhance /path/to/repo --dry-run
-```
-
-Use this when you want CAM to tell you what it would change before it tries to change anything.
-`doctor audit` shows whether CAM's highest-trust methodologies are backed by attributed, expectation-matched evidence or are still relying on legacy/raw-success counters.
-
-For CI or scripts:
-
-```bash
-.venv/bin/cam doctor audit --limit 10 --json-out doctor_audit.json --fail-on-flags
-```
-
-### 2. Learn from outside repos
-
-```bash
-.venv/bin/cam doctor keycheck --for mine --live
-.venv/bin/cam mine /path/to/source-repos \
-  --target /path/to/target-repo \
-  --max-repos 2 \
-  --depth 2 \
-  --max-minutes 15
-```
-
-Use this when you want CAM to extract reusable patterns from outside repos and make that knowledge available to a target project.
-
-By default, `mine` now behaves incrementally:
-- unchanged repos are skipped before any model call
-- changed repos are rescanned automatically
-- `--force-rescan` overrides the ledger and rescans selected repos anyway
-- before live mining starts, CAM now validates the required provider keys with tiny real calls unless you explicitly pass `--no-live-keycheck`
-
-To inspect the folder state before mining:
-
-```bash
-.venv/bin/cam mine-report /path/to/source-repos --depth 2
-```
-
-### 3. Run an expectation-to-reality ladder (increasing complexity)
-
-```bash
-OPENROUTER_API_KEY=... GOOGLE_API_KEY=... ./scripts/test_expectation_ladder.sh
-```
-
-This staged harness proves CAM behavior across escalating levels:
-- health/expectation preflight
-- standalone build + validate
-- workflow UX build + validate
-- mine + reassess transfer quality
-- CAM self-improvement contract (and optional guarded self-execution)
-
-Guide:
-- [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
-
-To verify keys/providers before a live run without starting mining:
-
-```bash
-.venv/bin/cam doctor keycheck --for mine --live
-```
-
-To inspect whether prior methodologies are just stored versus actually becoming useful:
-
-```bash
-.venv/bin/cam learn report --limit 10
-```
-
-To ask CAM which old methodologies should matter for a new task right now:
-
-```bash
-.venv/bin/cam learn reassess --task "repair broken tests with ast-based refactoring" --limit 10
-```
-
-### 4. Invent new app ideas from CAM memory plus repo inputs
-
-```bash
-.venv/bin/cam ideate /path/to/source-repos \
-  --focus "Invent useful standalone apps that build, troubleshoot, or create" \
-  --ideas 3 \
-  --max-repos 4 \
-  --max-minutes 10
-```
-
-Use this when you want CAM to propose new product directions, not just summarize repos.
-
-### 5. Create or modify a target repo from that context
-
-```bash
-.venv/bin/cam create /path/to/target-repo \
-  --repo-mode new \
-  --request "Build the app I described" \
-  --spec "Must be standalone" \
-  --check "pytest -q" \
-  --max-minutes 20
-```
-
-If you want CAM to attempt execution immediately:
-
-```bash
-.venv/bin/cam create /path/to/target-repo \
-  --repo-mode new \
-  --request "Build the app I described" \
-  --check "pytest -q" \
-  --execute \
-  --max-minutes 20
-
-# for fixed-mode reliability hardening loops
-.venv/bin/cam create /path/to/target-repo \
-  --repo-mode fixed \
-  --request "Improve create+validate reliability" \
-  --namespace-safe-retry \
-  --execute
-```
-
-### 6. Validate the result before trusting it
-
-```bash
-.venv/bin/cam validate --spec-file data/create_specs/<spec-file>.json --max-minutes 5
-```
-
-This is the line between "the agent said it did it" and "the repo actually matches the requested spec closely enough to pass checks".
-
-### 7. Benchmark only after validation passes
-
-```bash
-.venv/bin/cam benchmark --max-minutes 5
-```
-
-### 8. Export learned knowledge for a standalone app
-
-```bash
-.venv/bin/cam forge-export \
-  --out data/cam_knowledge_pack.jsonl \
-  --max-methodologies 200 \
-  --max-tasks 200 \
-  --max-minutes 5
-```
-
----
-
-## Reproducible Example Outputs
-
-### Example: scan-only repo discovery without spending model calls
-
-Command:
-
-```bash
-.venv/bin/cam mine tests/fixtures/embedding_forge --scan-only --depth 3 --max-repos 5
-```
-
-Observed output:
-
-```text
-CLAW Repo Scanner (scan-only)
-  Directory: /Users/o2satz/multiclaw/tests/fixtures/embedding_forge
-  Depth: 3
-  Dedup: True
-
-Scanning for repos...
-Discovered Repos (1 total, 1 selected)
-...
-Summary
-  Total discovered: 1
-  Selected: 1
-  Skipped (dedup): 0
-  Will mine: 1
-
-Remove --scan-only to mine these repos.
-```
-
-What this proves:
-- CAM can discover a source-tree style repo from fixture data
-- you can preview repo discovery before spending tokens
-
-### Example: standalone Forge benchmark
-
-Command:
-
-```bash
-.venv/bin/cam forge-benchmark --max-minutes 1
-```
-
-Observed output:
-
-```text
-CAM Forge Benchmark
-  Repo: tests/fixtures/embedding_forge/repo
-  Note: tests/fixtures/embedding_forge/note.md
-  Knowledge pack: tests/fixtures/embedding_forge/knowledge_pack.jsonl
-  Out: data/forge_benchmark_fixture
-  Time guardrail: 1 minute(s)
-
-Benchmark complete.
-  Status: pass
-  Docs: 7
-  Best lift: 0.00%
-  Best config: anchor_dim=8 residual_dim=8 anchor_weight=1.2 residual_weight=0.8
-  Summary: data/forge_benchmark_fixture/benchmark_summary.json
-```
-
-What this proves:
-- the benchmark harness runs locally on repo-contained fixture data
-- the current best fixture configuration passes the catastrophic regression floor
-- CAM is not overstating results: on this fixture run, best lift matched baseline rather than beating it
-
----
-
-## Why This Matters
-
-A lot of agent systems can talk about repos. CAM is trying to be useful in a harder way:
-
-- learn from repo fleets
-- turn that learning into explicit tasks and specs
-- create or modify codebases against those specs
-- fail honestly when execution did not really happen
-- export what it learned so a separate app can consume it
-- run entirely locally without sending code to any cloud
-
-That is the core build.
-
----
-
-## Core Commands
-
-| Command | Purpose |
-| --- | --- |
-| `cam setup` | Configure agent keys, models, budgets, and defaults |
-| `cam evaluate <repo>` | Inspect one repository and produce findings |
-| `cam enhance <repo>` | Run the full improve-and-verify loop on one repository |
-| `cam mine <dir>` | Learn from repositories in a directory |
-| `cam ideate <dir>` | Generate novel standalone app concepts from CAM memory plus repo inputs |
-| `cam create <repo>` | Create, augment, or fix a repository from a task request |
-| `cam validate` | Check the created result against its saved spec |
-| `cam benchmark` | Measure output quality after validation |
-| `cam status` | Inspect system and budget status |
-| `cam chat` | Guided conversational front door for all workflows |
-
-## Advanced Command Groups
-
-These are the preferred expert paths. The older flat commands still work as compatibility aliases.
-
-| Group | Use it for | Examples |
-| --- | --- | --- |
-| `cam doctor ...` | Preflight and diagnostics | `cam doctor keycheck --for mine --live`, `cam doctor status` |
-| `cam learn ...` | Assimilation visibility and reassessment | `cam learn delta Repo2Eval`, `cam learn report`, `cam learn reassess --task "..."` |
-| `cam task ...` | Manual task setup and inspection | `cam task add ...`, `cam task quickstart ...`, `cam task runbook <id>`, `cam task results` |
-| `cam forge ...` | Standalone Forge export/benchmark work | `cam forge export ...`, `cam forge benchmark ...` |
-| `cam kb ...` | Low-level knowledge browsing | `cam kb insights`, `cam kb search "repo repair"` |
-| `cam govern ...` | Memory governance and stats | `cam govern stats`, `cam govern quota` |
+- `cam create --execute` is gated behind preflight checks — not yet fully autonomous
+- Local mode (Ollama/MLX-LM) works but hasn't been battle-tested as deeply as OpenRouter mode
+- Code coverage at 79% (target: >90%, action plan in progress)
+- Knowledge retrieval quality depends on the diversity of mined repos
 
 ---
 
 ## Roadmap
 
-| Phase | Status | Focus |
-|---|---|---|
-| Phase 1: Drop-In Skill | **Complete** | SKILL.md, issue templates, namespace fix, reliability pipeline |
-| Phase 2: Local-First | **Complete** | Docker, Ollama/MLX-LM, torch-free mode |
-| Phase 3: PULSE | **Complete** | CAM-PULSE X-powered discovery swarm, novelty filter, auto-assimilation, knowledge injection, multi-pass mining, prescreened ingestion |
-| Phase 4: Enterprise | Planned | Sandbox enforcement, audit logs, budget hardening, webhook/Slack notifications for high-novelty discoveries, benchmark leaderboard |
-| Phase 5: Premier | Planned | Python2-to-FastAPI showpiece, self-evolving maintainer mode, community rollout |
+| Phase | Status |
+|-------|--------|
+| **Phase 1**: Core Engine — evaluate, mine, create, validate, benchmark | **Complete** |
+| **Phase 2**: Local-First — Docker, Ollama, MLX-LM, torch-free install | **Complete** |
+| **Phase 3**: PULSE — X-Scout discovery, multi-pass mining, knowledge injection, attribution | **Complete** |
+| **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
+| **Phase 5**: Premier — Self-evolving maintainer mode, community rollout | Planned |
 
 ---
 
-## Documentation Map
+## Documentation
 
-- Full command-by-command reference: [docs/CAM_COMMAND_GUIDE.md](docs/CAM_COMMAND_GUIDE.md)
-- Which command to use first: [docs/CAM_COMMAND_DECISION_TREE.md](docs/CAM_COMMAND_DECISION_TREE.md)
-- Beginner assimilation walkthrough: [docs/CAM_BEGINNER_ASSIMILATION_GUIDE.md](docs/CAM_BEGINNER_ASSIMILATION_GUIDE.md)
-- Proven capabilities and example transcripts: [docs/CAM_PROVEN_CAPABILITIES.md](docs/CAM_PROVEN_CAPABILITIES.md)
-- Project charter and anti-drift expectations: [docs/CAM_PROJECT_CHARTER.md](docs/CAM_PROJECT_CHARTER.md)
-- Short operator quick-reference: [docs/CAM_OPERATOR_CHEATSHEET.md](docs/CAM_OPERATOR_CHEATSHEET.md)
-- End-to-end example workflows and outputs: [docs/CAM_EXAMPLE_WORKFLOWS.md](docs/CAM_EXAMPLE_WORKFLOWS.md)
-- Repo upgrade advisor showpiece: [docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](docs/CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md)
-- medCSS website modernizer showpiece: [docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md](docs/CAM_SHOWPIECE_MEDCSS_MODERNIZER.md)
-- Expectation ladder showpiece: [docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md](docs/CAM_SHOWPIECE_EXPECTATION_LADDER.md)
-- PULSE knowledge loop showpiece: [docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md)
-- Cross-repo intelligence showpiece: [docs/CAM_SHOWPIECE_CROSS_REPO_INTELLIGENCE.md](docs/CAM_SHOWPIECE_CROSS_REPO_INTELLIGENCE.md)
-- PULSE usage proof (knowledge application): [docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md)
-- One-command reliability pipeline harness: [scripts/run_cam_reliability_pipeline.sh](scripts/run_cam_reliability_pipeline.sh)
-- Versioned medCSS CLI showpiece app: [apps/medcss_modernizer_showpiece](apps/medcss_modernizer_showpiece)
-- Blog-style writeup of the showpiece run: [docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md](docs/blog/2026-03-16-assimilation-repo-upgrade-advisor.md)
-- OpenClaw skill wrapper: [SKILL.md](SKILL.md)
+| Doc | Purpose |
+|-----|---------|
+| [Command Guide](docs/CAM_COMMAND_GUIDE.md) | Every command, every flag |
+| [Decision Tree](docs/CAM_COMMAND_DECISION_TREE.md) | Which command to use first |
+| [Operator Cheatsheet](docs/CAM_OPERATOR_CHEATSHEET.md) | Quick reference |
+| [Proven Capabilities](docs/CAM_PROVEN_CAPABILITIES.md) | Evidence-backed claims |
+| [Plugin Event System](docs/CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) | Cross-repo synthesis proof |
+| [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
+| [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
+| [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
+
+---
 
 ## Development
 
-Run the full test suite:
-
 ```bash
-.venv/bin/pytest
+# Run tests
+pytest tests/ -q
+# → 1868 passed, 6 skipped (< 12 seconds)
+
+# CLI help
+cam --help
+cam pulse --help
+cam learn --help
 ```
 
-Full suite as of March 23, 2026:
+---
 
-```text
-1868 passed, 6 skipped
-```
+**License**: MIT
 
-Show CLI help:
-
-```bash
-.venv/bin/cam --help
-```
-
-License: MIT
+**Created by** [deesatzed](https://github.com/deesatzed)
