@@ -3,6 +3,7 @@
 **When to post**: After pushing to GitHub and verifying landing page is live.
 **Landing page**: https://deesatzed.github.io/CAM-Pulse/
 **Repo**: https://github.com/deesatzed/CAM-Pulse
+**Demo GIF**: `demos/cam-pulse-demo.gif` (698KB, attach to Tweet 1)
 
 ---
 
@@ -35,19 +36,19 @@ Retrieved=3 | Used=3 | Attributed=3 | Quality=0.82
 
 ## Tweet 3 (What Makes It Different)
 
-Copilot, Cursor, Windsurf — they all start from scratch every session. No memory. No learning. No proof.
+Most AI coding tools start fresh every session. No memory of what worked before.
 
-CAM-PULSE:
-- Verifies diffs actually happened (fails if nothing changed)
+CAM-PULSE keeps a knowledge base that grows:
 - 1,750+ patterns stored in SQLite with embeddings
+- Verifies diffs actually happened (fails if nothing changed)
 - Knowledge compounds across projects and sessions
-- Runs 100% locally with Ollama — zero cloud, zero subscription
+- Runs locally with Ollama — no cloud required
 
 ---
 
 ## Tweet 4 (The Full Loop)
 
-The knowledge loop no other tool has:
+The full knowledge loop — we haven't seen another tool do all of this:
 
 DISCOVER (X-Scout scans X via Grok)
  -> MINE (3-pass: classify, overlap, extract)
@@ -76,16 +77,16 @@ Then 9 prescreened repos added 52 more methodologies. Knowledge compounds.
 
 ---
 
-## Tweet 6 (Cost Advantage)
+## Tweet 6 (How I Built It)
 
-What Copilot charges $19/mo for and Cursor charges $20/mo for: code suggestions that forget everything.
+I built CAM-PULSE as a solo dev because I wanted an AI tool that actually remembers what it learns.
 
-What CAM-PULSE does for $0:
-- Discovers and learns from new repos automatically
-- Applies knowledge across all your projects
-- Verifies every change with real diffs
-- Runs locally on Apple Silicon via MLX-LM
-- MIT licensed. No subscriptions. No telemetry.
+The stack:
+- Python + SQLite + vector embeddings (384 dims)
+- xAI Grok for X-Scout discovery
+- OpenRouter for LLM mining (any model)
+- Ollama/MLX-LM for fully local operation
+- MIT licensed. No telemetry.
 
 ---
 
