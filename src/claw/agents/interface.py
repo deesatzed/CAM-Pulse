@@ -540,6 +540,38 @@ class AgentInterface(ABC):
             for hint in task.hints:
                 parts.append(f"- {hint}")
 
+        # Inject correction feedback from a previous failed attempt within this cycle
+        correction = getattr(task, "correction_feedback", None)
+        if correction is None and context is not None:
+            correction = getattr(context, "correction_feedback", None)
+        if correction is not None:
+            parts.append(f"\n## ⚠ Correction Required (attempt {correction.attempt_number + 1})")
+            parts.append(
+                "Your previous attempt was rejected by the verification system. "
+                "You MUST fix the issues listed below. Do NOT repeat the same approach."
+            )
+            if correction.violations:
+                parts.append("\n### Violations Found")
+                for v in correction.violations:
+                    check = v.get("check", "unknown")
+                    detail = v.get("detail", "no detail")
+                    parts.append(f"- **{check}**: {detail}")
+            if correction.test_output:
+                parts.append("\n### Test Output (from failed run)")
+                # Truncate to avoid blowing up the prompt
+                test_text = correction.test_output[:3000]
+                if len(correction.test_output) > 3000:
+                    test_text += "\n... (truncated)"
+                parts.append(f"```\n{test_text}\n```")
+            if correction.failure_reason:
+                parts.append(f"\n### Failure Reason: {correction.failure_reason}")
+                if correction.failure_detail:
+                    parts.append(correction.failure_detail[:1000])
+            parts.append(
+                "\nFix the specific issues above. The workspace has been restored to its "
+                "pre-attempt state. Re-implement with corrections applied."
+            )
+
         # Inject full methodology context from retrieved knowledge
         if context is not None:
             past_solutions = getattr(context, "past_solutions", None) or []

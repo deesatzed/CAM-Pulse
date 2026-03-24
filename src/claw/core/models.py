@@ -368,6 +368,7 @@ class VerificationResult(BaseModel):
     expectation_findings: list[str] = Field(default_factory=list)
     tests_before: Optional[int] = None
     tests_after: Optional[int] = None
+    test_output: str = ""
 
 
 class EscalationDiagnosis(BaseModel):
@@ -421,6 +422,17 @@ class FleetTask(BaseModel):
 # Context models (pipeline flow)
 # ---------------------------------------------------------------------------
 
+class CorrectionFeedback(BaseModel):
+    """Feedback from a failed verification attempt, sent back to the agent for correction."""
+    attempt_number: int = 0
+    violations: list[dict[str, str]] = Field(default_factory=list)
+    test_output: str = ""
+    diff: str = ""
+    quality_score: float = 0.0
+    failure_reason: Optional[str] = None
+    failure_detail: Optional[str] = None
+
+
 class TaskContext(BaseModel):
     """Enriched task context for the pipeline."""
     task: Task
@@ -430,6 +442,7 @@ class TaskContext(BaseModel):
     expectation_contract: Optional[ExpectationContract] = None
     checkpoint_ref: Optional[str] = None
     previous_escalation_diagnosis: Optional[str] = None
+    correction_feedback: Optional[CorrectionFeedback] = None
 
 
 class ContextBrief(BaseModel):
@@ -445,6 +458,7 @@ class ContextBrief(BaseModel):
     complexity_tier: Optional[str] = None
     sentinel_feedback: list[dict[str, str]] = Field(default_factory=list)
     retrieved_methodology_ids: list[str] = Field(default_factory=list)
+    correction_feedback: Optional[CorrectionFeedback] = None
 
 
 class ExecutionState(BaseModel):

@@ -224,10 +224,12 @@ class Verifier:
         # Run tests if workspace_dir is provided and no violations so far
         tests_before: Optional[int] = None
         tests_after: Optional[int] = None
+        full_test_output = ""
         if workspace_dir and len(all_violations) == 0:
             try:
                 test_passed, test_output, test_count = await self.run_tests(workspace_dir)
                 tests_after = test_count
+                full_test_output = test_output
                 if not test_passed:
                     all_violations.append({
                         "check": "test_execution",
@@ -280,6 +282,7 @@ class Verifier:
             expectation_findings=expectation_findings,
             tests_before=tests_before,
             tests_after=tests_after,
+            test_output=full_test_output,
         )
 
     def _assess_expectation_match(

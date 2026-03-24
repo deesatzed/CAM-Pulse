@@ -64,9 +64,11 @@ When `cam create --execute` runs:
 
 2. **Act phase** (`MicroClaw.act()`): The agent receives the task context with methodology notes as hints. The agent builds the module informed by these patterns.
 
-3. **Learn phase** (`MicroClaw.learn()`): `_infer_used_methodology_ids()` tokenizes the build output and computes overlap with each retrieved methodology. Matches above threshold are logged as `stage=used_in_outcome` and `stage=outcome_attributed`.
+3. **Correction phase** (`MicroClaw._act_with_correction()`): If verification fails with correctable issues (test failures, placeholder violations, drift misalignment), the workspace is restored and the agent is re-prompted with a `## Correction Required` section containing the violations and test output. Up to 3 correction attempts before falling through to learn.
 
-4. **Verify** (`cam learn usage <task-id>`): Shows the complete attribution chain with methodology IDs, stages, scores, and provenance.
+4. **Learn phase** (`MicroClaw.learn()`): `_infer_used_methodology_ids()` tokenizes the build output and computes overlap with each retrieved methodology. Matches above threshold are logged as `stage=used_in_outcome` and `stage=outcome_attributed`.
+
+5. **Verify** (`cam learn usage <task-id>`): Shows the complete attribution chain with methodology IDs, stages, scores, and provenance.
 
 ## Run It
 

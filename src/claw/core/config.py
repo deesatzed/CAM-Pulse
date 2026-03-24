@@ -61,6 +61,7 @@ class OrchestratorConfig(BaseModel):
     exploration_rate: float = 0.10
     loop_guard_max_repeats: int = 2
     pipeline_adaptation_enabled: bool = True
+    max_correction_attempts: int = 3
 
 
 class SentinelConfig(BaseModel):

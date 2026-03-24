@@ -30,6 +30,7 @@ max_council = 3
 max_tokens_per_task = 100000
 exploration_rate = 0.10
 loop_guard_max_repeats = 2
+max_correction_attempts = 3
 
 [sentinel]
 llm_deep_check = true

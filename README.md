@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**1,881 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
+**1,909 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
 
@@ -60,6 +60,15 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     |  Verification      |  Real diffs checked. Tests
                     |  & Attribution     |  run. Token overlap tracks
                     +---------+----------+  which pattern → which code
+                              |
+                     fails?───┘
+                       │ yes
+                    +---------v----------+
+                    |  Inner Correction  |  Workspace restored, agent
+                    |  Loop (up to 3x)   |  re-prompted with violations
+                    +---------+----------+  + test output as feedback
+                              |
+                     passes or budget exhausted
 ```
 
 We haven't found another tool that does all of this. Copilot, Cursor, Windsurf, and Aider generate code — but they don't discover new repos, don't remember patterns across sessions, and don't prove which pattern influenced which output.

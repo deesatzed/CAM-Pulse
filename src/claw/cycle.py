@@ -5,7 +5,11 @@ operating at four nested scales:
 
 - MacroClaw (Fleet) — scans repo fleet, ranks by enhancement potential
 - MesoClaw (Project) — runs evaluation battery on one repo, produces plan
-- MicroClaw (Module) — takes one task, routes to agent, monitors/verifies
+- MicroClaw (Module) — takes one task, routes to agent, monitors/verifies.
+  Includes an inner correction loop: if verification finds correctable failures
+  (test failures, placeholder violations, drift), the workspace is restored and
+  the agent is re-prompted with violation details. Up to max_correction_attempts
+  retries before falling through to learn().
 - NanoClaw (Self-improvement) — updates scores and routing after each task
 """
 
@@ -25,6 +29,7 @@ from typing import Any, Optional
 from claw.core.factory import ClawContext
 from claw.core.models import (
     ContextBrief,
+    CorrectionFeedback,
     CycleResult,
     HypothesisEntry,
     HypothesisOutcome,
@@ -78,6 +83,126 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
         else:
             lines.append(f"*** {path}")
     return files_changed, "\n".join(lines)
+
+
+def _snapshot_workspace_content(workspace_dir: Optional[str]) -> dict[str, bytes]:
+    """Snapshot workspace file CONTENTS (not just hashes) for restoration.
+
+    Used by the correction loop to revert the workspace to its pre-attempt
+    state before re-prompting the agent with feedback.
+    """
+    snapshot: dict[str, bytes] = {}
+    if not workspace_dir:
+        return snapshot
+
+    root = Path(workspace_dir)
+    if not root.exists() or not root.is_dir():
+        return snapshot
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        try:
+            snapshot[str(rel)] = path.read_bytes()
+        except OSError:
+            continue
+    return snapshot
+
+
+def _restore_workspace(workspace_dir: str, snapshot: dict[str, bytes]) -> None:
+    """Restore workspace to a previously captured content snapshot.
+
+    - Files present in the snapshot are written back (created/overwritten).
+    - Files NOT in the snapshot but currently on disk are removed.
+    - Directories are cleaned up if empty after file removal.
+    """
+    root = Path(workspace_dir)
+    if not root.exists():
+        return
+
+    # Gather current files
+    current_files: set[str] = set()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        current_files.add(str(rel))
+
+    # Remove files not in the snapshot
+    for rel_str in current_files - set(snapshot.keys()):
+        try:
+            (root / rel_str).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # Restore files from snapshot
+    for rel_str, content in snapshot.items():
+        target = root / rel_str
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.write_bytes(content)
+        except OSError:
+            pass
+
+    # Clean up empty directories (bottom-up)
+    for dirpath in sorted(root.rglob("*"), reverse=True):
+        if not dirpath.is_dir():
+            continue
+        rel = dirpath.relative_to(root)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        try:
+            dirpath.rmdir()  # Only succeeds if empty
+        except OSError:
+            pass
+
+
+# Errors that are infrastructure / agent-capability issues, NOT content failures.
+# These should NOT trigger the correction loop — the agent can't fix them by retrying.
+_NON_CORRECTABLE_FAILURES = frozenset({
+    "no_agent",
+    "budget_exceeded",
+    "no_workspace_changes",
+    "agent_cannot_modify_workspace",
+    "structured_execution_failed",
+    "structured_output_missing",
+    "file_operations_missing",
+    "no_model",
+    "no_api_key",
+    "timeout",
+    "TimeoutError",
+    "ConnectError",
+})
+
+
+def _is_correctable_failure(
+    outcome: "TaskOutcome", verification: "VerificationResult"
+) -> bool:
+    """Determine if a failed verification is something the agent can fix on retry.
+
+    Returns True for content-related failures (test failures, placeholder violations,
+    drift misalignment, etc.) — the agent should see these and correct.
+
+    Returns False for infrastructure failures (no agent, budget exceeded, HTTP errors,
+    missing API keys) — retrying won't help.
+    """
+    # If the agent itself couldn't execute, don't retry
+    if outcome.failure_reason:
+        error_sig = outcome.failure_reason
+        if error_sig in _NON_CORRECTABLE_FAILURES or error_sig.startswith("http_"):
+            return False
+
+    # If verification found violations, those are typically correctable
+    if verification.violations:
+        return True
+
+    # If not approved but no violations and no failure_reason, unclear — don't retry
+    return False
 
 
 def _tokenize_usage_attribution_text(text: str) -> set[str]:
@@ -868,6 +993,200 @@ class MicroClaw(ClawCycle):
         )
 
         return (agent_id, task_ctx, outcome, verification)
+
+    async def _act_with_correction(
+        self,
+        decision: tuple[str, TaskContext],
+        on_step=None,
+    ) -> tuple[str, TaskContext, TaskOutcome, VerificationResult]:
+        """Execute act + verify with an inner correction loop.
+
+        If verification fails with a correctable error, the workspace is restored
+        to its pre-attempt state, the agent receives correction feedback describing
+        the violations and test output, and act + verify are retried.
+
+        The loop runs at most ``max_correction_attempts`` times (from config).
+        After exhausting attempts, the last failed result is returned so learn()
+        can record the failure normally.
+        """
+        agent_id, task_ctx = decision
+        max_attempts = self.ctx.config.orchestrator.max_correction_attempts
+
+        def _step(name: str, detail: str = "") -> None:
+            if on_step is not None:
+                on_step(name, detail)
+
+        # Snapshot workspace CONTENT before first attempt for restoration
+        workspace_dir = getattr(self.ctx.agents.get(agent_id), "workspace_dir", None)
+        content_snapshot = _snapshot_workspace_content(workspace_dir)
+
+        last_verification: Optional[VerificationResult] = None
+        last_result: Optional[tuple[str, TaskContext, TaskOutcome]] = None
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                _step("correct", f"Correction attempt {attempt + 1}/{max_attempts}...")
+                logger.info(
+                    "Correction attempt %d/%d for task %s",
+                    attempt + 1, max_attempts, task_ctx.task.id,
+                )
+
+                # Restore workspace to pre-attempt state
+                if workspace_dir and content_snapshot:
+                    _restore_workspace(workspace_dir, content_snapshot)
+                    logger.info("Workspace restored for correction attempt %d", attempt + 1)
+
+                # Build correction feedback from the previous failure
+                feedback = CorrectionFeedback(
+                    attempt_number=attempt,
+                    violations=last_verification.violations if last_verification else [],
+                    test_output=last_verification.test_output if last_verification else "",
+                    diff=last_result[2].diff if last_result else "",
+                    quality_score=last_verification.quality_score or 0.0 if last_verification else 0.0,
+                    failure_reason=last_result[2].failure_reason if last_result else None,
+                    failure_detail=last_result[2].failure_detail if last_result else None,
+                )
+
+                # Inject into task context and context brief for prompt builder
+                task_ctx.correction_feedback = feedback
+                if self._current_context_brief is not None:
+                    self._current_context_brief.correction_feedback = feedback
+
+                # Log the correction episode
+                await self.ctx.repository.log_episode(
+                    session_id=self.session_id,
+                    event_type="correction_attempt",
+                    event_data={
+                        "task_id": task_ctx.task.id,
+                        "attempt": attempt + 1,
+                        "violation_count": len(feedback.violations),
+                        "failure_reason": feedback.failure_reason,
+                    },
+                    project_id=self.project_id,
+                    task_id=task_ctx.task.id,
+                    cycle_level="micro",
+                )
+
+            # Execute act + verify
+            _step("act", f"Agent '{agent_id}' working{' (correction)' if attempt > 0 else ''}...")
+            result = await self.act((agent_id, task_ctx))
+            last_result = result
+
+            _step("verify", "Running verification checks...")
+            verification_tuple = await self.verify(result)
+            agent_id_v, task_ctx_v, outcome_v, verification = verification_tuple
+            last_verification = verification
+
+            if verification.approved:
+                if attempt > 0:
+                    logger.info(
+                        "Correction succeeded on attempt %d for task %s",
+                        attempt + 1, task_ctx.task.id,
+                    )
+                    await self.ctx.repository.log_episode(
+                        session_id=self.session_id,
+                        event_type="correction_succeeded",
+                        event_data={
+                            "task_id": task_ctx.task.id,
+                            "attempt": attempt + 1,
+                            "quality_score": verification.quality_score,
+                        },
+                        project_id=self.project_id,
+                        task_id=task_ctx.task.id,
+                        cycle_level="micro",
+                    )
+                return verification_tuple
+
+            # Check if the failure is correctable
+            if not _is_correctable_failure(outcome_v, verification):
+                logger.info(
+                    "Non-correctable failure for task %s: %s — skipping correction loop",
+                    task_ctx.task.id, outcome_v.failure_reason,
+                )
+                return verification_tuple
+
+            logger.info(
+                "Attempt %d/%d failed for task %s with %d violations — will retry",
+                attempt + 1, max_attempts, task_ctx.task.id,
+                len(verification.violations),
+            )
+
+        # All attempts exhausted
+        logger.warning(
+            "All %d correction attempts exhausted for task %s",
+            max_attempts, task_ctx.task.id,
+        )
+        await self.ctx.repository.log_episode(
+            session_id=self.session_id,
+            event_type="correction_exhausted",
+            event_data={
+                "task_id": task_ctx.task.id,
+                "attempts": max_attempts,
+                "final_violations": len(last_verification.violations) if last_verification else 0,
+            },
+            project_id=self.project_id,
+            task_id=task_ctx.task.id,
+            cycle_level="micro",
+        )
+
+        # Return the last failed result for learn() to process
+        return (agent_id, task_ctx, last_result[2] if last_result else TaskOutcome(), last_verification or VerificationResult())
+
+    async def run_cycle(self, on_step=None) -> CycleResult:
+        """Execute one complete cycle with inner correction loop.
+
+        Overrides the base ClawCycle.run_cycle() to use _act_with_correction()
+        instead of separate act() + verify() calls. This allows the agent to
+        self-correct when verification finds fixable issues.
+        """
+        def _step(name: str, detail: str = "") -> None:
+            if on_step is not None:
+                on_step(name, detail)
+
+        start = time.monotonic()
+        try:
+            _step("grab", "Fetching next task...")
+            target = await self.grab()
+            if target is None:
+                return CycleResult(cycle_level=self.level, success=False)
+
+            _step("evaluate", f"Analyzing: {target.title[:60]}")
+            evaluation = await self.evaluate(target)
+
+            _step("decide", "Selecting best agent...")
+            decision = await self.decide(evaluation)
+            agent_id = decision[0] if isinstance(decision, tuple) else "unknown"
+
+            # Inner correction loop: act + verify, with retries on correctable failures
+            verification = await self._act_with_correction(decision, on_step=on_step)
+
+            _step("learn", "Recording outcome...")
+            await self.learn(verification)
+
+            duration = time.monotonic() - start
+            v_agent_id = verification[0] if isinstance(verification, tuple) else None
+            v_outcome = verification[2] if isinstance(verification, tuple) and len(verification) > 2 else TaskOutcome()
+            v_result = verification[3] if isinstance(verification, tuple) and len(verification) > 3 else None
+            _step("done", f"Cycle complete ({duration:.1f}s)")
+            return CycleResult(
+                cycle_level=self.level,
+                task_id=getattr(target, "id", None),
+                agent_id=v_agent_id,
+                outcome=v_outcome,
+                verification=v_result,
+                success=True,
+                tokens_used=v_outcome.tokens_used if v_outcome else 0,
+                cost_usd=v_outcome.cost_usd if v_outcome else 0.0,
+                duration_seconds=duration,
+            )
+        except Exception as e:
+            duration = time.monotonic() - start
+            logger.error("Cycle %s failed: %s", self.level, e, exc_info=True)
+            return CycleResult(
+                cycle_level=self.level,
+                success=False,
+                duration_seconds=duration,
+            )
 
     async def learn(self, verified: tuple[str, TaskContext, TaskOutcome, VerificationResult]) -> None:
         """Update memory, scores, error KB, and semantic memory from the outcome."""
