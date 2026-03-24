@@ -156,11 +156,13 @@ class Verifier:
         banned_dependencies: Optional[list[str]] = None,
         drift_threshold: float = 0.40,
         llm_client: Optional[Any] = None,
+        min_test_count: int = 0,
     ):
         self.embedding_engine = embedding_engine
         self.banned_dependencies = set(d.lower() for d in (banned_dependencies or []))
         self.drift_threshold = drift_threshold
         self.llm_client = llm_client
+        self.min_test_count = min_test_count
         self._prompt_loader = PromptLoader()
 
     # ===================================================================
@@ -238,6 +240,15 @@ class Verifier:
             except Exception as e:
                 logger.warning("Test execution failed: %s", e)
                 all_recommendations.append(f"Test execution could not be completed: {e}")
+
+        # Check minimum test count requirement
+        if tests_after is not None and len(all_violations) == 0:
+            min_required = self._extract_minimum_test_requirement(task_context)
+            if min_required > 0 and tests_after < min_required:
+                all_violations.append({
+                    "check": "minimum_test_count",
+                    "detail": f"Insufficient tests: {tests_after} found, {min_required} required by spec.",
+                })
 
         # Run explicit acceptance checks (if provided) after tests pass.
         acceptance_checks = list(task_context.task.acceptance_checks)
@@ -1130,3 +1141,36 @@ class Verifier:
             total += int(match.group(1))
 
         return total
+
+    def _extract_minimum_test_requirement(self, task_context: "TaskContext") -> int:
+        """Extract minimum test count from task description or config.
+
+        Checks (in order):
+        1. Explicit count patterns in task description ("22-28 tests", "at least 20 tests")
+        2. Count of listed test topics after "tests covering:"
+        3. Config fallback (self.min_test_count)
+        """
+        desc = task_context.task.description or ""
+
+        # Pattern 1: "22-28 tests" or "22 to 28 tests" → take the lower bound
+        range_match = re.search(r'(\d+)\s*[-–to]+\s*\d+\s+tests?', desc, re.IGNORECASE)
+        if range_match:
+            return int(range_match.group(1))
+
+        # Pattern 2: "at least N tests" / "minimum N tests" / "require N tests"
+        explicit_match = re.search(
+            r'(?:at\s+least|minimum|require[sd]?|no\s+fewer\s+than)\s+(\d+)\s+tests?',
+            desc, re.IGNORECASE,
+        )
+        if explicit_match:
+            return int(explicit_match.group(1))
+
+        # Pattern 3: Count comma-separated items after "tests covering:"
+        covering_match = re.search(r'tests?\s+covering\s*:\s*(.+?)(?:\.|$)', desc, re.IGNORECASE)
+        if covering_match:
+            items = [item.strip() for item in covering_match.group(1).split(',') if item.strip()]
+            if items:
+                return len(items)
+
+        # Fallback to config
+        return self.min_test_count

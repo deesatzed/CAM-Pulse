@@ -36,6 +36,7 @@ max_correction_attempts = 3
 llm_deep_check = true
 drift_threshold = 0.15
 quality_score_threshold = 0.60
+min_test_count = 0
 
 [security]
 autonomy_level = "SUPERVISED"

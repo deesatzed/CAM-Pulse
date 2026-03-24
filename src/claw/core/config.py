@@ -68,6 +68,7 @@ class SentinelConfig(BaseModel):
     llm_deep_check: bool = True
     drift_threshold: float = 0.40
     quality_score_threshold: float = 0.60
+    min_test_count: int = 0
 
 
 class SecurityConfig(BaseModel):
