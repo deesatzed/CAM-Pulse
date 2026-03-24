@@ -211,7 +211,7 @@ cam create /tmp/my-project --execute --agent claude \
 ## Current Test Suite
 
 ```text
-1868 passed, 6 skipped
+1881 passed, 6 skipped
 ```
 
 Includes 133 new tests since Phase 2: multi-pass mining (13), `_repair_json` (12), PULSE discoveries (2), knowledge injection, infrastructure protection, null content handling, and more.

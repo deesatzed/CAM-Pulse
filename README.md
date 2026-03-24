@@ -2,7 +2,7 @@
 
 ### Discovers code patterns from the wild. Learns from them. Applies them to your builds — with proof.
 
-**1,868 tests** | **1,800+ learned patterns** | **8 proven showpieces** | **$0 — MIT licensed**
+**1,881 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **$0 — MIT licensed**
 
 ---
 
@@ -38,7 +38,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  1,800+ methodologies with
+                    |  SQLite + Vectors  |  1,750+ methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -141,7 +141,7 @@ Then 9 prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/herou
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 1,800+ patterns | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 1,750+ patterns | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -226,7 +226,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 1,868 tests passing in under 12 seconds.
+**Verified**: Fresh clone → install → 1,881 tests passing in under 12 seconds.
 
 ### Other Install Options
 
@@ -320,7 +320,7 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 1868 passed, 6 skipped
+# → 1881 passed, 6 skipped
 ```
 
 ---
@@ -431,7 +431,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ```bash
 # Run tests
 pytest tests/ -q
-# → 1868 passed, 6 skipped (< 12 seconds)
+# → 1881 passed, 6 skipped (< 12 seconds)
 
 # CLI help
 cam --help

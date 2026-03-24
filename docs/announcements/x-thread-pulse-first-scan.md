@@ -12,7 +12,7 @@ Every AI coding tool forgets what it learned the moment your session ends.
 
 CAM-PULSE doesn't. It discovers GitHub repos from X, mines reusable patterns, and APPLIES them when you build — with proof.
 
-1,868 tests. 8 showpieces. Free and open source.
+1,881 tests. 8 showpieces. Free and open source.
 
 https://deesatzed.github.io/CAM-Pulse/
 
@@ -39,7 +39,7 @@ Copilot, Cursor, Windsurf — they all start from scratch every session. No memo
 
 CAM-PULSE:
 - Verifies diffs actually happened (fails if nothing changed)
-- 1,800+ patterns stored in SQLite with embeddings
+- 1,750+ patterns stored in SQLite with embeddings
 - Knowledge compounds across projects and sessions
 - Runs 100% locally with Ollama — zero cloud, zero subscription
 

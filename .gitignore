@@ -82,3 +82,9 @@ medCSS.md
 updCAM.md
 full_history.txt
 history.txt
+
+# Internal dev plans (removed from tracking)
+docs/CAM_FORGE_DECOUPLING_PLAN.md
+docs/CAM_SYMBOL_AWARE_ASSIMILATION_PLAN.md
+docs/CAMIFY_OVERLAY_CLONE.md
+docs/CAM_PROJECT_CHARTER.md
