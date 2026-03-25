@@ -11,7 +11,7 @@
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="CAM-PULSE">
-  <meta name="twitter:description" content="CAM-PULSE: Discovers code patterns, learns from them, and applies them to your builds with proof. Free, open source, runs locally. 1,881 tests. 8 proven showpieces. Retrieved=3, Used=3, Attributed=3.">
+  <meta name="twitter:description" content="CAM-PULSE: Discovers code patterns, learns from them, and applies them to your builds with proof. Free, open source, runs locally. 2,348 tests. 11 proven showpieces. Inner correction loop. Metric expectations. HF mining. Freshness monitor.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -771,7 +771,7 @@
       <div class="hero-left">
         <div class="badge">
           <span class="pulse-dot"></span>
-          Phase 3 &mdash; Now Live
+          Phase 3.75 &mdash; Resilience
         </div>
         <h1 class="hero-title gradient-text">CAM-PULSE</h1>
         <p class="hero-tagline">Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds &mdash; with passing tests and full provenance.</p>
@@ -792,7 +792,7 @@
             <span class="dot dot-green"></span>
             <span class="title-text">cam mine-self --quick</span>
           </div>
-          <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 1881 tests passing" loading="eager">
+          <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 2,348 tests passing" loading="eager">
         </div>
       </div>
     </div>
@@ -806,44 +806,96 @@
   <section id="features">
     <div class="container">
       <div class="trust-bar reveal">
-        <div class="trust-item"><div class="value"><span class="counter" data-target="1881">0</span></div><div class="label">Tests Passing</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="2348">0</span></div><div class="label">Tests Passing</div></div>
         <div class="trust-item"><div class="value">4</div><div class="label">Agent Backends</div></div>
-        <div class="trust-item"><div class="value"><span class="counter" data-target="1750">0</span>+</div><div class="label">Methodologies</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="122">0</span></div><div class="label">Methodologies</div></div>
         <div class="trust-item"><div class="value">16/16</div><div class="label">First Scan</div></div>
-        <div class="trust-item"><div class="value">8</div><div class="label">Showpieces</div></div>
+        <div class="trust-item"><div class="value">11</div><div class="label">Showpieces</div></div>
         <div class="trust-item"><div class="value">$0</div><div class="label">Open Source</div></div>
       </div>
 
       <h2 class="reveal">What CAM-PULSE actually does</h2>
-      <p class="section-subtitle reveal reveal-delay-1">Four capabilities no other tool combines in one pipeline.</p>
+      <p class="section-subtitle reveal reveal-delay-1">Ten capabilities no other tool combines in one pipeline.</p>
 
       <div class="feature-grid">
+        <!-- NEW: Inner Correction Loop — front and center -->
+        <div class="card feature-card reveal reveal-delay-1" style="border-color: rgba(255,51,102,0.3); box-shadow: 0 0 20px rgba(255,51,102,0.08);">
+          <div class="feature-icon" style="background: rgba(255,51,102,0.12); color: var(--crimson);">&#x21BB;</div>
+          <div>
+            <h4>Inner Correction Loop &mdash; Agent Self-Repair</h4>
+            <p>When builds fail verification, CAM <strong>byte-level restores</strong> the workspace and re-prompts the agent with exact violations + test output. Up to 3 retries. Proven: 3 corrections on Run 1 &rarr; first-attempt success on Run 2 (10/10 tests, drift 0.868).</p>
+          </div>
+        </div>
+        <!-- NEW: Metric Expectations -->
+        <div class="card feature-card reveal reveal-delay-2" style="border-color: rgba(0,255,170,0.3); box-shadow: 0 0 20px rgba(0,255,170,0.08);">
+          <div class="feature-icon" style="background: rgba(0,255,170,0.12); color: var(--cyan);">&#x2714;</div>
+          <div>
+            <h4>Metric Expectations &mdash; NL to Structured Gates</h4>
+            <p><code>"at least 90% coverage"</code> auto-extracts to a hard verification gate. Supports coverage %, test count, file count. Hard gates block approval; soft gates recommend. 51 tests cover the extraction + enforcement pipeline.</p>
+          </div>
+        </div>
+        <!-- NEW: Repo Freshness Monitor -->
+        <div class="card feature-card reveal reveal-delay-3" style="border-color: rgba(51,102,255,0.3); box-shadow: 0 0 20px rgba(51,102,255,0.08);">
+          <div class="feature-icon" style="background: rgba(51,102,255,0.12); color: var(--blue);">&#x231B;</div>
+          <div>
+            <h4>Repo Freshness Monitor &mdash; Stale Knowledge Detection</h4>
+            <p>Two-phase staleness detection. Phase 1: ETag-cached metadata check (<strong>0 rate limit cost</strong> for unchanged repos). Phase 2: 4-factor significance scoring (commits 30%, releases 40%, README 20%, size 10%). Only significant changes trigger re-mine.</p>
+          </div>
+        </div>
+        <!-- NEW: HuggingFace Mining -->
+        <div class="card feature-card reveal reveal-delay-4" style="border-color: rgba(168,85,247,0.3); box-shadow: 0 0 20px rgba(168,85,247,0.08);">
+          <div class="feature-icon" style="background: rgba(168,85,247,0.12); color: var(--purple);">&#x1F917;</div>
+          <div>
+            <h4>HuggingFace Model Repo Mining</h4>
+            <p>Tiered mining: micro (&lt;100 MB) gets full clone, standard/large use metadata-only API to avoid downloading weights. <code>cam pulse ingest https://huggingface.co/...</code> works transparently alongside GitHub URLs. 81 tests.</p>
+          </div>
+        </div>
+        <!-- NEW: deepConf 6-Factor Scoring -->
         <div class="card feature-card reveal reveal-delay-1">
+          <div class="feature-icon" style="background: rgba(0,255,170,0.08); color: var(--cyan);">&#x2693;</div>
+          <div>
+            <h4>deepConf 6-Factor Confidence Scoring</h4>
+            <p>Beyond cosine similarity: cosine (30%) + BM25 (20%) + fitness (20%) + freshness (10%) + cross-domain synergy (10%) + source diversity (10%). Configurable weights. Proven methodologies rank higher.</p>
+          </div>
+        </div>
+        <!-- NEW: Co-Retrieval Stigmergic Links -->
+        <div class="card feature-card reveal reveal-delay-2">
+          <div class="feature-icon" style="background: rgba(255,51,102,0.08); color: var(--crimson);">&#x26D3;</div>
+          <div>
+            <h4>Co-Retrieval Stigmergic Links</h4>
+            <p>When methodologies are retrieved together and the build succeeds, CAM strengthens links between them. Patterns that work together surface together in future retrievals. Failure weakens links.</p>
+          </div>
+        </div>
+        <!-- Original: X-Scout Discovery -->
+        <div class="card feature-card reveal reveal-delay-3">
           <div class="feature-icon" style="background: rgba(0,255,170,0.08); color: var(--cyan);">&#x1D54F;</div>
           <div>
             <h4>Discovers repos from X in real time</h4>
             <p>X-Scout uses Grok API's native <code>x_search</code> to find repos developers share on X, filters for novelty, and auto-assimilates them into your knowledge base. No scraping.</p>
           </div>
         </div>
-        <div class="card feature-card reveal reveal-delay-2">
-          <div class="feature-icon" style="background: rgba(255,51,102,0.08); color: var(--crimson);">&#x2699;</div>
-          <div>
-            <h4>Mines code into persistent, reusable knowledge</h4>
-            <p>3-pass mining extracts methodologies from any repo. <code>cam mine-self</code> mines your own project. <code>cam mine-workspace</code> batch-mines entire directories.</p>
-          </div>
-        </div>
-        <div class="card feature-card reveal reveal-delay-3">
+        <!-- Original: Knowledge Application -->
+        <div class="card feature-card reveal reveal-delay-4">
           <div class="feature-icon" style="background: rgba(51,102,255,0.08); color: var(--blue);">&#x2442;</div>
           <div>
             <h4>Applies knowledge to your builds &mdash; with proof</h4>
             <p>Methodologies are injected into agent prompts as structured context. Proven: Retrieved=3, Used=3, Attributed=3. Output includes passing tests and traceable provenance.</p>
           </div>
         </div>
-        <div class="card feature-card reveal reveal-delay-4">
-          <div class="feature-icon" style="background: rgba(168,85,247,0.08); color: var(--purple);">&#x2713;</div>
+        <!-- Original: Self-Enhancement -->
+        <div class="card feature-card reveal reveal-delay-1">
+          <div class="feature-icon" style="background: rgba(168,85,247,0.08); color: var(--purple);">&#x2607;</div>
           <div>
-            <h4>Verifies diffs &mdash; rejects hallucinated success</h4>
-            <p>If no files changed, the run is explicitly failed. Namespace-safe execution, preflight contracts, and honest &ldquo;0% lift&rdquo; reporting when results don't beat baseline.</p>
+            <h4>Compiler-Bootstrap Self-Enhancement</h4>
+            <p>CAM improves its own source code via a 7-gate validation pipeline (Syntax &rarr; Config &rarr; Import &rarr; DB &rarr; CLI &rarr; Pytest &rarr; Diff). Safety first, evolution second.</p>
+          </div>
+        </div>
+        <!-- Original: Self-Healing JSON -->
+        <div class="card feature-card reveal reveal-delay-2">
+          <div class="feature-icon" style="background: rgba(255,51,102,0.08); color: var(--crimson);">&#x2699;</div>
+          <div>
+            <h4>Self-Healing JSON Parser (100% Repair)</h4>
+            <p>LLM mining output is malformed ~75% of the time. CAM's 3-stage parser achieves a <strong>100% repair rate</strong> on real-world malformed data. No repo is lost to syntax errors.</p>
           </div>
         </div>
       </div>
@@ -904,8 +956,10 @@
         <span class="workflow-step">Validate</span>
         <span class="workflow-sep">&rarr;</span>
         <span class="workflow-step">Benchmark</span>
+        <span class="workflow-sep">&rarr;</span>
+        <span class="workflow-step" style="border-color: rgba(255,51,102,0.3); color: var(--crimson);">Self-Enhance</span>
       </div>
-      <p class="arch-caption reveal" style="margin-top: 12px; font-style: normal; font-size: 0.8rem;">The 7-step CAM core workflow. Each step produces verifiable artifacts, not just text.</p>
+      <p class="arch-caption reveal" style="margin-top: 12px; font-style: normal; font-size: 0.8rem;">The 8-step CAM core workflow. Verify &rarr; Correct loop (up to 3x) runs within Execute. Each step produces verifiable artifacts.</p>
     </div>
   </section>
 
@@ -922,6 +976,8 @@
           <button class="tab-btn" data-tab="daemon">Daemon Mode</button>
           <button class="tab-btn" data-tab="mineself">Mine Self</button>
           <button class="tab-btn" data-tab="mineworkspace">Mine Workspace</button>
+          <button class="tab-btn" data-tab="freshness">Freshness</button>
+          <button class="tab-btn" data-tab="hfmining">HF Mining</button>
         </div>
 
         <div class="code-panel active" id="panel-quickstart">
@@ -991,6 +1047,46 @@
           </div>
         </div>
 
+        <div class="code-panel" id="panel-freshness">
+          <div class="code-block">
+            <button class="copy-btn" data-copy="freshness">Copy</button>
+            <pre><span class="comment"># Check all tracked repos for staleness</span>
+<span class="command">cam</span> pulse freshness <span class="flag">--verbose</span>
+
+<span class="comment"># Seed freshness metadata for existing discoveries</span>
+<span class="command">cam</span> pulse freshness <span class="flag">--seed</span>
+
+<span class="comment"># Auto-refresh stale repos (significance >= 0.4)</span>
+<span class="command">cam</span> pulse freshness <span class="flag">--auto-refresh</span>
+
+<span class="comment"># Re-mine a specific repo</span>
+<span class="command">cam</span> pulse refresh <span class="string">https://github.com/bytedance/deer-flow</span>
+
+<span class="comment"># Re-mine all stale repos</span>
+<span class="command">cam</span> pulse refresh <span class="flag">--all</span>
+
+<span class="comment"># Preview without modifying</span>
+<span class="command">cam</span> pulse refresh <span class="flag">--all</span> <span class="flag">--dry-run</span></pre>
+          </div>
+        </div>
+
+        <div class="code-panel" id="panel-hfmining">
+          <div class="code-block">
+            <button class="copy-btn" data-copy="hfmining">Copy</button>
+            <pre><span class="comment"># Ingest a HuggingFace model repo (auto-detects URL type)</span>
+<span class="command">cam</span> pulse ingest <span class="string">https://huggingface.co/microsoft/phi-3-mini-4k-instruct</span>
+
+<span class="comment"># Works with GitHub too &mdash; same command</span>
+<span class="command">cam</span> pulse ingest <span class="string">https://github.com/bytedance/deer-flow</span>
+
+<span class="comment"># Ingest HF repo by ID with revision control</span>
+<span class="command">cam</span> pulse ingest-hf <span class="string">d4data/biomedical-ner-all</span> <span class="flag">--revision</span> main
+
+<span class="comment"># Force re-ingest even if already assimilated</span>
+<span class="command">cam</span> pulse ingest <span class="flag">--force</span> <span class="string">https://huggingface.co/BAAI/bge-small-en-v1.5</span></pre>
+          </div>
+        </div>
+
         <div class="code-panel" id="panel-mineworkspace">
           <div class="code-block">
             <button class="copy-btn" data-copy="mineworkspace">Copy</button>
@@ -1039,7 +1135,7 @@ Failed:      <span class="terminal-green">0</span>
   <section id="showpieces">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Proven, Not Just Claimed</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Four end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Eleven end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
 
       <div class="grid-2" style="margin-bottom: 24px;">
         <!-- Showpiece 01: PULSE Knowledge Loop -->
@@ -1126,6 +1222,128 @@ Token budget: small=2K, medium=4K, large=6K<br>
 258 source lines across 5 modules<br>
 Event bus + middleware + plugin loader + loop detection<br>
 Knowledge compounds: Build A patterns inform Build B</code>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 3.75 Showpieces -->
+      <div class="grid-2" style="margin-top: 24px;">
+        <!-- Showpiece 05: Self-Enhancement -->
+        <div class="card showpiece-card reveal reveal-delay-1">
+          <span class="showpiece-number">05</span>
+          <div class="showpiece-type" style="color: var(--purple);">Self-Evolution</div>
+          <h4>Compiler-Bootstrap Self-Enhancement</h4>
+          <p>CAM clones its own source, enhances the copy using its multi-agent system, validates through 7 gates (Syntax, Config, Import, DB, CLI, Pytest, Diff), and atomically swaps the live install. Rollback on failure.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">7-gate validation</span>
+            <span class="showpiece-tag">atomic swap</span>
+            <span class="showpiece-tag">quality 0.97</span>
+            <span class="showpiece-tag">2,348/2,348 tests</span>
+          </div>
+        </div>
+
+        <!-- Showpiece 06: Repo Upgrade Advisor -->
+        <div class="card showpiece-card reveal reveal-delay-2">
+          <span class="showpiece-number">06</span>
+          <div class="showpiece-type" style="color: var(--cyan);">Knowledge Application</div>
+          <h4>Repo Upgrade Advisor</h4>
+          <p>Ranked improvement recommendations with confidence scores derived from mined knowledge. Evaluates a repo and produces actionable enhancement plans backed by real methodology evidence.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">cam evaluate</span>
+            <span class="showpiece-tag">ranked recommendations</span>
+            <span class="showpiece-tag">confidence scores</span>
+          </div>
+        </div>
+
+        <!-- Showpiece 07: Expectation Ladder -->
+        <div class="card showpiece-card reveal reveal-delay-3">
+          <span class="showpiece-number">07</span>
+          <div class="showpiece-type" style="color: var(--blue);">Escalating Complexity</div>
+          <h4>Expectation Ladder</h4>
+          <p>5-level escalating complexity: health check &rarr; build &rarr; validate &rarr; mine &rarr; self-improve. Each level exercises progressively more of CAM's pipeline.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">5 levels</span>
+            <span class="showpiece-tag">progressive validation</span>
+          </div>
+        </div>
+
+        <!-- Showpiece 08: medCSS Modernizer -->
+        <div class="card showpiece-card reveal reveal-delay-4">
+          <span class="showpiece-number">08</span>
+          <div class="showpiece-type" style="color: var(--crimson);">End-to-End</div>
+          <h4>medCSS Modernizer</h4>
+          <p>Full create &rarr; validate &rarr; postcheck cycle on a real CSS codebase. Proves the validation pipeline works on non-trivial repos with actual workspace diffs verified.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">real codebase</span>
+            <span class="showpiece-tag">create + validate</span>
+          </div>
+        </div>
+
+        <!-- Showpiece 09: Inner Correction Loop -->
+        <div class="card showpiece-card reveal reveal-delay-1" style="border-color: rgba(255,51,102,0.2);">
+          <span class="showpiece-number">09</span>
+          <div class="showpiece-type" style="color: var(--crimson);">NEW &mdash; Agent Self-Repair</div>
+          <h4>Inner Correction Loop</h4>
+          <p>Workspace byte-level snapshot &rarr; verify &rarr; classify failure &rarr; restore &rarr; re-prompt agent with violations + test output. Proven: Run 1 triggered 3 correction retries. Run 2 succeeded first attempt: 10/10 tests, drift 0.868, quality 0.76.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">workspace restore</span>
+            <span class="showpiece-tag">violation feedback</span>
+            <span class="showpiece-tag">28 tests</span>
+            <span class="showpiece-tag">up to 3 retries</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Live Run Results (March 24, 2026)</div>
+            <code>Run 1: Correction loop triggered 3x<br>
+Workspace restore: confirmed working<br>
+Feedback injection: confirmed working<br>
+Run 2: First-attempt success<br>
+Tests: 10/10 | Drift: 0.868 | Quality: 0.76<br>
+Knowledge: 2 PULSE patterns injected<br>
+Lifecycle: embryonic &rarr; viable</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 10: Metric Expectations -->
+        <div class="card showpiece-card reveal reveal-delay-2" style="border-color: rgba(0,255,170,0.2);">
+          <span class="showpiece-number">10</span>
+          <div class="showpiece-type" style="color: var(--cyan);">NEW &mdash; Structured Verification</div>
+          <h4>Metric Expectations Enforcement</h4>
+          <p>Natural language specs auto-extracted to structured verification gates. <code>"greater than 90 percent coverage"</code> becomes <code>MetricExpectation(min_coverage_pct, gte, 90, hard=True)</code>. Hard gates block approval. Soft gates recommend.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">NL extraction</span>
+            <span class="showpiece-tag">coverage, test count</span>
+            <span class="showpiece-tag">hard/soft gates</span>
+            <span class="showpiece-tag">51 tests</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Supported Metrics</div>
+            <code>min_coverage_pct: pytest --cov TOTAL parsing<br>
+min_test_count: pytest summary line parsing<br>
+min_files_changed / max_files_changed<br>
+Operators: gte, gt, lte, lt, eq<br>
+37 tests (metrics) + 14 tests (min_tests)</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 11: Repo Freshness Monitor -->
+        <div class="card showpiece-card reveal reveal-delay-3" style="border-color: rgba(51,102,255,0.2);">
+          <span class="showpiece-number">11</span>
+          <div class="showpiece-type" style="color: var(--blue);">NEW &mdash; Knowledge Maintenance</div>
+          <h4>Repo Freshness Monitor</h4>
+          <p>Phase 1: ETag-cached GitHub metadata check (0 rate limit cost for unchanged repos). Phase 2: 4-factor significance scoring. Only repos with significance &ge; 0.4 trigger re-mine. Old methodologies gracefully transition to <code>declining</code>.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">ETag caching</span>
+            <span class="showpiece-tag">significance scoring</span>
+            <span class="showpiece-tag">auto re-mine</span>
+            <span class="showpiece-tag">methodology retirement</span>
+          </div>
+          <div class="showpiece-proof">
+            <div class="proof-label">Significance Formula</div>
+            <code>commits_since_mine * 0.3<br>
++ new_release * 0.4<br>
++ readme_changed * 0.2<br>
++ size_delta * 0.1<br>
+Threshold: 0.4 (configurable in claw.toml)</code>
           </div>
         </div>
       </div>
@@ -1257,7 +1475,7 @@ Knowledge compounds: Build A patterns inform Build B</code>
               <td><span class="check-partial">~ Workspace only</span></td>
               <td><span class="check-partial">~ Session only</span></td>
               <td><span class="check-no">&times;</span></td>
-              <td><span class="check-yes">&#10003; 1,750+ methodologies</span></td>
+              <td><span class="check-yes">&#10003; 122 methodologies + lifecycle</span></td>
             </tr>
             <tr>
               <td class="variant-name">Discovers new patterns autonomously</td>
@@ -1408,6 +1626,16 @@ Knowledge compounds: Build A patterns inform Build B</code>
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 3</div>
           <div class="timeline-desc">PULSE &mdash; X-Scout, novelty filter, auto-assimilation, 16/16 live scan</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot complete">&#10003;</div>
+          <div class="timeline-phase">Phase 3.5</div>
+          <div class="timeline-desc">Self-Enhancement &mdash; Clone &rarr; enhance &rarr; 7-gate validate &rarr; atomic swap</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot complete">&#10003;</div>
+          <div class="timeline-phase">Phase 3.75</div>
+          <div class="timeline-desc">Resilience &mdash; Inner correction loop, metric expectations, HF mining, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot planned">&#x25CB;</div>

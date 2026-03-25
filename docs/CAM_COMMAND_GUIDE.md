@@ -64,6 +64,29 @@ cam preflight <repo> --request "..."
 
 ## Quick Workflow Map
 
+### If you want CAM to discover and learn from the world
+
+```bash
+# Scan X for new repos
+cam pulse scan --keywords "AI agent"
+
+# Start the perpetual discovery daemon
+cam pulse daemon --interval 30
+
+# View what CAM has learned
+cam learn report --limit 10
+```
+
+### If you want CAM to improve itself
+
+```bash
+# Assess if enough knowledge has accumulated
+cam self-enhance status
+
+# Run the full clone -> enhance -> validate -> swap pipeline
+cam self-enhance start
+```
+
 ### If you want CAM to study a repo and improve it
 
 ```bash
@@ -318,6 +341,195 @@ Syntax:
 cam status
 ```
 
+---
+
+## PULSE Discovery System
+
+The PULSE (Perpetual Unified Learning Swarm Engine) commands handle autonomous repo discovery, ingestion, freshness monitoring, and knowledge maintenance.
+
+### `cam pulse preflight`
+
+Purpose: Validate xAI key and model configuration before scanning.
+
+```bash
+cam pulse preflight [--config PATH]
+```
+
+### `cam pulse scan`
+
+Purpose: Scan X (formerly Twitter) for GitHub repos matching keywords. Uses Grok's native `x_search` via xAI Responses API.
+
+```bash
+cam pulse scan KEYWORDS... [--limit 50] [--mode auto|preview|live] [--novelty 0.85] [--force] [--skip-dedup] [--verbose] [--config PATH]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--limit` | 50 | Max repos to fetch |
+| `--mode` | auto | `auto` (scan+mine), `preview` (scan only), `live` (full pipeline) |
+| `--novelty` | 0.85 | Preset novelty score threshold (0.0-1.0) |
+| `--force` | false | Re-scan even if URLs already known |
+| `--skip-dedup` | false | Bypass novelty-filter dedup check |
+
+Example:
+```bash
+cam pulse scan --keywords "AI agent framework" --mode auto --novelty 0.85
+```
+
+### `cam pulse daemon`
+
+Purpose: Start a perpetual discovery loop that scans X and assimilates repos automatically.
+
+```bash
+cam pulse daemon [--interval 30] [--max-per-cycle 10] [--retries 3] [--verbose] [--config PATH]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--interval` | 30 | Polling interval in seconds |
+| `--max-per-cycle` | 10 | Max repos per cycle |
+| `--retries` | 3 | Retry failed assimilations |
+
+### `cam pulse ingest`
+
+Purpose: Ingest prescreened repos directly, bypassing X-Scout discovery. Accepts **both GitHub and HuggingFace URLs**.
+
+```bash
+cam pulse ingest URL... [--novelty 0.95] [--force] [--verbose] [--config PATH]
+```
+
+URL types supported:
+- `https://github.com/owner/repo` — Standard GitHub mining
+- `https://huggingface.co/owner/repo` — Tiered HF mining (micro: full clone, standard/large: metadata-only API)
+
+Example:
+```bash
+# GitHub repo
+cam pulse ingest https://github.com/bytedance/deer-flow
+
+# HuggingFace model repo
+cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
+
+# Multiple URLs at once
+cam pulse ingest https://github.com/org/repo1 https://huggingface.co/org/model2 --force
+```
+
+### `cam pulse ingest-hf`
+
+Purpose: Ingest HuggingFace repos by ID (not URL) with revision control. Uses hf-mount or fallback download.
+
+```bash
+cam pulse ingest-hf REPO_IDS... [--revision main] [--force] [--verbose] [--config PATH]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--revision` | main | Git revision to mount (branch, tag, SHA) |
+| `--force` | false | Re-ingest even if already assimilated |
+
+Tier classification:
+- **micro** (< 100 MB): Full clone — complete extraction
+- **standard** (100 MB – 2 GB): Metadata-only — README + config.json via HF Hub API
+- **large** (> 2 GB): Metadata-only — avoids multi-GB weight downloads
+
+Example:
+```bash
+cam pulse ingest-hf d4data/biomedical-ner-all --revision main
+```
+
+### `cam pulse freshness`
+
+Purpose: Check all tracked repos for staleness and report significance scores.
+
+```bash
+cam pulse freshness [--verbose] [--auto-refresh] [--seed] [--dry-run] [--config PATH]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--verbose` | false | Show significance scores and details |
+| `--auto-refresh` | false | Automatically re-mine stale repos |
+| `--seed` | false | Populate freshness metadata for repos with NULL values |
+| `--dry-run` | false | Check freshness without modifying database |
+
+How it works:
+- **Phase 1**: ETag-cached metadata check. Unchanged repos cost 0 API rate limit points (HTTP 304).
+- **Phase 2**: Significance scoring: commits since mine (30%), new releases (40%), README changes (20%), repo size delta (10%).
+- Only repos with significance >= 0.4 (configurable in `claw.toml`) trigger re-mine.
+
+Example:
+```bash
+# Check staleness
+cam pulse freshness --verbose
+
+# Seed metadata for existing repos, then check
+cam pulse freshness --seed --verbose
+
+# Auto-refresh stale repos
+cam pulse freshness --auto-refresh
+```
+
+### `cam pulse refresh`
+
+Purpose: Re-mine a specific repo or all stale repos. Old methodologies transition to `declining`.
+
+```bash
+cam pulse refresh [URL] [--all] [--force] [--dry-run] [--no-backup] [--verbose] [--config PATH]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--all` | false | Refresh all stale repos |
+| `--force` | false | Skip significance check and confirmation prompts |
+| `--dry-run` | false | Preview what would be refreshed without modifying |
+| `--no-backup` | false | Skip pre-refresh database backup |
+
+Example:
+```bash
+# Re-mine a specific repo
+cam pulse refresh https://github.com/bytedance/deer-flow
+
+# Re-mine all stale repos
+cam pulse refresh --all
+
+# Preview only
+cam pulse refresh --all --dry-run
+```
+
+### `cam pulse status`
+
+Purpose: Show current PULSE ingestion statistics.
+
+```bash
+cam pulse status
+```
+
+### `cam pulse discoveries`
+
+Purpose: Browse recent X-scan discoveries with status.
+
+```bash
+cam pulse discoveries [--limit 20]
+```
+
+### `cam pulse scans`
+
+Purpose: Show scan history.
+
+```bash
+cam pulse scans
+```
+
+### `cam pulse report`
+
+Purpose: Daily assimilation report.
+
+```bash
+cam pulse report [--date YYYY-MM-DD]
+```
+
+---
+
 ## `cam doctor expectations`
 
 Show whether the current runtime satisfies CAM's core product expectations.
@@ -508,6 +720,39 @@ cam create /Users/o2satz/projects/health-intake \
   --answer "Acceptance checks: pytest -q and python -m app.cli --help" \
   --execute
 ```
+
+### Metric Expectations in Specs
+
+When you write natural language specs for `cam create`, CAM auto-extracts structured metric targets from the text:
+
+| Natural Language | Extracted Metric |
+|-----------------|-----------------|
+| `"greater than 90 percent coverage"` | `MetricExpectation(min_coverage_pct, gte, 90, hard=True)` |
+| `"at least 20 tests"` | `MetricExpectation(min_test_count, gte, 20, hard=True)` |
+| `"no more than 5 files changed"` | `MetricExpectation(max_files_changed, lte, 5, hard=True)` |
+
+Supported metrics:
+- `min_coverage_pct` — Extracts from `pytest --cov` TOTAL line
+- `min_test_count` — Extracts from `pytest` summary line
+- `min_files_changed` / `max_files_changed` — Counts workspace diff
+
+Operators: `gte` (>=), `gt` (>), `lte` (<=), `lt` (<), `eq` (==)
+
+Enforcement:
+- **Hard** expectations block approval if not met
+- **Soft** expectations generate recommendations only
+
+Example:
+```bash
+cam create /path/to/repo --repo-mode new \
+  --request "Build a plugin system with at least 10 tests and greater than 80 percent coverage" \
+  --check "pytest --cov=src tests/ -v" \
+  --execute
+```
+
+CAM will auto-extract `min_test_count >= 10` and `min_coverage_pct >= 80` as hard gates.
+
+---
 
 ## `cam add-goal`
 
@@ -1247,3 +1492,14 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 - `synergies`: inspect capability interactions
 - `prism-demo`: run the PRISM embedding demo
 - `kb insights/search/capability/domains/synergies`: browse CAM’s learned knowledge
+- `pulse preflight`: validate xAI key and model before scanning
+- `pulse scan`: scan X for repos developers are sharing
+- `pulse daemon`: start perpetual discovery polling loop
+- `pulse ingest`: ingest prescreened GitHub/HuggingFace repos
+- `pulse ingest-hf`: ingest HuggingFace repos by ID with revision
+- `pulse freshness`: check tracked repos for staleness
+- `pulse refresh`: re-mine stale repos with methodology retirement
+- `pulse status`: show PULSE ingestion statistics
+- `pulse discoveries`: browse recent discoveries
+- `pulse scans`: show scan history
+- `pulse report`: daily assimilation report

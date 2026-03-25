@@ -26,15 +26,16 @@ Use this skill when you need an AI to **actually improve and verify** a codebase
 
 ## Core Capabilities
 
-CAM operates as a 7-step workflow, each step producing verifiable artifacts:
+CAM operates as an 8-step workflow, each step producing verifiable artifacts:
 
 1. **Inspect** — `cam evaluate <repo>` analyzes a repository and produces structured findings
-2. **Mine** — `cam mine <dir>` extracts reusable patterns from external repos into persistent knowledge (`claw.db`)
+2. **Mine** — `cam mine <dir>` extracts reusable patterns from external repos into persistent knowledge (`claw.db`). Achieves **100% repair rate** on malformed LLM JSON.
 3. **Ideate** — `cam ideate <dir>` generates novel app or improvement concepts from stored knowledge + repo inputs
 4. **Spec** — `cam create <repo>` generates an explicit, reviewable creation spec before execution
-5. **Execute** — `cam create <repo> --execute` writes real code changes, verified by workspace diff (not agent narration)
-6. **Validate** — `cam validate --spec-file <spec>` checks the result against the saved spec and acceptance rules
+5. **Execute** — `cam create <repo> --execute` writes real code changes, verified by workspace diff (not agent narration). Includes inner correction loop (up to 3 retries with workspace restore + violation feedback).
+6. **Validate** — `cam validate --spec-file <spec>` checks the result against the saved spec, acceptance rules, and structured metric expectations (coverage, test count)
 7. **Benchmark** — `cam forge-benchmark` measures output quality with a deterministic harness
+8. **Self-Enhance** — `cam self-enhance start` periodically improves CAM's own source code via a 7-gate validation pipeline.
 
 ## Invocation Examples
 
@@ -94,6 +95,24 @@ cam pulse scans
 
 # Daily report
 cam pulse report --date 2026-03-21
+```
+
+### HuggingFace model repo mining
+```bash
+# Mine a HuggingFace model repo (tiered: micro/standard/large)
+cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
+```
+
+### Repo freshness monitoring
+```bash
+# Check all tracked repos for staleness
+cam pulse freshness --verbose
+
+# Re-mine repos with significant changes
+cam pulse refresh --all
+
+# Re-mine a specific repo
+cam pulse refresh https://github.com/bytedance/deer-flow
 ```
 
 ### Guided interactive mode (no flags to memorize)
