@@ -225,7 +225,7 @@ async def _run_live_key_checks(config: Any, command_name: str) -> list[dict[str,
                 messages=[LLMMessage(role="user", content="Reply with OK only.")],
                 model=model,
                 temperature=0.0,
-                max_tokens=8,
+                max_tokens=16,
             )
             content = (response.content or "").strip().replace("\n", " ")
             results.append({
