@@ -336,12 +336,21 @@ CREATE TABLE IF NOT EXISTS pulse_discoveries (
     discovered_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     novelty_score REAL,
     status TEXT NOT NULL DEFAULT 'discovered'
-        CHECK (status IN ('discovered','cloning','mining','assimilated','failed','skipped','queued_enhance')),
+        CHECK (status IN ('discovered','cloning','mounting','mining','assimilated','failed','skipped','queued_enhance','refreshing')),
     scan_id TEXT,
     keywords_matched TEXT NOT NULL DEFAULT '[]',
     mine_result TEXT,
     methodology_ids TEXT NOT NULL DEFAULT '[]',
     error_detail TEXT,
+    last_checked_at TEXT,
+    last_pushed_at TEXT,
+    head_sha_at_mine TEXT,
+    etag TEXT,
+    stars_at_mine INTEGER,
+    latest_release_tag TEXT,
+    freshness_status TEXT DEFAULT 'unknown',
+    source_kind TEXT DEFAULT 'github',
+    size_at_mine INTEGER,
     UNIQUE(canonical_url)
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_disc_status ON pulse_discoveries(status);

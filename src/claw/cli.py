@@ -33,6 +33,7 @@ from typing import Any, Optional
 
 import time as _time
 
+import click
 import typer
 from rich.console import Console
 from rich.live import Live
@@ -8889,6 +8890,38 @@ def _normalize_github_url(raw_url: str) -> Optional[str]:
     return f"https://github.com/{owner.lower()}/{repo.lower()}"
 
 
+def _normalize_repo_url(raw_url: str) -> Optional[str]:
+    """Normalize a GitHub or HuggingFace repo URL to canonical form.
+
+    Returns:
+        'https://github.com/{owner}/{repo}' for GitHub URLs
+        'https://huggingface.co/{owner}/{repo}' for HF URLs
+        None if the URL doesn't match either pattern.
+    """
+    from urllib.parse import urlparse
+
+    url = raw_url.strip()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    # Try GitHub first
+    if host in ("github.com", "www.github.com"):
+        return _normalize_github_url(raw_url)
+
+    # HuggingFace
+    if host in ("huggingface.co", "www.huggingface.co"):
+        path = parsed.path.strip("/")
+        parts = path.split("/")
+        if len(parts) < 2:
+            return None
+        owner, repo = parts[0], parts[1]
+        if not owner or not repo:
+            return None
+        return f"https://huggingface.co/{owner}/{repo}"
+
+    return None
+
+
 @pulse_app.command(name="ingest")
 def pulse_ingest(
     urls: list[str] = typer.Argument(..., help="GitHub repo URLs to ingest"),
@@ -9000,6 +9033,464 @@ def pulse_ingest(
                 console.print(f"  Skipped (already known): {skipped}")
             if errors:
                 console.print(f"  Errors: {len(errors)}")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace Repo Ingestion
+# ---------------------------------------------------------------------------
+
+
+@pulse_app.command(name="ingest-hf")
+def pulse_ingest_hf(
+    repo_ids: list[str] = typer.Argument(..., help="HuggingFace repo IDs (e.g., d4data/biomedical-ner-all)"),
+    revision: str = typer.Option("main", "--revision", "-r", help="Git revision to mount (branch, tag, SHA)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-ingest even if already assimilated"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Ingest HuggingFace repos via hf-mount (or fallback download)."""
+    import asyncio
+
+    _setup_logging(verbose)
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            orch = await _pulse_orchestrator(engine, cfg)
+            assimilator = orch.assimilator
+            novelty_filter = orch.novelty
+
+            scan_id = f"hf-ingest-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+            total_methodologies = 0
+            ingested = 0
+            skipped = 0
+            errors = []
+
+            await engine.execute(
+                "INSERT INTO pulse_scan_log (id, keywords) VALUES (?, ?)",
+                [scan_id, '["hf-ingest"]'],
+            )
+
+            console.print(f"\n[bold]PULSE HF Ingest[/bold] — {len(repo_ids)} repo(s)")
+            console.print(f"  Revision: {revision}")
+            console.print(f"  Scan ID: {scan_id}\n")
+
+            from claw.pulse.hf_adapter import hf_mount_available
+
+            if hf_mount_available():
+                console.print("  [green]hf-mount detected[/green] — will use mount for ingestion\n")
+            else:
+                console.print("  [yellow]hf-mount not found[/yellow] — will fallback to huggingface_hub download\n")
+
+            for repo_id in repo_ids:
+                repo_id = repo_id.strip()
+                if "/" not in repo_id:
+                    console.print(f"  [red]SKIP[/red] {repo_id} — not a valid HF repo ID (expected owner/name)")
+                    errors.append(f"{repo_id}: invalid format")
+                    continue
+
+                canonical_url = f"https://huggingface.co/{repo_id}"
+
+                # Dedup check
+                already_known = await novelty_filter.is_already_known(canonical_url)
+                if already_known and not force:
+                    console.print(f"  [yellow]KNOWN[/yellow] {repo_id} — already assimilated (use --force)")
+                    skipped += 1
+                    continue
+                elif already_known:
+                    console.print(f"  [yellow]FORCE[/yellow] {repo_id} — re-ingesting despite existing record")
+
+                try:
+                    result = await assimilator.assimilate_hf_repo(
+                        repo_id, "pulse-default", revision=revision
+                    )
+
+                    if result.success:
+                        ingested += 1
+                        total_methodologies += len(result.methodology_ids)
+                        console.print(
+                            f"  [green]OK[/green] {repo_id} — "
+                            f"{result.findings_count} findings, "
+                            f"{len(result.methodology_ids)} methodologies"
+                        )
+                    else:
+                        errors.append(f"{repo_id}: {result.error}")
+                        console.print(f"  [red]FAIL[/red] {repo_id} — {result.error}")
+                except Exception as e:
+                    errors.append(f"{repo_id}: {e}")
+                    console.print(f"  [red]ERROR[/red] {repo_id} — {e}")
+
+            await engine.execute(
+                """UPDATE pulse_scan_log
+                   SET completed_at = ?, repos_discovered = ?, repos_novel = ?,
+                       repos_assimilated = ?, error_detail = ?
+                   WHERE id = ?""",
+                [
+                    datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    len(repo_ids),
+                    len(repo_ids) - skipped,
+                    ingested,
+                    json.dumps(errors) if errors else None,
+                    scan_id,
+                ],
+            )
+
+            console.print(f"\n[bold]Summary[/bold]")
+            console.print(f"  Ingested: {ingested}/{len(repo_ids)}")
+            console.print(f"  Methodologies: {total_methodologies}")
+            if skipped:
+                console.print(f"  Skipped (already known): {skipped}")
+            if errors:
+                console.print(f"  Errors: {len(errors)}")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Freshness Monitor Commands
+# ---------------------------------------------------------------------------
+
+
+def _backup_database(db_path: str) -> str | None:
+    """Create a timestamped backup of the database before destructive operations.
+
+    Returns the backup path on success, None on failure.
+    """
+    import shutil
+    from datetime import UTC, datetime
+
+    src = Path(db_path)
+    if not src.exists() or str(src) == ":memory:":
+        return None
+
+    backup_dir = src.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"{src.stem}_pre_refresh_{timestamp}{src.suffix}"
+
+    try:
+        shutil.copy2(src, backup_path)
+        # Also copy WAL file if present
+        wal_path = Path(f"{src}-wal")
+        if wal_path.exists():
+            shutil.copy2(wal_path, Path(f"{backup_path}-wal"))
+        shm_path = Path(f"{src}-shm")
+        if shm_path.exists():
+            shutil.copy2(shm_path, Path(f"{backup_path}-shm"))
+        return str(backup_path)
+    except Exception as e:
+        logging.getLogger("claw.cli").warning("Database backup failed: %s", e)
+        return None
+
+
+def _confirm_retirement(retired_ids: list[str], repo_label: str) -> bool:
+    """Prompt user to confirm bulk methodology retirement.
+
+    Returns True if user confirms, False to skip.
+    """
+    count = len(retired_ids)
+    console.print(
+        f"\n  [yellow bold]WARNING:[/yellow bold] About to retire {count} methodology(ies) from {repo_label}:"
+    )
+    for mid in retired_ids[:10]:
+        console.print(f"    - {mid}")
+    if count > 10:
+        console.print(f"    ... and {count - 10} more")
+
+    try:
+        answer = typer.confirm("  Proceed with retirement?", default=False)
+        return answer
+    except (click.Abort, KeyboardInterrupt):
+        return False
+
+
+@pulse_app.command(name="freshness")
+def pulse_freshness(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show debug logging"),
+    auto_refresh: bool = typer.Option(False, "--auto-refresh", help="Automatically re-mine stale repos"),
+    seed: bool = typer.Option(False, "--seed", help="Populate freshness metadata for repos with NULL values"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Check freshness without modifying database"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Check all tracked repos for staleness and report significance scores."""
+    import asyncio
+
+    _setup_logging(verbose)
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            from claw.pulse.freshness import FreshnessMonitor
+
+            monitor = FreshnessMonitor(engine, cfg)
+
+            mode_label = " [dim](DRY RUN)[/dim]" if dry_run else ""
+            console.print(f"\n[bold]PULSE Freshness Check[/bold]{mode_label}\n")
+
+            if seed and not dry_run:
+                console.print("[bold]Seeding freshness metadata for existing repos...[/bold]\n")
+                seeded = await monitor.seed_existing_repos()
+                console.print(f"  Seeded {seeded} repos with freshness metadata.\n")
+            elif seed and dry_run:
+                console.print("  [dim]--seed skipped in dry-run mode[/dim]\n")
+
+            results = await monitor.check_all()
+
+            if not results:
+                console.print("  No assimilated repos to check.")
+                return
+
+            # Display results table
+            table = Table(title="Repo Freshness Status")
+            table.add_column("Repository", style="cyan", min_width=30)
+            table.add_column("Last Checked", style="dim")
+            table.add_column("Significance", justify="right")
+            table.add_column("Commits", justify="right")
+            table.add_column("New Release", justify="center")
+            table.add_column("README", justify="center")
+            table.add_column("Status", min_width=10)
+
+            stale_urls = []
+
+            for r in results:
+                repo_label = r.canonical_url.replace("https://github.com/", "")
+
+                if r.error:
+                    table.add_row(repo_label, "-", "-", "-", "-", "-", f"[red]ERROR: {r.error[:30]}[/red]")
+                    continue
+
+                sig = f"{r.significance_score:.2f}"
+                commits = str(r.commits_since_mine) if r.commits_since_mine else "-"
+                release = "[green]Yes[/green]" if r.has_new_release else "-"
+                readme = "[green]Yes[/green]" if r.readme_changed else "-"
+
+                if r.needs_refresh:
+                    status = "[red bold]STALE[/red bold]"
+                    stale_urls.append(r.canonical_url)
+                elif r.significance_score > 0:
+                    status = "[yellow]Changed[/yellow]"
+                else:
+                    status = "[green]Fresh[/green]"
+
+                table.add_row(repo_label, "-", sig, commits, release, readme, status)
+
+            console.print(table)
+
+            # Summary
+            fresh = sum(1 for r in results if not r.needs_refresh and not r.error)
+            stale = len(stale_urls)
+            errors = sum(1 for r in results if r.error)
+
+            console.print(f"\n  [green]Fresh:[/green] {fresh}  [red]Stale:[/red] {stale}  [dim]Errors:[/dim] {errors}")
+
+            if stale_urls and auto_refresh and dry_run:
+                # Dry-run: preview what WOULD happen
+                console.print(f"\n[bold]DRY RUN:[/bold] Would refresh {len(stale_urls)} stale repo(s):\n")
+                for url in stale_urls:
+                    repo_label = url.replace("https://github.com/", "")
+                    would_retire, would_keep = await monitor.preview_retirement(url, [])
+                    console.print(
+                        f"  {repo_label} — "
+                        f"would retire {len(would_retire)} methodology(ies), "
+                        f"keep {len(would_keep)}"
+                    )
+                console.print("\n  [dim]No changes made. Remove --dry-run to execute.[/dim]")
+
+            elif stale_urls and auto_refresh:
+                # Create backup before destructive operations
+                backup_path = _backup_database(cfg.database.db_path)
+                if backup_path:
+                    console.print(f"\n  [dim]Database backed up to: {backup_path}[/dim]")
+
+                console.print(f"\n[bold]Auto-refreshing {len(stale_urls)} stale repo(s)...[/bold]\n")
+                orch = await _pulse_orchestrator(engine, cfg)
+                assimilator = orch.assimilator
+                for url in stale_urls:
+                    repo_label = url.replace("https://github.com/", "")
+                    try:
+                        from claw.pulse.models import PulseDiscovery
+
+                        disc = PulseDiscovery(
+                            github_url=url,
+                            canonical_url=url,
+                            x_post_text="Freshness auto-refresh",
+                            keywords_matched=["freshness-refresh"],
+                            novelty_score=1.0,
+                            scan_id=f"refresh-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}",
+                        )
+                        result = await assimilator.assimilate(disc, "pulse-default")
+                        if result.success:
+                            # Preview retirement; confirm if > 5
+                            would_retire, would_keep = await monitor.preview_retirement(
+                                url, result.methodology_ids
+                            )
+                            if len(would_retire) > 5:
+                                if not _confirm_retirement(would_retire, repo_label):
+                                    console.print(f"  [yellow]SKIPPED[/yellow] {repo_label} — retirement cancelled")
+                                    continue
+
+                            retired, kept = await monitor.retire_stale_methodologies(
+                                url, result.methodology_ids
+                            )
+                            await monitor.update_mine_metadata(url, result.head_sha)
+                            console.print(
+                                f"  [green]REFRESHED[/green] {repo_label} — "
+                                f"{result.findings_count} findings, "
+                                f"{len(result.methodology_ids)} methodologies"
+                            )
+                            if retired:
+                                console.print(
+                                    f"       [dim]Retired {len(retired)} stale, kept {len(kept)} unchanged[/dim]"
+                                )
+                        else:
+                            console.print(f"  [red]FAIL[/red] {repo_label} — {result.error}")
+                    except Exception as e:
+                        console.print(f"  [red]ERROR[/red] {repo_label} — {e}")
+            elif stale_urls:
+                console.print(f"\n  Use [bold]--auto-refresh[/bold] to re-mine stale repos, or:")
+                console.print(f"  [dim]cam pulse refresh --all[/dim]")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@pulse_app.command(name="refresh")
+def pulse_refresh(
+    url: Optional[str] = typer.Argument(None, help="GitHub repo URL to refresh (or use --all)"),
+    all_stale: bool = typer.Option(False, "--all", help="Refresh all stale repos"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip significance check and confirmation prompts"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview what would be refreshed/retired without modifying database"),
+    no_backup: bool = typer.Option(False, "--no-backup", help="Skip pre-refresh database backup"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Re-mine a specific repo or all stale repos."""
+    import asyncio
+
+    _setup_logging(verbose)
+
+    if not url and not all_stale:
+        console.print("[red]Error:[/red] Provide a repo URL or use --all for all stale repos.")
+        raise typer.Exit(1)
+
+    async def _run():
+        engine, cfg = await _pulse_engine()
+        try:
+            from claw.pulse.freshness import FreshnessMonitor
+
+            urls_to_refresh: list[str] = []
+
+            if url:
+                canonical = _normalize_repo_url(url)
+                if not canonical:
+                    console.print(f"[red]Error:[/red] Not a valid GitHub or HuggingFace URL: {url}")
+                    return
+                urls_to_refresh.append(canonical)
+            elif all_stale:
+                rows = await engine.fetch_all(
+                    "SELECT canonical_url FROM pulse_discoveries WHERE freshness_status = 'stale'"
+                )
+                urls_to_refresh = [r["canonical_url"] for r in rows]
+                if not urls_to_refresh:
+                    console.print("No stale repos found. Run [bold]cam pulse freshness[/bold] first.")
+                    return
+
+            mode_label = " [dim](DRY RUN)[/dim]" if dry_run else ""
+            console.print(f"\n[bold]PULSE Refresh[/bold] — {len(urls_to_refresh)} repo(s){mode_label}\n")
+
+            # Dry-run: preview only
+            if dry_run:
+                monitor = FreshnessMonitor(engine, cfg)
+                for repo_url in urls_to_refresh:
+                    repo_label = repo_url.replace("https://github.com/", "")
+                    would_retire, would_keep = await monitor.preview_retirement(repo_url, [])
+                    console.print(
+                        f"  {repo_label} — "
+                        f"would retire {len(would_retire)}, keep {len(would_keep)}"
+                    )
+                    if would_retire:
+                        for mid in would_retire[:5]:
+                            console.print(f"    [dim]retire: {mid}[/dim]")
+                        if len(would_retire) > 5:
+                            console.print(f"    [dim]... and {len(would_retire) - 5} more[/dim]")
+                console.print("\n  [dim]No changes made. Remove --dry-run to execute.[/dim]")
+                return
+
+            # Create backup before destructive operations
+            if not no_backup:
+                backup_path = _backup_database(cfg.database.db_path)
+                if backup_path:
+                    console.print(f"  [dim]Database backed up to: {backup_path}[/dim]\n")
+
+            orch = await _pulse_orchestrator(engine, cfg)
+            assimilator = orch.assimilator
+            monitor = FreshnessMonitor(engine, cfg)
+
+            refreshed = 0
+            for repo_url in urls_to_refresh:
+                repo_label = repo_url.replace("https://github.com/", "")
+                try:
+                    from claw.pulse.models import PulseDiscovery
+
+                    disc = PulseDiscovery(
+                        github_url=repo_url,
+                        canonical_url=repo_url,
+                        x_post_text="Manual refresh",
+                        keywords_matched=["refresh"],
+                        novelty_score=1.0,
+                        scan_id=f"refresh-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}",
+                    )
+
+                    # Mark as refreshing
+                    await engine.execute(
+                        "UPDATE pulse_discoveries SET freshness_status = 'refreshing' WHERE canonical_url = ?",
+                        [repo_url],
+                    )
+
+                    result = await assimilator.assimilate(disc, "pulse-default")
+                    if result.success:
+                        refreshed += 1
+
+                        # Preview retirement; confirm if > 5 (unless --force)
+                        would_retire, would_keep = await monitor.preview_retirement(
+                            repo_url, result.methodology_ids
+                        )
+                        if len(would_retire) > 5 and not force:
+                            if not _confirm_retirement(would_retire, repo_label):
+                                console.print(f"  [yellow]SKIPPED[/yellow] {repo_label} — retirement cancelled")
+                                await monitor.update_mine_metadata(repo_url, result.head_sha)
+                                continue
+
+                        retired, kept = await monitor.retire_stale_methodologies(
+                            repo_url, result.methodology_ids
+                        )
+
+                        await monitor.update_mine_metadata(repo_url, result.head_sha)
+                        console.print(
+                            f"  [green]OK[/green] {repo_label} — "
+                            f"{result.findings_count} findings, "
+                            f"{len(result.methodology_ids)} new methodologies"
+                        )
+                        if retired:
+                            console.print(
+                                f"       [dim]Retired {len(retired)} stale, kept {len(kept)} unchanged[/dim]"
+                            )
+                    else:
+                        console.print(f"  [red]FAIL[/red] {repo_label} — {result.error}")
+                except Exception as e:
+                    console.print(f"  [red]ERROR[/red] {repo_label} — {e}")
+
+            console.print(f"\n[bold]Summary:[/bold] Refreshed {refreshed}/{len(urls_to_refresh)} repos")
 
         finally:
             await engine.close()

@@ -309,7 +309,7 @@ class DatabaseEngine:
                     discovered_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                     novelty_score REAL,
                     status TEXT NOT NULL DEFAULT 'discovered'
-                        CHECK (status IN ('discovered','cloning','mining','assimilated','failed','skipped','queued_enhance')),
+                        CHECK (status IN ('discovered','cloning','mounting','mining','assimilated','failed','skipped','queued_enhance','refreshing')),
                     scan_id TEXT,
                     keywords_matched TEXT NOT NULL DEFAULT '[]',
                     mine_result TEXT,
@@ -347,6 +347,52 @@ class DatabaseEngine:
             """)
             await self.conn.commit()
             logger.info("Migration applied: pulse_scan_log table created")
+
+        # Migration 11: add freshness tracking columns to pulse_discoveries
+        # Uses pragma_table_info to check column existence (idempotent pattern)
+        existing_cols = set()
+        rows = await self.fetch_all(
+            "SELECT name FROM pragma_table_info('pulse_discoveries')"
+        )
+        for r in rows:
+            existing_cols.add(r["name"])
+
+        freshness_columns = [
+            ("last_checked_at", "TEXT"),
+            ("last_pushed_at", "TEXT"),
+            ("head_sha_at_mine", "TEXT"),
+            ("etag", "TEXT"),
+            ("stars_at_mine", "INTEGER"),
+            ("latest_release_tag", "TEXT"),
+            ("freshness_status", "TEXT DEFAULT 'unknown'"),
+            ("source_kind", "TEXT DEFAULT 'github'"),
+        ]
+
+        added = []
+        for col_name, col_type in freshness_columns:
+            if col_name not in existing_cols:
+                await self.conn.execute(
+                    f"ALTER TABLE pulse_discoveries ADD COLUMN {col_name} {col_type}"
+                )
+                added.append(col_name)
+
+        if added:
+            await self.conn.commit()
+            logger.info("Migration 11 applied: added freshness columns: %s", ", ".join(added))
+
+        # Migration 12: add size_at_mine column to pulse_discoveries
+        if "size_at_mine" not in existing_cols:
+            # Re-check in case migration 11 just ran
+            re_rows = await self.fetch_all(
+                "SELECT name FROM pragma_table_info('pulse_discoveries')"
+            )
+            re_cols = {r["name"] for r in re_rows}
+            if "size_at_mine" not in re_cols:
+                await self.conn.execute(
+                    "ALTER TABLE pulse_discoveries ADD COLUMN size_at_mine INTEGER"
+                )
+                await self.conn.commit()
+                logger.info("Migration 12 applied: added size_at_mine column")
 
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None

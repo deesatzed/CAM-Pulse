@@ -13,6 +13,7 @@ This module orchestrates both, normalizes scores, and returns top-K merged resul
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -22,6 +23,21 @@ from claw.db.repository import Repository
 from claw.memory.fitness import get_fitness_score
 
 logger = logging.getLogger("claw.memory.hybrid_search")
+
+
+def _extract_capability_data(methodology: Any) -> dict:
+    """Safely extract capability_data dict from a methodology."""
+    cap_raw = getattr(methodology, "capability_data", None)
+    if isinstance(cap_raw, dict):
+        return cap_raw
+    if isinstance(cap_raw, str) and cap_raw not in ("", "null"):
+        try:
+            parsed = json.loads(cap_raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {}
 
 
 class HybridSearchResult:
@@ -80,6 +96,7 @@ class HybridSearch:
         prism_engine: Any = None,
         novelty_retrieval_boost: float = 0.0,
         potential_retrieval_boost: float = 0.0,
+        deep_conf_config: Any = None,
     ):
         self.repository = repository
         self.embedding_engine = embedding_engine
@@ -92,6 +109,7 @@ class HybridSearch:
         self.prism_engine = prism_engine
         self.novelty_retrieval_boost = novelty_retrieval_boost
         self.potential_retrieval_boost = potential_retrieval_boost
+        self._deep_conf = deep_conf_config
 
     async def search(
         self,
@@ -449,15 +467,97 @@ class HybridSearch:
 
         return filtered
 
-    @staticmethod
-    def _derive_memory_signals(result: HybridSearchResult) -> tuple[float, float]:
-        """Infer retrieval confidence and conflict from score agreement."""
+    def _derive_memory_signals(self, result: HybridSearchResult) -> tuple[float, float]:
+        """6-factor deepConf confidence scoring.
+
+        Factors:
+        1. retrieval_confidence -- agreement between vector and text scores
+        2. source_authority -- lifecycle state (thriving=1.0, viable=0.7, embryonic=0.4, declining=0.2)
+        3. historical_accuracy -- success/(success+failure) ratio
+        4. novelty_signal -- methodology novelty_score
+        5. provenance_strength -- number of source repos (from capability_data)
+        6. verification_history -- enrichment status from capability_data
+
+        Returns (confidence, conflict) where confidence is the weighted average
+        of all factors and conflict indicates disagreement between search modes.
+        """
+        m = result.methodology
+
+        # Read weights from deep_conf config (with defaults)
+        dc = self._deep_conf
+        w_retrieval = getattr(dc, "retrieval_weight", 0.25) if dc else 0.25
+        w_authority = getattr(dc, "authority_weight", 0.20) if dc else 0.20
+        w_accuracy = getattr(dc, "accuracy_weight", 0.20) if dc else 0.20
+        w_novelty = getattr(dc, "novelty_weight", 0.10) if dc else 0.10
+        w_provenance = getattr(dc, "provenance_weight", 0.10) if dc else 0.10
+        w_verification = getattr(dc, "verification_weight", 0.15) if dc else 0.15
+        min_critical_threshold = getattr(dc, "min_critical_threshold", 0.15) if dc else 0.15
+
+        # Factor 1: Retrieval confidence (existing logic, preserved)
         if result.source == "hybrid":
             agreement = 1.0 - min(1.0, abs(result.vector_score - result.text_score))
-            confidence = 0.50 + 0.50 * agreement
+            retrieval_conf = 0.50 + 0.50 * agreement
             conflict = 1.0 - agreement
-            return confidence, conflict
+        else:
+            primary = max(result.vector_score, result.text_score)
+            retrieval_conf = 0.30 + 0.70 * max(0.0, min(1.0, primary))
+            conflict = 0.0
 
-        primary = max(result.vector_score, result.text_score)
-        confidence = 0.30 + 0.70 * max(0.0, min(1.0, primary))
-        return confidence, 0.0
+        # Factor 2: Source authority (lifecycle state)
+        lifecycle_map = {
+            "thriving": 1.0,
+            "viable": 0.7,
+            "embryonic": 0.4,
+            "declining": 0.2,
+            "dormant": 0.1,
+            "dead": 0.0,
+        }
+        source_authority = lifecycle_map.get(m.lifecycle_state or "viable", 0.5)
+
+        # Factor 3: Historical accuracy (success/failure ratio)
+        total_uses = m.success_count + m.failure_count
+        if total_uses > 0:
+            historical_accuracy = m.success_count / total_uses
+        else:
+            historical_accuracy = 0.5  # Neutral for untested methodologies
+
+        # Factor 4: Novelty signal
+        novelty_signal = m.novelty_score if m.novelty_score is not None else 0.5
+
+        # Factor 5: Provenance strength (number of source repos)
+        source_repos_count = 0
+        cap = _extract_capability_data(m)
+        if cap:
+            source_repos = cap.get("source_repos", [])
+            if isinstance(source_repos, list):
+                source_repos_count = len(source_repos)
+        provenance_strength = min(source_repos_count / 3.0, 1.0)  # 3+ repos = max
+
+        # Factor 6: Verification history (enrichment status)
+        enrichment_map = {
+            "enriched": 1.0,
+            "merged": 0.9,
+            "partial": 0.5,
+            "seeded": 0.3,
+        }
+        enrichment_status = ""
+        if cap:
+            enrichment_status = cap.get("enrichment_status", "seeded")
+        verification_history = enrichment_map.get(enrichment_status, 0.3)
+
+        # Weighted combination
+        confidence = (
+            retrieval_conf * w_retrieval
+            + source_authority * w_authority
+            + historical_accuracy * w_accuracy
+            + novelty_signal * w_novelty
+            + provenance_strength * w_provenance
+            + verification_history * w_verification
+        )
+
+        # Conservative minimum gating: suppress if ANY critical factor is very low
+        min_critical = min(retrieval_conf, source_authority, historical_accuracy)
+        if min_critical < min_critical_threshold:
+            confidence *= 0.5  # Halve confidence for very weak critical factor
+
+        return confidence, conflict

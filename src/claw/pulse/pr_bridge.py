@@ -79,8 +79,8 @@ class PulsePRBridge:
             task_id = str(uuid.uuid4())
             await self.engine.execute(
                 """INSERT INTO tasks
-                   (id, project_id, type, title, description, status, priority, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, project_id, task_type, title, description, status, priority)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 [
                     task_id,
                     "",  # No project yet
@@ -94,12 +94,6 @@ class PulsePRBridge:
                     ),
                     "PENDING",
                     discovery.novelty_score,
-                    json.dumps({
-                        "source": "cam-pulse",
-                        "canonical_url": discovery.canonical_url,
-                        "fleet_repo_id": repo_id,
-                        "novelty_score": discovery.novelty_score,
-                    }),
                 ],
             )
 

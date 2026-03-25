@@ -814,6 +814,7 @@ class TestRetrievalBoost:
         hs.potential_retrieval_boost = 0.10
         hs.prism_engine = None
         hs._mmr_enabled = False
+        hs._deep_conf = None
 
         # Merge
         merged = hs._merge_results(
@@ -843,6 +844,7 @@ class TestRetrievalBoost:
         hs.potential_retrieval_boost = 0.0
         hs.prism_engine = None
         hs._mmr_enabled = False
+        hs._deep_conf = None
 
         merged = hs._merge_results([novel_result, plain_result], [], query="")
         scores = {r.methodology.id: r.combined_score for r in merged}

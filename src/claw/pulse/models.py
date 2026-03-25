@@ -41,4 +41,42 @@ class AssimilationResult:
     success: bool = False
     methodology_ids: list[str] = field(default_factory=list)
     findings_count: int = 0
+    head_sha: str = ""
     error: Optional[str] = None
+
+@dataclass
+class Phase1Result:
+    """Result of Phase 1 metadata check (cheap GitHub/HF API call)."""
+    canonical_url: str
+    changed: bool = False
+    pushed_at: str = ""
+    etag: str = ""
+    stars: int = 0
+    size_kb: int = 0
+    rate_limit_remaining: int = -1
+    error: str | None = None
+
+
+@dataclass
+class FreshnessResult:
+    """Result of full freshness check (Phase 1 + Phase 2 significance scoring)."""
+    canonical_url: str
+    phase1: Phase1Result | None = None
+    significance_score: float = 0.0
+    needs_refresh: bool = False
+    commits_since_mine: int = 0
+    has_new_release: bool = False
+    readme_changed: bool = False
+    error: str | None = None
+
+
+@dataclass
+class RefreshResult:
+    """Result of re-mining a stale repo."""
+    canonical_url: str
+    success: bool = False
+    new_methodology_ids: list[str] = field(default_factory=list)
+    retired_methodology_ids: list[str] = field(default_factory=list)
+    kept_methodology_ids: list[str] = field(default_factory=list)
+    head_sha: str = ""
+    error: str | None = None

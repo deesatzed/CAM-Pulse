@@ -241,6 +241,40 @@ domains = ["AI", "agents", "developer-tools", "open-source"]
 # testing = 0.15
 # static-analysis = 0.10
 
+# ── hf-mount integration ──
+# Mount HF Hub repos as local filesystems for zero-cost mining.
+# Requires hf-mount binary (https://github.com/huggingface/hf-mount).
+# Falls back to huggingface_hub snapshot_download() if unavailable.
+[pulse.hf_mount]
+enabled = true
+mount_base = "data/hf_mounts"
+cache_size_bytes = 1073741824  # 1GB per mount
+hf_token_env = "HF_TOKEN"
+fallback_to_download = true
+
+# ── Repo Freshness Monitor ──
+# Detect when previously-mined repos have significant updates.
+# Uses GitHub conditional requests (ETag/304) for zero-cost unchanged checks.
+[pulse.freshness]
+check_interval_hours = 12
+significance_commit_threshold = 20
+significance_threshold = 0.4
+github_token_env = "GITHUB_TOKEN"
+max_repos_per_check = 50
+rate_limit_buffer = 10
+
+# ---------------------------------------------------------------------------
+# deepConf — 6-factor confidence scoring
+# ---------------------------------------------------------------------------
+[deep_conf]
+retrieval_weight = 0.25
+authority_weight = 0.20
+accuracy_weight = 0.20
+novelty_weight = 0.10
+provenance_weight = 0.10
+verification_weight = 0.15
+min_critical_threshold = 0.15    # Suppress results where critical factors below this
+
 # ---------------------------------------------------------------------------
 # Self-Enhancement Pipeline
 # ---------------------------------------------------------------------------

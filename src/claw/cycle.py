@@ -1439,6 +1439,16 @@ class MicroClaw(ClawCycle):
                 task.title, agent_id, error_sig,
             )
 
+        # Record co-retrieval outcome for stigmergic link strengthening
+        if self.ctx.semantic_memory is not None and len(used_methodologies) >= 2:
+            try:
+                co_ids = [mid for mid, _ in used_methodologies]
+                await self.ctx.semantic_memory.record_co_retrieval_outcome(
+                    co_ids, success=verification.approved
+                )
+            except Exception as e:
+                logger.warning("Failed to record co-retrieval outcome: %s", e)
+
         if task.action_template_id:
             try:
                 await self.ctx.repository.update_action_template_outcome(

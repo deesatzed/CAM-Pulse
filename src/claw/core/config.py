@@ -213,6 +213,43 @@ class PulseProfileConfig(BaseModel):
     novelty_bias: dict[str, float] = Field(default_factory=dict)
 
 
+class HFMountConfig(BaseModel):
+    """hf-mount adapter configuration."""
+    enabled: bool = True
+    binary_path: str = "~/.local/bin/hf-mount"
+    mount_base: str = "data/hf_mounts"
+    cache_size_bytes: int = 1_073_741_824  # 1GB per mount
+    cache_dir: str = "/tmp/hf-mount-cache"
+    hf_token_env: str = "HF_TOKEN"
+    poll_interval_secs: int = 0  # disabled for mining (pin revision)
+    mount_timeout_secs: int = 30
+    fallback_to_download: bool = True
+
+
+class FreshnessConfig(BaseModel):
+    """Repo freshness monitor configuration."""
+    check_interval_hours: int = 12
+    significance_commit_threshold: int = 20
+    significance_release_weight: float = 0.4
+    significance_readme_weight: float = 0.2
+    significance_size_delta_pct: int = 20
+    significance_threshold: float = 0.4
+    github_token_env: str = "GITHUB_TOKEN"
+    max_repos_per_check: int = 50
+    rate_limit_buffer: int = 10
+
+
+class DeepConfConfig(BaseModel):
+    """6-factor confidence scoring weights."""
+    retrieval_weight: float = 0.25
+    authority_weight: float = 0.20
+    accuracy_weight: float = 0.20
+    novelty_weight: float = 0.10
+    provenance_weight: float = 0.10
+    verification_weight: float = 0.15
+    min_critical_threshold: float = 0.15
+
+
 class PulseConfig(BaseModel):
     """CAM-PULSE: Perpetual Unified Learning Swarm Engine configuration."""
     enabled: bool = False
@@ -236,6 +273,8 @@ class PulseConfig(BaseModel):
         "github.com framework new 2026",
     ])
     profile: PulseProfileConfig = Field(default_factory=PulseProfileConfig)
+    hf_mount: HFMountConfig = Field(default_factory=HFMountConfig)
+    freshness: FreshnessConfig = Field(default_factory=FreshnessConfig)
 
 
 class SelfEnhanceConfig(BaseModel):
@@ -282,6 +321,7 @@ class ClawConfig(BaseModel):
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     assimilation: AssimilationConfig = Field(default_factory=AssimilationConfig)
     pulse: PulseConfig = Field(default_factory=PulseConfig)
+    deep_conf: DeepConfConfig = Field(default_factory=DeepConfConfig)
     self_enhance: SelfEnhanceConfig = Field(default_factory=SelfEnhanceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)

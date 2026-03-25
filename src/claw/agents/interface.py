@@ -545,7 +545,7 @@ class AgentInterface(ABC):
         if correction is None and context is not None:
             correction = getattr(context, "correction_feedback", None)
         if correction is not None:
-            parts.append(f"\n## ⚠ Correction Required (attempt {correction.attempt_number + 1})")
+            parts.append(f"\n## Correction Required (attempt {correction.attempt_number + 1})")
             parts.append(
                 "Your previous attempt was rejected by the verification system. "
                 "You MUST fix the issues listed below. Do NOT repeat the same approach."
@@ -577,8 +577,15 @@ class AgentInterface(ABC):
             past_solutions = getattr(context, "past_solutions", None) or []
             if past_solutions:
                 knowledge_parts: list[str] = []
+                # Budget-aware: use token_budget_remaining if available
+                budget_remaining = getattr(context, "token_budget_remaining", 100_000)
+                # Reserve 75% for agent output, use 25% for knowledge (max 8000 chars)
+                max_knowledge_chars = min(int(budget_remaining * 0.25 * 4), 8000)  # ~4 chars per token
+                max_knowledge_chars = max(max_knowledge_chars, 2000)  # Floor of 2000 chars
+
                 knowledge_chars = 0
-                max_knowledge_chars = 4000
+                pointer_threshold = 1500  # Methodologies larger than this get pointers
+
                 for methodology in past_solutions:
                     if knowledge_chars >= max_knowledge_chars:
                         break
@@ -619,10 +626,25 @@ class AgentInterface(ABC):
                     sol = getattr(methodology, "solution_code", "") or ""
                     notes = getattr(methodology, "methodology_notes", "") or ""
                     pattern_text = sol or notes
-                    if pattern_text and not impl_sketch:
+
+                    # Context pointer for large methodologies
+                    mid = getattr(methodology, "id", "unknown")
+                    if pattern_text and len(pattern_text) > pointer_threshold:
+                        # Truncate with pointer for budget preservation
+                        summary = pattern_text[:600]
+                        # Check if this is an HF-sourced methodology
+                        source_repos = cap.get("source_repos", [])
+                        hf_source = next((r for r in source_repos if "huggingface.co" in r), None) if isinstance(source_repos, list) else None
+                        if hf_source:
+                            pointer = f"[TRUNCATED. Full content: hf://{hf_source}]"
+                        else:
+                            pointer = f"[TRUNCATED. Full content: methodology_id#{mid}]"
+                        section_lines.append(f"Pattern details:\n{summary}\n{pointer}")
+                    elif pattern_text and not impl_sketch:
                         section_lines.append(f"Pattern details:\n{pattern_text[:1500]}")
                     elif pattern_text and impl_sketch:
                         section_lines.append(f"Reference:\n{pattern_text[:800]}")
+
                     if section_lines:
                         section = "\n".join(section_lines)
                         if knowledge_chars + len(section) > max_knowledge_chars:

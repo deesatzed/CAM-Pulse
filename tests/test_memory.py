@@ -904,48 +904,54 @@ class TestHybridSearchSignals:
         )
 
     def test_derive_memory_signals_hybrid(self):
-        """Hybrid source with matching scores yields high confidence."""
+        """Hybrid source with matching scores yields high deepConf confidence."""
+        hs = self._make_search()
         result = HybridSearchResult(
             methodology=_make_methodology(),
             vector_score=0.8,
             text_score=0.8,
             source="hybrid",
         )
-        confidence, conflict = HybridSearch._derive_memory_signals(result)
+        confidence, conflict = hs._derive_memory_signals(result)
 
-        # Agreement = 1.0 - abs(0.8 - 0.8) = 1.0
-        # Confidence = 0.50 + 0.50 * 1.0 = 1.0
-        assert confidence == 1.0
+        # 6-factor deepConf: retrieval=1.0, authority=0.7(viable), accuracy=0.5(untested),
+        # novelty=0.5(None), provenance=0.0(no cap), verification=0.3(default)
+        # = 1.0*0.25 + 0.7*0.20 + 0.5*0.20 + 0.5*0.10 + 0.0*0.10 + 0.3*0.15 = 0.585
+        assert abs(confidence - 0.585) < 0.01
         assert conflict == 0.0
 
     def test_derive_memory_signals_hybrid_disagreement(self):
         """Hybrid source with different scores yields conflict."""
+        hs = self._make_search()
         result = HybridSearchResult(
             methodology=_make_methodology(),
             vector_score=0.9,
             text_score=0.3,
             source="hybrid",
         )
-        confidence, conflict = HybridSearch._derive_memory_signals(result)
+        confidence, conflict = hs._derive_memory_signals(result)
 
-        # Agreement = 1.0 - abs(0.9 - 0.3) = 0.4
-        # Confidence = 0.50 + 0.50 * 0.4 = 0.70
-        assert abs(confidence - 0.70) < 0.01
+        # retrieval=0.70, authority=0.7, accuracy=0.5, novelty=0.5, provenance=0.0, verification=0.3
+        # = 0.70*0.25 + 0.7*0.20 + 0.5*0.20 + 0.5*0.10 + 0.0*0.10 + 0.3*0.15 = 0.51
+        assert abs(confidence - 0.51) < 0.01
         assert abs(conflict - 0.60) < 0.01
 
     def test_derive_memory_signals_single(self):
-        """Single-source result has lower baseline confidence and zero conflict."""
+        """Single-source result with deepConf scoring."""
+        hs = self._make_search()
         result = HybridSearchResult(
             methodology=_make_methodology(),
             vector_score=0.8,
             text_score=0.0,
             source="vector",
         )
-        confidence, conflict = HybridSearch._derive_memory_signals(result)
+        confidence, conflict = hs._derive_memory_signals(result)
 
-        # primary = 0.8, confidence = 0.30 + 0.70 * 0.8 = 0.86
-        assert abs(confidence - 0.86) < 0.01
+        # retrieval=0.86, authority=0.7, accuracy=0.5, novelty=0.5, provenance=0.0, verification=0.3
+        # = 0.86*0.25 + 0.7*0.20 + 0.5*0.20 + 0.5*0.10 + 0.0*0.10 + 0.3*0.15 = 0.55
+        assert abs(confidence - 0.55) < 0.01
         assert conflict == 0.0
+
 
     def test_summarize_signals_empty(self):
         """Empty results yield zero signals."""

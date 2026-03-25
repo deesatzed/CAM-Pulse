@@ -185,6 +185,7 @@ class ClawFactory:
             prism_engine=prism_engine,
             novelty_retrieval_boost=config.assimilation.novelty_retrieval_boost,
             potential_retrieval_boost=config.assimilation.potential_retrieval_boost,
+            deep_conf_config=config.deep_conf,
         )
         semantic_memory = SemanticMemory(
             repository=repository,
