@@ -262,6 +262,15 @@ class ActionTemplate(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class MetricExpectation(BaseModel):
+    """A single measurable metric that the build must satisfy."""
+    name: str
+    metric: str  # "min_test_count", "min_coverage_pct", "max_files_changed", "min_files_changed"
+    operator: str = "gte"  # "gte", "lte", "eq", "gt", "lt"
+    value: float = 0.0
+    hard: bool = True  # True = violation blocks approval; False = recommendation only
+
+
 class ExpectationContract(BaseModel):
     """User-visible contract for what counts as a useful result."""
     goal: str
@@ -270,6 +279,7 @@ class ExpectationContract(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     non_goals: list[str] = Field(default_factory=list)
     validation_signals: list[str] = Field(default_factory=list)
+    metric_expectations: list[MetricExpectation] = Field(default_factory=list)
 
 
 class ExpectationAssessment(BaseModel):

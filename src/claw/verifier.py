@@ -4,7 +4,7 @@ Adapted from ralfed's Sentinel agent. Performs a separate audit pass on any
 agent's TaskOutcome. If any check fails, the outcome is rejected and
 violations are fed back to the agent for retry.
 
-7 Checks:
+7 Checks + Metric Enforcement:
 1. Dependency Jail — blocks unauthorized package imports in diff
 2. Style Match — verifies code follows project conventions
 3. Chaos Check — verifies edge case handling (no bare except, no eval/exec, no hardcoded credentials)
@@ -12,6 +12,8 @@ violations are fed back to the agent for retry.
 5. Drift Alignment — semantic similarity between task intent and output (using EmbeddingEngine)
 6. Claim Validation — detects and verifies unsubstantiated claims
 7. LLM Deep Review — optional LLM pass when all rule-based checks pass
++  Minimum Test Count — rejects builds with fewer tests than spec requires
++  Metric Expectations — enforces min_coverage_pct, min/max_files_changed, etc.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from typing import Any, Optional
 
 from claw.core.config import PromptLoader
 from claw.core.models import (
+    MetricExpectation,
     TaskContext,
     TaskOutcome,
     VerificationResult,
@@ -249,6 +252,25 @@ class Verifier:
                     "check": "minimum_test_count",
                     "detail": f"Insufficient tests: {tests_after} found, {min_required} required by spec.",
                 })
+
+        # Run coverage measurement if coverage metrics are expected
+        metrics = self._collect_metric_expectations(task_context)
+        has_coverage_metric = any(m.metric == "min_coverage_pct" for m in metrics)
+        if has_coverage_metric and workspace_dir and len(all_violations) == 0:
+            cov_output = await self._run_coverage(workspace_dir)
+            if cov_output:
+                full_test_output = full_test_output + "\n" + cov_output
+
+        # Check metric expectations (coverage, file count, etc.)
+        if len(all_violations) == 0:
+            metric_violations, metric_recs = self._check_metric_expectations(
+                task_context,
+                tests_after=tests_after,
+                test_output=full_test_output,
+                files_changed=outcome.files_changed,
+            )
+            all_violations.extend(metric_violations)
+            all_recommendations.extend(metric_recs)
 
         # Run explicit acceptance checks (if provided) after tests pass.
         acceptance_checks = list(task_context.task.acceptance_checks)
@@ -933,6 +955,51 @@ class Verifier:
 
         return passed, full_output, test_count
 
+    async def _run_coverage(self, workspace_dir: str) -> Optional[str]:
+        """Run pytest with --cov to measure code coverage.
+
+        Returns the coverage output text, or None if coverage could not be measured.
+        """
+        workspace = Path(workspace_dir)
+
+        # Only run for Python projects
+        if not any((workspace / f).exists() for f in ("pyproject.toml", "setup.py", "requirements.txt")):
+            return None
+
+        # Detect the package name for --cov argument
+        cov_target = None
+        for candidate in ("app", "src"):
+            if (workspace / candidate).is_dir():
+                cov_target = candidate
+                break
+        if cov_target is None:
+            # Try any directory with __init__.py
+            for p in workspace.iterdir():
+                if p.is_dir() and (p / "__init__.py").exists() and p.name not in ("tests", "test"):
+                    cov_target = p.name
+                    break
+        if cov_target is None:
+            return None
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pytest",
+                f"--cov={cov_target}",
+                "--cov-report=term",
+                "--tb=no",
+                "-q",
+                cwd=str(workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode("utf-8", errors="replace") + stderr.decode("utf-8", errors="replace")
+            logger.info("Coverage run complete for %s (exit code %d)", workspace_dir, proc.returncode)
+            return output
+        except Exception as e:
+            logger.warning("Coverage measurement failed: %s", e)
+            return None
+
     @staticmethod
     def _detect_test_command(workspace: Path) -> tuple[Optional[str], list[str]]:
         """Detect the right test runner for a project.
@@ -1174,3 +1241,132 @@ class Verifier:
 
         # Fallback to config
         return self.min_test_count
+
+    # ===================================================================
+    # Metric expectations
+    # ===================================================================
+
+    @staticmethod
+    def _parse_coverage_pct(test_output: str) -> Optional[float]:
+        """Extract total coverage percentage from pytest-cov output.
+
+        Looks for the TOTAL line: 'TOTAL   101   14   86%'
+        """
+        match = re.search(r'^TOTAL\s+\d+\s+\d+\s+(\d+)%', test_output, re.MULTILINE)
+        if match:
+            return float(match.group(1))
+        return None
+
+    @staticmethod
+    def _extract_metrics_from_description(desc: str) -> list["MetricExpectation"]:
+        """Auto-extract metric expectations from task description text.
+
+        Recognizes patterns like:
+        - "greater than 90 percent coverage" / ">90% coverage"
+        - "at least 20 tests" (handled separately by _extract_minimum_test_requirement)
+        - "no more than 500 lines"
+        """
+        metrics: list[MetricExpectation] = []
+
+        # Coverage: "greater than N percent coverage" / ">N% coverage" / "at least N% coverage"
+        cov_patterns = [
+            r'(?:greater\s+than|more\s+than|>\s*|above)\s*(\d+)\s*(?:percent|%)\s*coverage',
+            r'(?:at\s+least|minimum|>=?\s*)\s*(\d+)\s*(?:percent|%)\s*coverage',
+            r'coverage\s*(?:target|goal|>=?|of\s+at\s+least)\s*[:=]?\s*(\d+)\s*(?:percent|%)',
+        ]
+        for pat in cov_patterns:
+            m = re.search(pat, desc, re.IGNORECASE)
+            if m:
+                metrics.append(MetricExpectation(
+                    name="code_coverage",
+                    metric="min_coverage_pct",
+                    operator="gte",
+                    value=float(m.group(1)),
+                    hard=True,
+                ))
+                break
+
+        return metrics
+
+    def _collect_metric_expectations(self, task_context: "TaskContext") -> list["MetricExpectation"]:
+        """Gather metric expectations from contract and task description."""
+        metrics: list[MetricExpectation] = []
+
+        # From expectation_contract.metric_expectations (explicit)
+        contract = task_context.expectation_contract
+        if contract is not None and hasattr(contract, "metric_expectations"):
+            metrics.extend(contract.metric_expectations)
+
+        # Auto-extracted from description (implicit)
+        desc = task_context.task.description or ""
+        auto = self._extract_metrics_from_description(desc)
+        # Don't duplicate — skip auto metrics whose metric type is already explicit
+        explicit_types = {m.metric for m in metrics}
+        for m in auto:
+            if m.metric not in explicit_types:
+                metrics.append(m)
+
+        return metrics
+
+    @staticmethod
+    def _evaluate_metric(
+        expectation: "MetricExpectation",
+        actual: float,
+    ) -> bool:
+        """Evaluate a single metric against its expectation."""
+        op = expectation.operator
+        val = expectation.value
+        if op == "gte":
+            return actual >= val
+        elif op == "gt":
+            return actual > val
+        elif op == "lte":
+            return actual <= val
+        elif op == "lt":
+            return actual < val
+        elif op == "eq":
+            return actual == val
+        return True
+
+    def _check_metric_expectations(
+        self,
+        task_context: "TaskContext",
+        tests_after: Optional[int],
+        test_output: str,
+        files_changed: list[str],
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        """Evaluate all metric expectations and return violations/recommendations."""
+        violations: list[dict[str, str]] = []
+        recommendations: list[str] = []
+
+        metrics = self._collect_metric_expectations(task_context)
+        if not metrics:
+            return violations, recommendations
+
+        # Build a map of available actuals
+        actuals: dict[str, Optional[float]] = {
+            "min_test_count": float(tests_after) if tests_after is not None else None,
+            "min_coverage_pct": self._parse_coverage_pct(test_output),
+            "min_files_changed": float(len(files_changed)),
+            "max_files_changed": float(len(files_changed)),
+        }
+
+        for m in metrics:
+            actual = actuals.get(m.metric)
+            if actual is None:
+                recommendations.append(
+                    f"Metric '{m.name}' ({m.metric}) could not be measured — skipped."
+                )
+                continue
+
+            if not self._evaluate_metric(m, actual):
+                detail = (
+                    f"Metric '{m.name}' failed: actual={actual:.0f}, "
+                    f"expected {m.operator} {m.value:.0f}."
+                )
+                if m.hard:
+                    violations.append({"check": "metric_expectation", "detail": detail})
+                else:
+                    recommendations.append(detail)
+
+        return violations, recommendations
