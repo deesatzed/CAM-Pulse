@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,028 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
+**2,348 tests** | **122 learned methodologies** | **11 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
 
@@ -36,7 +36,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  1,750+ methodologies with
+                    |  SQLite + Vectors  |  122 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -59,7 +59,8 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------v----------+
                     |  Verification      |  7 checks + metric gates:
                     |  & Attribution     |  tests, coverage, drift,
-                    +---------+----------+  placeholders, claims, style
+                    +---------+----------+  placeholders, claims, style,
+                              |             MetricExpectation enforcement
                               |
                      fails?───┘
                        │ yes
@@ -76,6 +77,13 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     |  Self-Enhancement  |  Clone → enhance copy →
                     |  Pipeline          |  7-gate validation →
                     +---------+----------+  atomic swap + backup
+                              |
+              repo knowledge going stale?
+                              │ yes
+                    +---------v----------+
+                    |  Freshness Monitor |  ETag caching, significance
+                    |  (Phase 1 + 2)     |  scoring, auto re-mine
+                    +--------------------+
 ```
 
 We haven't found another tool that does all of this. Copilot, Cursor, Windsurf, and Aider generate code — but they don't discover new repos, don't remember patterns across sessions, and don't prove which pattern influenced which output.
@@ -146,7 +154,7 @@ $ cam pulse scan --keywords "AI agent framework"
 | `egeuysall/brain` | 6 | Atomic write pattern, tiered knowledge retrieval |
 | + 11 more repos | 52 | Various patterns across middleware, auth, state machines |
 
-Then 9 prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/heroui, Kludex/starlette, pascalorg/editor, and more) added **52 more methodologies** via `cam pulse ingest`.
+Then prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/heroui, Kludex/starlette, pascalorg/editor, claude-peers-mcp, MegaMemory) added **36 more methodologies** via `cam pulse ingest`.
 
 ---
 
@@ -155,7 +163,7 @@ Then 9 prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/herou
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 1,750+ patterns | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 122 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -233,7 +241,94 @@ CAM can improve itself. After mining or PULSE ingestion accumulates enough new k
 
 Protected files (`verifier.py`, `factory.py`, `engine.py`, `schema.sql`, `config.py`) require human review even when all gates pass. Cooldown period prevents runaway self-modification.
 
-Proven end-to-end: clone → enhance (1 task, quality 0.97) → all 7 gates PASS → 2,028/2,028 tests pass on enhanced copy.
+Proven end-to-end: clone → enhance (1 task, quality 0.97) → all 7 gates PASS → 2,348/2,348 tests pass on enhanced copy.
+
+### Inner Correction Loop
+When verification catches correctable failures (test failures, insufficient coverage, placeholder code), CAM doesn't just log the failure — it retries with full context:
+
+1. **Snapshot** — Full byte-level workspace backup before each attempt (`cycle.py:_snapshot_workspace_content()`)
+2. **Verify** — Run all checks (tests, drift, coverage, metric expectations)
+3. **Diagnose** — Classify failure: correctable (test failures, placeholders, drift) vs. infrastructure (API timeout, budget)
+4. **Restore** — Byte-level workspace rollback to pre-attempt state
+5. **Re-prompt** — Agent receives a `## Correction Required` section with specific violations, test output, and failure reasons
+6. **Retry** — Up to `max_correction_attempts` (default 3) before learning from the failure
+
+Proven: Run 1 triggered correction 3x (workspace restore + feedback injection working). Run 2 succeeded first attempt: 10/10 tests, drift 0.868, quality 0.76, 2 PULSE patterns injected, lifecycle transition embryonic→viable.
+
+### Metric Expectations Enforcement
+The verifier auto-extracts structured metric targets from natural language specs:
+
+- `"greater than 90 percent coverage"` → `MetricExpectation(min_coverage_pct, gte, 90, hard=True)`
+- `"at least 20 tests"` → `MetricExpectation(min_test_count, gte, 20, hard=True)`
+- Hard expectations block approval; soft expectations generate recommendations
+
+Supported metrics: `min_coverage_pct`, `min_test_count`, `min_files_changed`, `max_files_changed`. Operators: `gte/gt/lte/lt/eq`. Coverage extraction parses `TOTAL` line from `pytest --cov` output.
+
+### HuggingFace Model Repository Mining
+CAM mines HuggingFace model repos alongside GitHub. The `HFMountAdapter` (`pulse/hf_adapter.py`) classifies repos into 3 tiers and applies size-appropriate mining strategies:
+
+| Tier | Size | Strategy | What's Mined |
+|------|------|----------|-------------|
+| **micro** | < 100 MB | Full clone | README, config, code — complete extraction |
+| **standard** | 100 MB – 2 GB | Metadata-only | README + config.json via HF Hub API (no weights downloaded) |
+| **large** | > 2 GB | Metadata-only | Same API approach, avoids multi-GB weight downloads |
+
+```bash
+# Ingest a HuggingFace model repo
+cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
+
+# Works transparently — same command, different URL
+cam pulse ingest https://github.com/bytedance/deer-flow
+```
+
+### Repo Freshness Monitor
+Previously-mined repos go stale when they ship major rewrites. CAM detects this automatically:
+
+**Phase 1 — Cheap metadata check** (1 GitHub API call per repo, 0 if ETag-cached):
+- `GET /repos/{owner}/{repo}` with `If-None-Match: {stored_etag}` — 304s cost 0 rate limit
+- Compare `pushed_at` timestamp against stored value
+
+**Phase 2 — Significance scoring** (only for changed repos):
+- Commit count since last mine (`/compare/{stored_sha}...HEAD` → `ahead_by`)
+- New releases (`/releases/latest`)
+- README changes (`/commits?path=README.md&since=...`)
+- Repo size delta (stored `size_at_mine` vs. current)
+
+```
+significance = commits * 0.3 + new_release * 0.4 + readme_changed * 0.2 + size_delta * 0.1
+```
+
+Only repos with `significance >= 0.4` trigger re-mine. Old methodologies transition to `declining`; new ones are stored normally.
+
+```bash
+cam pulse freshness           # Check all tracked repos
+cam pulse freshness --verbose # Show significance scores
+cam pulse refresh <URL>       # Re-mine a specific repo
+cam pulse refresh --all       # Re-mine all stale repos
+```
+
+### deepConf 6-Factor Confidence Scoring
+Every methodology retrieval gets a confidence score beyond simple cosine similarity:
+
+| Factor | Weight | What It Measures |
+|--------|--------|-----------------|
+| Cosine similarity | 0.30 | Semantic match to query |
+| BM25 text match | 0.20 | Keyword relevance |
+| Fitness score | 0.20 | Methodology track record (outcomes, lifecycle state) |
+| Freshness | 0.10 | Recency of the methodology |
+| Cross-domain synergy | 0.10 | Bonus for applying patterns across domains |
+| Source diversity | 0.10 | Bonus for patterns from underrepresented repos |
+
+Configurable via `[deep_conf]` in `claw.toml`. Weights sum to 1.0.
+
+### Co-Retrieval Stigmergic Links
+When multiple methodologies are retrieved together and the build succeeds, CAM records stigmergic links between them (`memory/semantic.py:record_co_retrieval_outcome()`). Future retrievals boost co-proven methodology pairs — patterns that work together surface together.
+
+### Safety Mitigations
+- **`--dry-run`** on all destructive PULSE commands — preview without executing
+- **Auto-backup** before self-enhancement swaps
+- **Confirmation prompts** before re-mining (which retires old methodologies)
+- **Infrastructure failure isolation** — API timeouts and rate limits never penalize methodology fitness scores
 
 ### Budget Controls (3 Layers)
 - **Per-scan**: `max_cost_per_scan_usd = 0.50`
@@ -253,7 +348,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 2,028 tests passing in under 30 seconds.
+**Verified**: Fresh clone → install → 2,348 tests passing. Zero skips with API keys configured.
 
 ### Other Install Options
 
@@ -271,6 +366,8 @@ cam --help
 | `OPENROUTER_API_KEY` | Multi-agent LLM routing | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `GOOGLE_API_KEY` | Embeddings (gemini-embedding-2-preview) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `XAI_API_KEY` | X-Scout scanning via Grok | [console.x.ai](https://console.x.ai/) |
+| `GITHUB_TOKEN` | Freshness monitor (higher rate limits) | [github.com/settings/tokens](https://github.com/settings/tokens) |
+| `HF_TOKEN` | HuggingFace model repo mining | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
 
 For **local-only mode** (Ollama/MLX-LM), no API keys are required.
 
@@ -286,12 +383,21 @@ cam pulse scan --keywords "AI agent framework"
 # Ingest a specific repo directly
 cam pulse ingest https://github.com/bytedance/deer-flow
 
+# Ingest a HuggingFace model repo (tiered mining: micro/standard/large)
+cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
+
 # Search what CAM has learned
 cam learn search "middleware chain" -v -n 10
 
 # View discovery stats
 cam pulse status
 cam pulse discoveries --limit 20
+
+# Check repo freshness — detect stale knowledge
+cam pulse freshness --verbose
+
+# Re-mine repos with significant changes
+cam pulse refresh --all
 ```
 
 ### Build with Knowledge
@@ -381,12 +487,12 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 2028 passed, 1 skipped
+# → 2348 passed, 0 skipped (with API keys configured)
 ```
 
 ---
 
-## 8 Proven Showpieces
+## 11 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
@@ -400,6 +506,9 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 | 6 | **PULSE Usage Proof** | Retrieved=3, Used=3, Attributed=3 — knowledge applied with full provenance |
 | 7 | **Multi-Pass Mining** | 3-pass pipeline: classify → overlap → extract with adaptive token budget |
 | 8 | **Plugin Event System** | 3 repos → 1 cohesive module. 258 lines. 5/5 tests. Full attribution chain. |
+| 9 | **Inner Correction Loop** | Workspace restore + agent re-prompt with violations. Proven: 3 retries → success on next run. |
+| 10 | **Metric Expectations** | Natural language → structured gates. "90% coverage" auto-extracted and enforced. 51 tests. |
+| 11 | **Repo Freshness Monitor** | ETag caching + significance scoring. Phase 1 costs 0 rate limit for unchanged repos. |
 
 Run any showpiece:
 ```bash
@@ -416,21 +525,29 @@ Run any showpiece:
 
 ```
 src/claw/
-  cli.py              # Typer CLI — cam evaluate, mine, create, validate, pulse, self-enhance ...
+  cli.py              # Typer CLI — 66 commands across evaluate, mine, create, validate, pulse, self-enhance
   miner.py            # 3-pass mining pipeline + _repair_json()
+  cycle.py            # Inner correction loop: act → verify → restore → re-prompt (up to 3x)
+  verifier.py         # 7 checks + MetricExpectation enforcement (coverage, test count, file count)
   reconstruct.py      # Self-enhancement: clone → enhance → validate → swap
   validation_gate.py  # 7-gate validation (syntax, config, import, DB, CLI, pytest, diff)
+  budget.py           # 3-layer budget enforcement (per-scan, per-day, per-agent)
   agents/
     interface.py      # Multi-agent routing via OpenRouter (Claude/Codex/Gemini/Grok)
-    cycle.py          # Knowledge injection + build cycle
   pulse/
     scout.py          # X-Scout: xAI Responses API + x_search
     novelty.py        # Embedding-based novelty filter
     orchestrator.py   # Scan orchestration + circuit breaker
     assimilator.py    # Clone → serialize → mine → store pipeline
+    freshness.py      # Repo freshness monitor: ETag caching + significance scoring + auto re-mine
+    hf_adapter.py     # HuggingFace model repo mining (micro/standard/large tier strategies)
+    pr_bridge.py      # PR-based fleet registration and enhancement queuing
     models.py         # Pydantic models for PULSE data
+  memory/
+    hybrid_search.py  # BM25 text + cosine vector + deepConf 6-factor confidence scoring
+    semantic.py       # Semantic memory, co-retrieval stigmergic links, outcome feedback
   db/
-    engine.py         # SQLite + sqlite-vec (WAL mode)
+    engine.py         # SQLite + sqlite-vec (WAL mode), 12 migrations
   evolution/
     assimilation.py   # Methodology lifecycle management
   embeddings/
@@ -472,6 +589,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 2**: Local-First — Docker, Ollama, MLX-LM, torch-free install | **Complete** |
 | **Phase 3**: PULSE — X-Scout discovery, multi-pass mining, knowledge injection, attribution | **Complete** |
 | **Phase 3.5**: Self-Enhancement — Clone → enhance → 7-gate validate → atomic swap | **Complete** |
+| **Phase 3.75**: Resilience — Inner correction loop, metric expectations, HF-mount, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations | **Complete** |
 | **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
 | **Phase 5**: Premier — Community rollout, fleet-scale self-enhancement | Planned |
 
@@ -497,9 +615,8 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ## Development
 
 ```bash
-# Run tests
+# Run tests (2,348 passing, 0 skipped with API keys)
 pytest tests/ -q
-# → 2028 passed, 1 skipped (< 12 seconds)
 
 # CLI help
 cam --help

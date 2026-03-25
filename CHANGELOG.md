@@ -7,6 +7,19 @@ All notable changes to CAM-PULSE are documented here.
 ## [Unreleased]
 
 ### Added
+- **Inner correction loop** — When verification catches correctable failures, the workspace is byte-level restored and the agent is re-prompted with specific violations + test output. Up to 3 attempts per task. (`cycle.py:_act_with_correction()`, `CorrectionFeedback` model)
+  - Workspace snapshot/restore: `_snapshot_workspace_content()` / `_restore_workspace()`
+  - Failure classifier: `_is_correctable_failure()` (test failures, placeholders, drift = correctable; budget, HTTP = infrastructure)
+  - Proven: Run 1 triggered 3 correction retries; Run 2 succeeded first attempt (10/10 tests, drift 0.868, quality 0.76)
+  - 28 tests in `test_cycle_correction.py`
+- **Metric expectations enforcement** — Verifier auto-extracts structured metric targets from natural language specs (`"greater than 90 percent coverage"` → `MetricExpectation(min_coverage_pct, gte, 90, hard=True)`). Supported: `min_coverage_pct`, `min_test_count`, `min_files_changed`, `max_files_changed`. Hard expectations block approval; soft generate recommendations. (`verifier.py:_check_metric_expectations()`, 51 tests in `test_verifier_metrics.py` + `test_verifier_min_tests.py`)
+- **HuggingFace model repository mining** — `HFMountAdapter` (`pulse/hf_adapter.py`) classifies HF repos into micro/standard/large tiers with size-appropriate mining strategies. Micro (< 100 MB) gets full clone; larger repos use metadata-only API approach to avoid downloading weights. `cam pulse ingest https://huggingface.co/...` works transparently alongside GitHub URLs. (81 tests in `test_hf_adapter.py`)
+- **Repo freshness monitor** — Two-phase staleness detection for previously-mined repos. Phase 1: ETag-cached metadata check (0 rate limit cost for unchanged repos). Phase 2: Significance scoring from commits, releases, README changes, and size delta. Only repos with significance ≥ 0.4 trigger re-mine. (`pulse/freshness.py`, `cam pulse freshness`, `cam pulse refresh`)
+- **`size_at_mine` column** — Tracks repo size at mine time in `pulse_discoveries`, enabling size-delta computation in freshness scoring. Migration 12 adds the column; `seed_existing_repos()` captures size from GitHub API.
+- **deepConf 6-factor confidence scoring** — Methodology retrieval scored by cosine similarity (0.30), BM25 text match (0.20), fitness (0.20), freshness (0.10), cross-domain synergy (0.10), source diversity (0.10). Configurable via `[deep_conf]` in `claw.toml`. (`memory/hybrid_search.py:_deep_conf_score()`)
+- **Co-retrieval stigmergic links** — When co-retrieved methodologies lead to successful builds, CAM records links between them. Future retrievals boost co-proven pairs. (`memory/semantic.py:record_co_retrieval_outcome()`, `MethodologyLink` model with `co_retrieval` link type)
+- **Safety mitigations** — `--dry-run` on destructive PULSE commands, auto-backup before self-enhancement swaps, confirmation prompts before re-mining, infrastructure failure isolation (API timeouts never penalize methodology fitness)
+- **PR Bridge tests** — 42 tests covering `PulsePRBridge` construction, URL parsing, threshold boundaries, config interaction. (92% coverage on `pr_bridge.py`)
 - **Knowledge injection into agent prompts** — Full methodology content (problem_description, implementation_sketch, solution_code, activation_triggers) injected as `## Retrieved Knowledge` section in agent prompts. Proven: Retrieved=3, Used=3, Attributed=3, 4/4 tests passing.
 - **Multi-pass mining pipeline** — Three-pass approach replaces monolithic single-LLM-call mining:
   - Pass 1: Rule-based domain classification (10 categories, keyword matching, zero cost)
@@ -45,14 +58,20 @@ All notable changes to CAM-PULSE are documented here.
 - Methodologies no longer penalized for infrastructure failures (timeout, no_api_key, HTTP errors)
 - OpenRouter `content: null` crash in `parse_findings()` — null guard added
 
+### Fixed
+- **`_execute_once()` correction loop was dead code** — `cli.py:4375` now calls `_act_with_correction()` instead of bare `act()+verify()`
+- **Verifier test count always reported 0** — Removed `-q` flag from pytest args in `verifier.py:933,937` that suppressed the summary line needed by `_parse_test_count()` regex
+- **`pr_bridge.py` schema mismatch** — INSERT used `type` and `metadata` columns that don't exist in schema; corrected to `task_type`, removed `metadata`
+- **pytest-asyncio 0.23.x incompatible with pytest 9.x** — Bumped minimum to `>=0.24.0` in pyproject.toml (AttributeError: 'Package' object has no attribute 'obj')
+
 ### Changed
-- Test count: 1,735 -> 1,868 passing (133 new tests)
-- Methodology count: ~1,700 -> 1,800+ (86 from live PULSE scan + 52 from prescreened ingestion)
+- Test count: 1,735 → 2,348 passing (613 new tests across 70 test files)
+- Methodology count: 122 (86 from live PULSE scan + 36 from prescreened ingestion)
+- `MicroClaw.run_cycle()` override replaces base class's separate act()+verify() with `_act_with_correction()` loop
 - `mine_repo()` refactored from single-pass to three-pass pipeline
 - `serialize_repo()` now orders files by priority tier (README first, configs second, core source third)
-- Landing page updated: 8 showpieces, 1,868 tests, knowledge application proof, multi-pass mining, cross-repo synthesis
-- X/Twitter announcement thread rewritten with knowledge application proof
-- Phase 3 status: Complete
+- Source: 73 Python modules, 63,684 LOC; Tests: 70 files, 35,911 LOC
+- Phase 3.75 (Resilience) status: Complete
 
 ---
 
