@@ -51,6 +51,9 @@ class MemoryConfig(BaseModel):
     mmr_lambda: float = 0.7
     vector_weight: float = 0.6
     text_weight: float = 0.4
+    attribution_embedding_enabled: bool = False
+    attribution_embedding_weight: float = 0.6
+    attribution_embedding_threshold: float = 0.35
 
 
 class OrchestratorConfig(BaseModel):

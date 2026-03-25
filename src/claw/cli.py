@@ -81,6 +81,11 @@ self_enhance_app = typer.Typer(
     help="Self-enhancement pipeline — clone, enhance, validate, swap",
     no_args_is_help=True,
 )
+ab_test_app = typer.Typer(
+    name="ab-test",
+    help="A/B knowledge ablation testing — prove whether knowledge injection improves outcomes",
+    no_args_is_help=True,
+)
 
 _FOUNDATION_CHARTER = [
     {
@@ -7967,6 +7972,7 @@ app.add_typer(doctor_app, name="doctor")
 app.add_typer(kb_app, name="kb")
 app.add_typer(pulse_app, name="pulse")
 app.add_typer(self_enhance_app, name="self-enhance")
+app.add_typer(ab_test_app, name="ab-test")
 
 
 async def _kb_engine():
@@ -9728,6 +9734,132 @@ def self_enhance_rollback(
     console.print(f"Rolling back from: {backup_path}")
     pipeline.rollback(backup_path)
     console.print("[green]Rollback complete.[/green]")
+
+
+# ---------------------------------------------------------------------------
+# A/B Knowledge Ablation Test Commands
+# ---------------------------------------------------------------------------
+
+
+@ab_test_app.command(name="start")
+def ab_test_start() -> None:
+    """Schedule the knowledge ablation A/B test.
+
+    Control = no knowledge injection, Variant = with knowledge (current behavior).
+    50/50 blind routing via Bayesian framework, needs 20+ samples per variant.
+    """
+    import asyncio
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.evolution.prompt_evolver import PromptEvolver
+
+    async def _run():
+        cfg = load_config()
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        await engine.apply_migrations()
+        await engine.initialize_schema()
+
+        evolver = PromptEvolver(engine)
+        result = await evolver.schedule_ab_test(
+            prompt_name="knowledge_ablation",
+            control_content="ablated",
+            variant_content="with_knowledge",
+            agent_id=None,
+        )
+        await engine.close()
+        return result
+
+    result = asyncio.run(_run())
+    console.print("[green]A/B knowledge ablation test scheduled.[/green]")
+    console.print(f"  Control (no knowledge): {result['control_id']}")
+    console.print(f"  Variant (with knowledge): {result['variant_id']}")
+    console.print("[dim]50/50 blind routing active. Run tasks to collect samples.[/dim]")
+
+
+@ab_test_app.command(name="status")
+def ab_test_status() -> None:
+    """Show current A/B test results with Bayesian scores."""
+    import asyncio
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.evolution.prompt_evolver import PromptEvolver
+
+    async def _run():
+        cfg = load_config()
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        await engine.apply_migrations()
+        await engine.initialize_schema()
+
+        evolver = PromptEvolver(engine)
+        result = await evolver.evaluate_test(
+            prompt_name="knowledge_ablation", agent_id=None
+        )
+        await engine.close()
+        return result
+
+    result = asyncio.run(_run())
+
+    from rich.table import Table
+
+    table = Table(title="Knowledge Ablation A/B Test")
+    table.add_column("Variant", style="bold")
+    table.add_column("Samples", justify="right")
+    table.add_column("Successes", justify="right")
+    table.add_column("Avg Quality", justify="right")
+    table.add_column("Bayesian Score", justify="right")
+    table.add_column("Active", justify="center")
+
+    for label in ("control", "variant"):
+        data = result.get(label, {})
+        if data:
+            display_name = "No Knowledge" if label == "control" else "With Knowledge"
+            table.add_row(
+                display_name,
+                str(data.get("sample_count", 0)),
+                str(data.get("success_count", 0)),
+                f"{data.get('avg_quality_score', 0):.3f}",
+                f"{data.get('bayesian_score', 0):.4f}",
+                "Y" if data.get("is_active") else "N",
+            )
+
+    console.print(table)
+
+    ready = result.get("ready", False)
+    winner = result.get("winner")
+    margin = result.get("margin", 0)
+
+    if ready and winner:
+        winner_name = "With Knowledge" if winner == "variant" else "No Knowledge"
+        console.print(f"\n[green]Winner: {winner_name} (margin={margin:.4f})[/green]")
+    elif ready:
+        console.print(f"\n[yellow]Inconclusive (margin={margin:.4f})[/yellow]")
+    else:
+        console.print("\n[dim]Not enough samples yet (need 20 per variant)[/dim]")
+
+
+@ab_test_app.command(name="stop")
+def ab_test_stop() -> None:
+    """Remove the knowledge ablation test (delete variant rows)."""
+    import asyncio
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+
+    async def _run():
+        cfg = load_config()
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        await engine.apply_migrations()
+        await engine.initialize_schema()
+        await engine.execute(
+            "DELETE FROM prompt_variants WHERE prompt_name = ?",
+            ["knowledge_ablation"],
+        )
+        await engine.close()
+
+    asyncio.run(_run())
+    console.print("[green]Knowledge ablation test stopped and data cleared.[/green]")
 
 
 def app_main() -> None:

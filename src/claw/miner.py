@@ -852,6 +852,7 @@ class RepoMiner:
             "risks": [finding.augmentation_notes.strip()] if finding.augmentation_notes.strip() else [],
             "composition_candidates": [],
             "evidence": [f"source_file:{path}" for path in finding.source_files],
+            "license_type": getattr(self, "_current_mine_metadata", {}).get("license_type", ""),
         }
 
     def _get_prompt_template(self) -> str:
@@ -992,6 +993,7 @@ class RepoMiner:
         repo_path: str | Path,
         repo_name: str,
         target_project_id: str,
+        metadata: dict[str, str] | None = None,
     ) -> RepoMiningResult:
         """Mine a single repository for patterns and features.
 
@@ -999,10 +1001,13 @@ class RepoMiner:
             repo_path: Path to the repo root.
             repo_name: Human-readable repo name.
             target_project_id: Project ID for storing findings.
+            metadata: Optional metadata to inject into stored methodologies
+                (e.g., license_type from the assimilation pipeline).
 
         Returns:
             RepoMiningResult with findings and metadata.
         """
+        self._current_mine_metadata = metadata or {}
         start = time.monotonic()
         repo_path = Path(repo_path)
 

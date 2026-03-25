@@ -351,6 +351,7 @@ CREATE TABLE IF NOT EXISTS pulse_discoveries (
     freshness_status TEXT DEFAULT 'unknown',
     source_kind TEXT DEFAULT 'github',
     size_at_mine INTEGER,
+    license_type TEXT,
     UNIQUE(canonical_url)
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_disc_status ON pulse_discoveries(status);

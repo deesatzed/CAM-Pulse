@@ -215,10 +215,18 @@ def _tokenize_usage_attribution_text(text: str) -> set[str]:
     return {t for t in tokens if t not in stopwords}
 
 
-def _infer_used_methodology_ids(
+async def _infer_used_methodology_ids(
     context_brief: Optional[ContextBrief],
     outcome: TaskOutcome,
+    embedding_engine: Optional[Any] = None,
+    memory_config: Optional[Any] = None,
 ) -> list[tuple[str, float]]:
+    """Infer which methodologies contributed to the outcome.
+
+    Pass 1 (always): lexical token overlap (free, no API call).
+    Pass 2 (opt-in): embedding cosine similarity for methodologies
+        that didn't reach the lexical threshold.
+    """
     if context_brief is None or not context_brief.past_solutions:
         return []
 
@@ -234,26 +242,91 @@ def _infer_used_methodology_ids(
     if not outcome_tokens:
         return []
 
-    ranked: list[tuple[str, float]] = []
+    # --- Pass 1: lexical token overlap ---
+    lexical_matched: dict[str, float] = {}
+    lexical_unmatched: list[Any] = []
+
     for meth in context_brief.past_solutions:
-        meth_tokens = _tokenize_usage_attribution_text(
-            " ".join(
-                [
-                    meth.problem_description or "",
-                    meth.methodology_notes or "",
-                    " ".join(meth.tags or []),
-                    " ".join(meth.files_affected or []),
-                ]
-            )
+        meth_text = " ".join(
+            [
+                meth.problem_description or "",
+                meth.methodology_notes or "",
+                " ".join(meth.tags or []),
+                " ".join(meth.files_affected or []),
+            ]
         )
+        meth_tokens = _tokenize_usage_attribution_text(meth_text)
         if not meth_tokens:
+            lexical_unmatched.append(meth)
             continue
         overlap = outcome_tokens & meth_tokens
         if not overlap:
+            lexical_unmatched.append(meth)
             continue
         score = len(overlap) / max(1, len(meth_tokens))
         if len(overlap) >= 2 or score >= 0.08:
-            ranked.append((meth.id, round(score, 3)))
+            lexical_matched[meth.id] = round(score, 3)
+        else:
+            lexical_unmatched.append(meth)
+
+    # --- Pass 2: embedding cosine (opt-in) ---
+    embedding_scores: dict[str, float] = {}
+    if (
+        embedding_engine is not None
+        and memory_config is not None
+        and getattr(memory_config, "attribution_embedding_enabled", False)
+    ):
+        weight = getattr(memory_config, "attribution_embedding_weight", 0.6)
+        threshold = getattr(memory_config, "attribution_embedding_threshold", 0.35)
+
+        try:
+            outcome_embedding = embedding_engine.encode(outcome_text[:12000])
+
+            for meth in lexical_unmatched:
+                meth_text = " ".join(
+                    [
+                        meth.problem_description or "",
+                        meth.methodology_notes or "",
+                        " ".join(meth.tags or []),
+                    ]
+                )
+                if not meth_text.strip():
+                    continue
+                meth_embedding = embedding_engine.encode(meth_text[:12000])
+                cosine = embedding_engine.cosine_similarity(
+                    outcome_embedding, meth_embedding
+                )
+                if cosine >= threshold:
+                    embedding_scores[meth.id] = round(cosine * weight, 3)
+
+            # Also compute embedding scores for lexically matched to potentially upgrade
+            for meth in context_brief.past_solutions:
+                if meth.id in lexical_matched and meth.id not in embedding_scores:
+                    meth_text = " ".join(
+                        [
+                            meth.problem_description or "",
+                            meth.methodology_notes or "",
+                            " ".join(meth.tags or []),
+                        ]
+                    )
+                    if not meth_text.strip():
+                        continue
+                    meth_embedding = embedding_engine.encode(meth_text[:12000])
+                    cosine = embedding_engine.cosine_similarity(
+                        outcome_embedding, meth_embedding
+                    )
+                    embedding_scores[meth.id] = round(cosine * weight, 3)
+        except Exception as e:
+            logger.warning("Embedding attribution pass failed: %s", e)
+
+    # --- Combine scores ---
+    all_ids = set(lexical_matched) | set(embedding_scores)
+    ranked: list[tuple[str, float]] = []
+    for mid in all_ids:
+        lex = lexical_matched.get(mid, 0.0)
+        emb = embedding_scores.get(mid, 0.0)
+        ranked.append((mid, round(max(lex, emb), 3)))
+
     ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked[:5]
 
@@ -643,6 +716,7 @@ class MicroClaw(ClawCycle):
         self._current_context_brief: Optional[ContextBrief] = None
         self._current_outcome: Optional[TaskOutcome] = None
         self._current_verification: Optional[VerificationResult] = None
+        self._ablation_label: Optional[str] = None
 
     async def grab(self) -> Optional[Task]:
         """Get the next pending task for the project."""
@@ -790,6 +864,22 @@ class MicroClaw(ClawCycle):
             hints.append(f"Runbook verify: {check}")
         for rollback in runbook_rollback[:2]:
             hints.append(f"Runbook rollback: {rollback}")
+
+        # A/B ablation: decide whether to suppress knowledge for this task
+        self._ablation_label = None
+        if self.ctx.prompt_evolver is not None and past_solutions:
+            try:
+                self._ablation_label, _ = await self.ctx.prompt_evolver.select_variant_for_invocation(
+                    "knowledge_ablation", agent_id=None
+                )
+                if self._ablation_label == "control":
+                    logger.info(
+                        "A/B ablation: suppressing knowledge for task %s (control group)",
+                        task.id,
+                    )
+                    past_solutions = []
+            except (ValueError, Exception):
+                self._ablation_label = None  # No ablation test scheduled
 
         task_ctx = TaskContext(
             task=task,
@@ -1192,7 +1282,14 @@ class MicroClaw(ClawCycle):
         """Update memory, scores, error KB, and semantic memory from the outcome."""
         agent_id, task_ctx, outcome, verification = verified
         task = task_ctx.task
-        used_methodologies = _infer_used_methodology_ids(self._current_context_brief, outcome)
+        used_methodologies = await _infer_used_methodology_ids(
+            self._current_context_brief,
+            outcome,
+            embedding_engine=self.ctx.embeddings if getattr(
+                self.ctx.config.memory, "attribution_embedding_enabled", False
+            ) else None,
+            memory_config=self.ctx.config.memory,
+        )
 
         if verification.approved:
             methodology_success = _counts_as_methodology_success(verification)
@@ -1448,6 +1545,25 @@ class MicroClaw(ClawCycle):
                 )
             except Exception as e:
                 logger.warning("Failed to record co-retrieval outcome: %s", e)
+
+        # A/B ablation: record sample for knowledge ablation test
+        if self._ablation_label is not None and self.ctx.prompt_evolver is not None:
+            try:
+                await self.ctx.prompt_evolver.record_sample(
+                    prompt_name="knowledge_ablation",
+                    variant_label=self._ablation_label,
+                    agent_id=None,
+                    success=verification.approved,
+                    quality_score=verification.quality_score or 0.0,
+                )
+                logger.info(
+                    "A/B ablation sample: label=%s success=%s quality=%.2f",
+                    self._ablation_label,
+                    verification.approved,
+                    verification.quality_score or 0.0,
+                )
+            except Exception as e:
+                logger.warning("Failed to record ablation sample: %s", e)
 
         if task.action_template_id:
             try:

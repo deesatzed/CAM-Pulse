@@ -77,6 +77,11 @@ class PulseAssimilator:
             # 1b. Capture HEAD SHA before mining (clone_path will be cleaned up in finally)
             head_sha = await self._get_head_sha(clone_path)
 
+            # 1c. Detect license
+            license_type = self._detect_license(clone_path)
+            result.license_type = license_type
+            logger.info("License detected for %s: %s", discovery.canonical_url, license_type)
+
             # Update status to 'mining'
             await self._update_discovery_status(discovery.canonical_url, "mining")
 
@@ -86,6 +91,7 @@ class PulseAssimilator:
                 repo_path=clone_path,
                 repo_name=repo_name,
                 target_project_id=target_project_id,
+                metadata={"license_type": license_type},
             )
 
             if mine_result.error:
@@ -111,6 +117,7 @@ class PulseAssimilator:
                     "tokens_used": mine_result.tokens_used,
                     "duration_seconds": round(mine_result.duration_seconds, 2),
                 },
+                license_type=license_type,
             )
 
             # 5. Populate freshness metadata
@@ -192,6 +199,66 @@ class PulseAssimilator:
             return stdout.decode().strip()
         return ""
 
+    @staticmethod
+    def _detect_license(clone_path: Path) -> str:
+        """Detect license from LICENSE/COPYING file in a cloned repo.
+
+        Returns one of: permissive, copyleft, unknown, none.
+        """
+        license_filenames = [
+            "LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md",
+            "COPYING", "COPYING.md", "LICENSE-MIT", "LICENSE-APACHE",
+        ]
+        license_text = ""
+        for name in license_filenames:
+            candidate = clone_path / name
+            if candidate.is_file():
+                try:
+                    license_text = candidate.read_text(
+                        encoding="utf-8", errors="replace"
+                    )[:3000]
+                    break
+                except OSError:
+                    continue
+
+        if not license_text:
+            return "none"
+
+        header = "\n".join(license_text.splitlines()[:20]).lower()
+        full_lower = license_text.lower()
+
+        permissive_patterns = [
+            "mit license",
+            "permission is hereby granted, free of charge",
+            "apache license",
+            "licensed under the apache license, version 2.0",
+            "bsd 2-clause",
+            "bsd 3-clause",
+            "redistribution and use in source and binary forms",
+            "isc license",
+            "the unlicense",
+            "boost software license",
+        ]
+        copyleft_patterns = [
+            "gnu general public license",
+            "gnu affero general public license",
+            "gnu lesser general public license",
+            "mozilla public license",
+            "gpl-2.0",
+            "gpl-3.0",
+            "agpl-3.0",
+            "lgpl-",
+        ]
+
+        for pattern in permissive_patterns:
+            if pattern in header or pattern in full_lower:
+                return "permissive"
+        for pattern in copyleft_patterns:
+            if pattern in header or pattern in full_lower:
+                return "copyleft"
+
+        return "unknown"
+
     async def _update_freshness_on_assimilate(
         self, canonical_url: str, head_sha: str, pushed_at: str
     ) -> None:
@@ -243,17 +310,20 @@ class PulseAssimilator:
         canonical_url: str,
         methodology_ids: list[str],
         mine_result_summary: dict,
+        license_type: str = "",
     ) -> None:
         """Mark discovery as assimilated with mining results."""
         await self.engine.execute(
             """UPDATE pulse_discoveries
                SET status = 'assimilated',
                    methodology_ids = ?,
-                   mine_result = ?
+                   mine_result = ?,
+                   license_type = ?
                WHERE canonical_url = ?""",
             [
                 json.dumps(methodology_ids),
                 json.dumps(mine_result_summary),
+                license_type,
                 canonical_url,
             ],
         )

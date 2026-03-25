@@ -17,6 +17,7 @@ class PulseDiscovery:
     keywords_matched: list[str] = field(default_factory=list)
     novelty_score: float = 0.0
     scan_id: str = ""
+    license_type: str = ""
 
 
 @dataclass
@@ -43,6 +44,7 @@ class AssimilationResult:
     findings_count: int = 0
     head_sha: str = ""
     error: Optional[str] = None
+    license_type: str = ""
 
 @dataclass
 class Phase1Result:

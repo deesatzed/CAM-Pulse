@@ -394,6 +394,18 @@ class DatabaseEngine:
                 await self.conn.commit()
                 logger.info("Migration 12 applied: added size_at_mine column")
 
+        # Migration 13: add license_type column to pulse_discoveries
+        re_rows_13 = await self.fetch_all(
+            "SELECT name FROM pragma_table_info('pulse_discoveries')"
+        )
+        pd_cols_13 = {r["name"] for r in re_rows_13}
+        if "license_type" not in pd_cols_13:
+            await self.conn.execute(
+                "ALTER TABLE pulse_discoveries ADD COLUMN license_type TEXT"
+            )
+            await self.conn.commit()
+            logger.info("Migration 13 applied: added license_type column")
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:

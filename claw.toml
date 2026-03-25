@@ -22,6 +22,9 @@ mmr_enabled = true
 mmr_lambda = 0.7
 vector_weight = 0.6
 text_weight = 0.4
+attribution_embedding_enabled = false
+attribution_embedding_weight = 0.6
+attribution_embedding_threshold = 0.35
 
 [orchestrator]
 max_retries = 5
