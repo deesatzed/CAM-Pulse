@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**1,909 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
+**1,965 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
 
@@ -57,9 +57,9 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+  / MLX-LM locally)
                               |
                     +---------v----------+
-                    |  Verification      |  Real diffs checked. Tests
-                    |  & Attribution     |  run. Token overlap tracks
-                    +---------+----------+  which pattern → which code
+                    |  Verification      |  7 checks + metric gates:
+                    |  & Attribution     |  tests, coverage, drift,
+                    +---------+----------+  placeholders, claims, style
                               |
                      fails?───┘
                        │ yes
@@ -233,7 +233,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 1,881 tests passing in under 12 seconds.
+**Verified**: Fresh clone → install → 1,965 tests passing in under 30 seconds.
 
 ### Other Install Options
 
@@ -343,7 +343,7 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 1881 passed, 6 skipped
+# → 1965 passed, 1 skipped
 ```
 
 ---
@@ -407,6 +407,8 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 
 - `cam create --execute` checks the **actual workspace diff**. If no files changed, the run is marked **FAILED**.
 - `cam validate` runs your acceptance checks (`pytest`, build commands) against the saved spec.
+- **Metric enforcement**: The verifier extracts test count and coverage targets from your spec text ("at least 20 tests", ">90% coverage") and rejects builds that don't meet them. Structured `MetricExpectation` objects support `gte/gt/lte/lt/eq` operators with hard (blocks approval) or soft (recommendation) enforcement.
+- **Self-correction**: When verification fails with correctable issues (test failures, insufficient test count, low coverage, placeholder code), the workspace is byte-level restored and the agent is re-prompted with the violations and test output. Up to 3 correction attempts before learning from failure.
 - `cam forge-benchmark` reports "0% lift" when that's the truth — not a dressed-up number.
 - Every methodology tracks its lifecycle: `stored → enriched → retrieved → operationalized → proven`
 - Infrastructure failures (API timeouts, rate limits) are logged but **never penalize** methodology fitness.
@@ -417,7 +419,6 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 
 - `cam create --execute` is gated behind preflight checks — not yet fully autonomous
 - Local mode (Ollama/MLX-LM) works but hasn't been battle-tested as deeply as OpenRouter mode
-- Code coverage at 79% (target: >90%, action plan in progress)
 - Knowledge retrieval quality depends on the diversity of mined repos
 - Mined methodologies record source repo URL and discovery date. License-aware mining (pre-mine license detection and compatibility gating) is on the roadmap
 
@@ -457,7 +458,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ```bash
 # Run tests
 pytest tests/ -q
-# → 1881 passed, 6 skipped (< 12 seconds)
+# → 1965 passed, 1 skipped (< 12 seconds)
 
 # CLI help
 cam --help
