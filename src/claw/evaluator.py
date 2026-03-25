@@ -457,13 +457,27 @@ class Evaluator:
         try:
             from claw.core.models import Task, TaskContext, TaskStatus
 
+            # Serialize repo contents so agents can actually see the source code
+            repo_context = ""
+            try:
+                from claw.miner import serialize_repo
+                serialized, file_count = serialize_repo(str(repo_path), max_bytes=50_000)
+                repo_context = (
+                    f"\n\n## Repository Contents ({file_count} files)\n\n"
+                    f"{serialized}\n"
+                )
+            except Exception as e:
+                logger.warning("Could not serialize repo for evaluation: %s", e)
+                repo_context = f"\n\n(Repository at {repo_path} — contents not available: {e})\n"
+
             # Create a transient task for this evaluation prompt
             eval_task = Task(
                 project_id=project_id,
                 title=f"Evaluate: {prompt_name}",
                 description=(
                     f"Run evaluation prompt '{prompt_name}' (phase: {phase}) "
-                    f"against repository at {repo_path}.\n\n"
+                    f"against repository at {repo_path}.\n"
+                    f"{repo_context}\n"
                     f"Prompt content:\n{content}"
                 ),
                 status=TaskStatus.EVALUATING,

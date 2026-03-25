@@ -242,6 +242,38 @@ domains = ["AI", "agents", "developer-tools", "open-source"]
 # static-analysis = 0.10
 
 # ---------------------------------------------------------------------------
+# Self-Enhancement Pipeline
+# ---------------------------------------------------------------------------
+# CAM's self-improvement pipeline: clone → enhance → validate → swap.
+# After mining or PULSE ingestion, CAM assesses whether the new knowledge
+# justifies rebuilding itself. When triggered, it creates an enhanced copy,
+# validates it through 7 gates, and swaps only if all gates pass.
+
+[self_enhance]
+enabled = false
+workspace_parent = ""  # Default: same volume as live install (for atomic rename)
+max_backup_count = 3
+validation_test_timeout_seconds = 600
+require_user_confirmation = true  # Set false for fully autonomous operation
+
+# Protected files — changes to these require human review even if gates pass
+protected_files = [
+    "src/claw/verifier.py",
+    "src/claw/core/factory.py",
+    "src/claw/db/engine.py",
+    "src/claw/db/schema.sql",
+    "src/claw/core/config.py",
+]
+
+# Trigger conditions — self-enhance fires when ANY threshold is met
+min_new_methodologies = 10      # After N new methodologies since last enhance
+min_avg_novelty_score = 0.75    # When avg novelty of new methodologies exceeds this
+trigger_after_mine = false      # Auto-assess trigger after cam mine
+trigger_after_pulse_ingest = false  # Auto-assess trigger after cam pulse ingest
+cooldown_hours = 24             # Minimum hours between runs
+max_enhance_tasks = 10          # Max tasks per self-enhance run
+
+# ---------------------------------------------------------------------------
 # Local LLM providers (Ollama / MLX-LM)
 # ---------------------------------------------------------------------------
 # To use a local model, set mode = "local" on any agent above and configure

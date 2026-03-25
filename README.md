@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**1,965 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
+**2,028 tests** | **1,750+ learned patterns** | **8 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
 
@@ -69,6 +69,13 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+  + test output as feedback
                               |
                      passes or budget exhausted
+                              |
+              enough new knowledge accumulated?
+                              │ yes
+                    +---------v----------+
+                    |  Self-Enhancement  |  Clone → enhance copy →
+                    |  Pipeline          |  7-gate validation →
+                    +---------+----------+  atomic swap + backup
 ```
 
 We haven't found another tool that does all of this. Copilot, Cursor, Windsurf, and Aider generate code — but they don't discover new repos, don't remember patterns across sessions, and don't prove which pattern influenced which output.
@@ -215,6 +222,19 @@ memory = 0.15
 RAG = 0.10
 ```
 
+### Self-Enhancement Pipeline
+CAM can improve itself. After mining or PULSE ingestion accumulates enough new knowledge (configurable thresholds: methodology count, novelty score), CAM:
+
+1. **Clones** its own live install (excluding data, caches, evaluation artifacts)
+2. **Enhances** the copy using its own multi-agent system with knowledge injection
+3. **Validates** through 7 gates: Python syntax → config compatibility → import smoke → DB schema → CLI smoke → full pytest suite → diff summary
+4. **Swaps** atomically — renames live to backup, enhanced copy becomes live
+5. **Rolls back** automatically if post-swap verification fails
+
+Protected files (`verifier.py`, `factory.py`, `engine.py`, `schema.sql`, `config.py`) require human review even when all gates pass. Cooldown period prevents runaway self-modification.
+
+Proven end-to-end: clone → enhance (1 task, quality 0.97) → all 7 gates PASS → 2,028/2,028 tests pass on enhanced copy.
+
 ### Budget Controls (3 Layers)
 - **Per-scan**: `max_cost_per_scan_usd = 0.50`
 - **Per-day**: `max_cost_per_day_usd = 10.0`
@@ -233,7 +253,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 1,965 tests passing in under 30 seconds.
+**Verified**: Fresh clone → install → 2,028 tests passing in under 30 seconds.
 
 ### Other Install Options
 
@@ -330,6 +350,24 @@ cam pulse report
 docker compose -f pulse/docker-compose.pulse.yml up -d
 ```
 
+### Self-Enhancement
+```bash
+# Check if enough new knowledge has accumulated to justify self-enhancement
+cam self-enhance status
+
+# Run the full pipeline: clone → enhance → validate (7 gates) → swap
+cam self-enhance start
+
+# Validate an enhanced copy without swapping
+cam self-enhance validate /path/to/enhanced-copy
+
+# Manually swap a validated copy into production
+cam self-enhance swap /path/to/enhanced-copy
+
+# Roll back to the most recent backup
+cam self-enhance rollback /path/to/backup
+```
+
 ### Verify and Audit
 ```bash
 # Validate that changes actually happened
@@ -343,7 +381,7 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 1965 passed, 1 skipped
+# → 2028 passed, 1 skipped
 ```
 
 ---
@@ -378,8 +416,10 @@ Run any showpiece:
 
 ```
 src/claw/
-  cli.py              # Typer CLI — cam evaluate, mine, create, validate, pulse ...
+  cli.py              # Typer CLI — cam evaluate, mine, create, validate, pulse, self-enhance ...
   miner.py            # 3-pass mining pipeline + _repair_json()
+  reconstruct.py      # Self-enhancement: clone → enhance → validate → swap
+  validation_gate.py  # 7-gate validation (syntax, config, import, DB, CLI, pytest, diff)
   agents/
     interface.py      # Multi-agent routing via OpenRouter (Claude/Codex/Gemini/Grok)
     cycle.py          # Knowledge injection + build cycle
@@ -431,8 +471,9 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 1**: Core Engine — evaluate, mine, create, validate, benchmark | **Complete** |
 | **Phase 2**: Local-First — Docker, Ollama, MLX-LM, torch-free install | **Complete** |
 | **Phase 3**: PULSE — X-Scout discovery, multi-pass mining, knowledge injection, attribution | **Complete** |
+| **Phase 3.5**: Self-Enhancement — Clone → enhance → 7-gate validate → atomic swap | **Complete** |
 | **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
-| **Phase 5**: Premier — Self-evolving maintainer mode, community rollout | Planned |
+| **Phase 5**: Premier — Community rollout, fleet-scale self-enhancement | Planned |
 
 ---
 
@@ -458,7 +499,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ```bash
 # Run tests
 pytest tests/ -q
-# → 1965 passed, 1 skipped (< 12 seconds)
+# → 2028 passed, 1 skipped (< 12 seconds)
 
 # CLI help
 cam --help

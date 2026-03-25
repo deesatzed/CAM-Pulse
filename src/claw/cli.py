@@ -15,6 +15,7 @@ Advanced groups:
   forge <subcommand>     — standalone Forge export and benchmark workflow
   doctor <subcommand>    — preflight and environment diagnostics
   kb <subcommand>        — low-level knowledge browser
+  self-enhance <sub>     — self-enhancement pipeline (clone, validate, swap)
 """
 
 from __future__ import annotations
@@ -72,6 +73,11 @@ doctor_app = typer.Typer(
 pulse_app = typer.Typer(
     name="pulse",
     help="CAM-PULSE — perpetual X-powered discovery and assimilation of novel GitHub repos",
+    no_args_is_help=True,
+)
+self_enhance_app = typer.Typer(
+    name="self-enhance",
+    help="Self-enhancement pipeline — clone, enhance, validate, swap",
     no_args_is_help=True,
 )
 
@@ -7959,6 +7965,7 @@ app.add_typer(forge_app, name="forge")
 app.add_typer(doctor_app, name="doctor")
 app.add_typer(kb_app, name="kb")
 app.add_typer(pulse_app, name="pulse")
+app.add_typer(self_enhance_app, name="self-enhance")
 
 
 async def _kb_engine():
@@ -8998,6 +9005,238 @@ def pulse_ingest(
             await engine.close()
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Self-Enhancement Pipeline Commands
+# ---------------------------------------------------------------------------
+
+
+@self_enhance_app.command(name="status")
+def self_enhance_status(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show trigger readiness and self-enhancement state."""
+    _setup_logging(verbose)
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+        from claw.db.engine import DatabaseEngine
+
+        cfg = load_config(Path(config) if config else None)
+        live_dir = Path(config).parent.resolve() if config else Path.cwd().resolve()
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+
+        try:
+            from claw.reconstruct import ReconstructionPipeline
+            pipeline = ReconstructionPipeline(cfg, db_engine=engine, live_dir=live_dir)
+            assessment = await pipeline.assess_trigger()
+            console.print(assessment.summary())
+
+            # Show state
+            from claw.reconstruct import _load_state
+            state = _load_state(live_dir)
+            if state:
+                console.print("\n[bold]State:[/bold]")
+                for k, v in state.items():
+                    console.print(f"  {k}: {v}")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@self_enhance_app.command(name="start")
+def self_enhance_start(
+    mode: str = typer.Option("autonomous", "--mode", "-m", help="Mode: attended, supervised, autonomous"),
+    max_tasks: int = typer.Option(0, "--max-tasks", help="Max enhancement tasks (0 = config default)"),
+    skip_swap: bool = typer.Option(False, "--skip-swap", help="Stop after validation (don't swap)"),
+    force: bool = typer.Option(False, "--force", help="Skip trigger assessment"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Run the full self-enhancement pipeline: clone, enhance, validate, swap."""
+    _setup_logging(verbose)
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+        from claw.db.engine import DatabaseEngine
+
+        cfg = load_config(Path(config) if config else None)
+        live_dir = Path(config).parent.resolve() if config else Path.cwd().resolve()
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+
+        try:
+            from claw.reconstruct import ReconstructionPipeline
+            pipeline = ReconstructionPipeline(cfg, db_engine=engine, live_dir=live_dir)
+
+            def _on_step(step_name: str, detail: str = "") -> None:
+                console.print(f"  [dim]{step_name}[/dim] {detail}")
+
+            pipeline.on_step = _on_step
+
+            result = await pipeline.run(
+                mode=mode,
+                max_tasks=max_tasks,
+                skip_swap=skip_swap,
+                force=force,
+            )
+
+            console.print(f"\n{result.summary()}")
+
+            if result.copy_dir and not result.swap_completed:
+                console.print(f"\n[dim]Enhanced copy at: {result.copy_dir}[/dim]")
+                console.print("[dim]Use 'cam self-enhance validate <copy_dir>' to re-validate[/dim]")
+                console.print("[dim]Use 'cam self-enhance swap <copy_dir>' to swap manually[/dim]")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@self_enhance_app.command(name="validate")
+def self_enhance_validate(
+    copy_dir: str = typer.Argument(..., help="Path to the enhanced copy to validate"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Validate an enhanced copy through 7 gates."""
+    _setup_logging(verbose)
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+
+        cfg = load_config(Path(config) if config else None)
+        live_dir = Path(config).parent.resolve() if config else Path.cwd().resolve()
+
+        from claw.reconstruct import ReconstructionPipeline
+        pipeline = ReconstructionPipeline(cfg, live_dir=live_dir)
+        report = await pipeline.validate(Path(copy_dir).resolve())
+
+        console.print(report.summary())
+
+        # Check protected files
+        protected = pipeline.detect_protected_changes(Path(copy_dir).resolve())
+        if protected:
+            console.print(f"\n[yellow]Protected file changes ({len(protected)}):[/yellow]")
+            for pc in protected:
+                console.print(f"  {pc.file_path}: +{pc.additions} -{pc.deletions}")
+
+        if report.passed:
+            console.print("\n[green]All gates passed. Safe to swap.[/green]")
+        else:
+            console.print(f"\n[red]FAILED at: {report.failed_gate}[/red]")
+            if report.error_detail:
+                console.print(f"[red]{report.error_detail[:2000]}[/red]")
+            raise typer.Exit(1)
+
+    asyncio.run(_run())
+
+
+@self_enhance_app.command(name="swap")
+def self_enhance_swap(
+    copy_dir: str = typer.Argument(..., help="Path to the validated enhanced copy"),
+    force: bool = typer.Option(False, "--force", help="Skip re-validation before swap"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Swap a validated enhanced copy into production."""
+    _setup_logging(verbose)
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+
+        cfg = load_config(Path(config) if config else None)
+        live_dir = Path(config).parent.resolve() if config else Path.cwd().resolve()
+
+        from claw.reconstruct import ReconstructionPipeline
+        pipeline = ReconstructionPipeline(cfg, live_dir=live_dir)
+
+        copy_path = Path(copy_dir).resolve()
+
+        if not force:
+            console.print("Re-validating before swap...")
+            report = await pipeline.validate(copy_path)
+            if not report.passed:
+                console.print(f"[red]Validation FAILED at: {report.failed_gate}[/red]")
+                console.print("[red]Cannot swap. Fix issues or use --force.[/red]")
+                raise typer.Exit(1)
+
+            # Check protected files
+            protected = pipeline.detect_protected_changes(copy_path)
+            if protected:
+                console.print(f"[yellow]Protected file changes detected ({len(protected)}):[/yellow]")
+                for pc in protected:
+                    console.print(f"  {pc.file_path}: +{pc.additions} -{pc.deletions}")
+
+        # Create backup
+        backup_dir = pipeline.create_backup()
+        console.print(f"Backup created at: {backup_dir}")
+
+        # Swap
+        pipeline.swap(copy_path)
+        console.print("[green]Swap complete.[/green]")
+
+        # Post-swap validation
+        post_ok = await pipeline.post_swap_validate()
+        if not post_ok:
+            console.print("[red]Post-swap validation FAILED. Rolling back...[/red]")
+            pipeline.rollback(backup_dir)
+            console.print("[yellow]Rolled back to backup.[/yellow]")
+            raise typer.Exit(1)
+
+        console.print("[green]Post-swap validation passed. Enhancement is now live.[/green]")
+        console.print(f"Backup preserved at: {backup_dir}")
+
+    asyncio.run(_run())
+
+
+@self_enhance_app.command(name="rollback")
+def self_enhance_rollback(
+    backup_dir: Optional[str] = typer.Argument(None, help="Path to backup (default: most recent)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Rollback to a backup after a failed swap."""
+    _setup_logging(verbose)
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    live_dir = Path(config).parent.resolve() if config else Path.cwd().resolve()
+
+    from claw.reconstruct import ReconstructionPipeline, _load_state
+    pipeline = ReconstructionPipeline(cfg, live_dir=live_dir)
+
+    if backup_dir:
+        backup_path = Path(backup_dir).resolve()
+    else:
+        # Find most recent backup
+        state = _load_state(live_dir)
+        last_backup = state.get("last_backup_dir")
+        if last_backup and Path(last_backup).exists():
+            backup_path = Path(last_backup)
+        else:
+            workspace_parent = pipeline._resolve_workspace_parent()
+            backups = sorted(workspace_parent.glob("cam-backup-*"), reverse=True)
+            if not backups:
+                console.print("[red]No backups found.[/red]")
+                raise typer.Exit(1)
+            backup_path = backups[0]
+
+    if not backup_path.exists():
+        console.print(f"[red]Backup not found: {backup_path}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"Rolling back from: {backup_path}")
+    pipeline.rollback(backup_path)
+    console.print("[green]Rollback complete.[/green]")
 
 
 def app_main() -> None:

@@ -238,6 +238,29 @@ class PulseConfig(BaseModel):
     profile: PulseProfileConfig = Field(default_factory=PulseProfileConfig)
 
 
+class SelfEnhanceConfig(BaseModel):
+    """Self-enhancement pipeline configuration."""
+    enabled: bool = False
+    workspace_parent: str = ""  # Where to create enhanced copies; defaults to same volume as live
+    max_backup_count: int = 3
+    validation_test_timeout_seconds: int = 600
+    require_user_confirmation: bool = True  # Require human approval before swap
+    protected_files: list[str] = Field(default_factory=lambda: [
+        "src/claw/verifier.py",
+        "src/claw/core/factory.py",
+        "src/claw/db/engine.py",
+        "src/claw/db/schema.sql",
+        "src/claw/core/config.py",
+    ])
+    # Trigger conditions — self-enhance when ANY of these thresholds are met
+    min_new_methodologies: int = 10  # Trigger after N new methodologies since last enhance
+    min_avg_novelty_score: float = 0.75  # Trigger when avg novelty of new methodologies exceeds this
+    trigger_after_mine: bool = False  # Auto-assess trigger after cam mine
+    trigger_after_pulse_ingest: bool = False  # Auto-assess trigger after cam pulse ingest
+    cooldown_hours: int = 24  # Minimum hours between self-enhance runs
+    max_enhance_tasks: int = 10  # Max enhancement tasks per run
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -259,6 +282,7 @@ class ClawConfig(BaseModel):
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     assimilation: AssimilationConfig = Field(default_factory=AssimilationConfig)
     pulse: PulseConfig = Field(default_factory=PulseConfig)
+    self_enhance: SelfEnhanceConfig = Field(default_factory=SelfEnhanceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
