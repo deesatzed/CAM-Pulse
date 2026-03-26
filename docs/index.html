@@ -233,27 +233,27 @@
       align-items: center;
       gap: 8px;
       cursor: pointer;
-      opacity: 0.5;
+      opacity: 0.85;
       transition: opacity 0.3s;
     }
-    .scroll-indicator:hover { opacity: 0.9; }
+    .scroll-indicator:hover { opacity: 1; }
     .scroll-indicator .scroll-text {
-      font-size: 0.65rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 2px;
-      color: var(--text-secondary);
+      color: var(--text-primary);
       font-weight: 600;
     }
     .scroll-indicator .scroll-chevron {
       width: 24px;
       height: 24px;
-      border-right: 2px solid var(--text-secondary);
-      border-bottom: 2px solid var(--text-secondary);
+      border-right: 2px solid var(--text-primary);
+      border-bottom: 2px solid var(--text-primary);
       transform: rotate(45deg);
       animation: scroll-bounce 2s ease-in-out infinite;
     }
     @keyframes scroll-bounce {
-      0%, 100% { transform: rotate(45deg) translateY(0); opacity: 0.5; }
+      0%, 100% { transform: rotate(45deg) translateY(0); opacity: 0.7; }
       50% { transform: rotate(45deg) translateY(6px); opacity: 1; }
     }
     .hero-title { margin-bottom: 16px; letter-spacing: -1px; }
