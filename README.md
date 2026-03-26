@@ -817,6 +817,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | [Plugin Event System](docs/CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) | Cross-repo synthesis proof |
 | [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
 | [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
+| [Standalone Instance Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a domain specialist |
 | [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
 
 ---
