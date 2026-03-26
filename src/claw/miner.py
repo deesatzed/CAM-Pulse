@@ -53,7 +53,7 @@ _MAX_REPO_BYTES: int = 900 * 1024
 _VALID_CATEGORIES: set[str] = {
     "architecture", "ai_integration", "memory", "code_quality",
     "cli_ux", "testing", "data_processing", "security",
-    "algorithm", "cross_cutting",
+    "algorithm", "cross_cutting", "design_patterns",
 }
 
 # Maximum findings per repo.
@@ -150,6 +150,12 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "cross_cutting": [
         "logging", "metrics", "observability", "feature flag",
         "config", "telemetry", "tracing", "monitoring",
+    ],
+    "design_patterns": [
+        "protocol", "frozen", "dataclass", "immutable", "idempotent",
+        "dependency injection", "precedence", "fallback", "normalize",
+        "result normalization", "backward compat", "hybrid protocol",
+        "perf_counter", "duration_ms", "structured log",
     ],
 }
 

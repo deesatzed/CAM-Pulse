@@ -458,6 +458,38 @@ class AgentInterface(ABC):
                 duration_seconds=duration,
             )
 
+    @staticmethod
+    def _resolve_knowledge_source(
+        task: "TaskContext",
+        context: Optional[Any],
+    ) -> tuple[list[Any], int]:
+        """Resolve knowledge to inject using 3-tier precedence.
+
+        Precedence (highest to lowest):
+          1. Task-level override: task.knowledge_override (if present)
+          2. Context past_solutions: retrieved methodologies from PULSE
+          3. Default: empty (no knowledge injection)
+
+        Returns (methodologies, budget_chars).
+        """
+        # Tier 1: explicit task-level override
+        override = getattr(task, "knowledge_override", None)
+        if override:
+            budget = getattr(task, "knowledge_budget_chars", 8000)
+            return (override, budget)
+
+        # Tier 2: context past_solutions from retrieval
+        if context is not None:
+            past_solutions = getattr(context, "past_solutions", None) or []
+            if past_solutions:
+                budget_remaining = getattr(context, "token_budget_remaining", 100_000)
+                max_chars = min(int(budget_remaining * 0.25 * 4), 8000)
+                max_chars = max(max_chars, 2000)
+                return (past_solutions, max_chars)
+
+        # Tier 3: no knowledge
+        return ([], 0)
+
     def _build_openrouter_prompt(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> str:
@@ -573,91 +605,85 @@ class AgentInterface(ABC):
             )
 
         # Inject full methodology context from retrieved knowledge
-        if context is not None:
-            past_solutions = getattr(context, "past_solutions", None) or []
-            if past_solutions:
-                knowledge_parts: list[str] = []
-                # Budget-aware: use token_budget_remaining if available
-                budget_remaining = getattr(context, "token_budget_remaining", 100_000)
-                # Reserve 75% for agent output, use 25% for knowledge (max 8000 chars)
-                max_knowledge_chars = min(int(budget_remaining * 0.25 * 4), 8000)  # ~4 chars per token
-                max_knowledge_chars = max(max_knowledge_chars, 2000)  # Floor of 2000 chars
+        # Uses 3-tier precedence: task override > context past_solutions > empty
+        past_solutions, max_knowledge_chars = self._resolve_knowledge_source(task, context)
+        if past_solutions:
+            knowledge_parts: list[str] = []
+            knowledge_chars = 0
+            pointer_threshold = 1500  # Methodologies larger than this get pointers
 
-                knowledge_chars = 0
-                pointer_threshold = 1500  # Methodologies larger than this get pointers
+            for methodology in past_solutions:
+                if knowledge_chars >= max_knowledge_chars:
+                    break
+                section_lines: list[str] = []
+                # Problem description — what this pattern solves
+                desc = getattr(methodology, "problem_description", "") or ""
+                if desc:
+                    section_lines.append(f"### Pattern: {desc[:200]}")
+                # Source provenance
+                tags = getattr(methodology, "tags", []) or []
+                source_tags = [t for t in tags if t.startswith("source:")]
+                if source_tags:
+                    section_lines.append(f"Source: {source_tags[0].removeprefix('source:')}")
+                # Capability data — rich structured context
+                cap_raw = getattr(methodology, "capability_data", None)
+                cap = {}
+                if isinstance(cap_raw, dict):
+                    cap = cap_raw
+                elif isinstance(cap_raw, str) and cap_raw not in ("", "null"):
+                    try:
+                        parsed = json.loads(cap_raw)
+                        if isinstance(parsed, dict):
+                            cap = parsed
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                applicability = cap.get("applicability")
+                applicability_sketch = ""
+                if isinstance(applicability, dict):
+                    applicability_sketch = applicability.get("sketch", "")
+                impl_sketch = cap.get("implementation_sketch") or applicability_sketch
+                triggers = cap.get("activation_triggers") or []
+                if impl_sketch:
+                    section_lines.append(f"Implementation approach: {str(impl_sketch)[:600]}")
+                if triggers:
+                    trigger_str = ", ".join(str(t) for t in triggers[:5]) if isinstance(triggers, list) else str(triggers)[:200]
+                    section_lines.append(f"When to apply: {trigger_str}")
+                # Solution code / methodology notes — the actual pattern
+                sol = getattr(methodology, "solution_code", "") or ""
+                notes = getattr(methodology, "methodology_notes", "") or ""
+                pattern_text = sol or notes
 
-                for methodology in past_solutions:
-                    if knowledge_chars >= max_knowledge_chars:
+                # Context pointer for large methodologies
+                mid = getattr(methodology, "id", "unknown")
+                if pattern_text and len(pattern_text) > pointer_threshold:
+                    # Truncate with pointer for budget preservation
+                    summary = pattern_text[:600]
+                    # Check if this is an HF-sourced methodology
+                    source_repos = cap.get("source_repos", [])
+                    hf_source = next((r for r in source_repos if "huggingface.co" in r), None) if isinstance(source_repos, list) else None
+                    if hf_source:
+                        pointer = f"[TRUNCATED. Full content: hf://{hf_source}]"
+                    else:
+                        pointer = f"[TRUNCATED. Full content: methodology_id#{mid}]"
+                    section_lines.append(f"Pattern details:\n{summary}\n{pointer}")
+                elif pattern_text and not impl_sketch:
+                    section_lines.append(f"Pattern details:\n{pattern_text[:1500]}")
+                elif pattern_text and impl_sketch:
+                    section_lines.append(f"Reference:\n{pattern_text[:800]}")
+
+                if section_lines:
+                    section = "\n".join(section_lines)
+                    if knowledge_chars + len(section) > max_knowledge_chars:
                         break
-                    section_lines: list[str] = []
-                    # Problem description — what this pattern solves
-                    desc = getattr(methodology, "problem_description", "") or ""
-                    if desc:
-                        section_lines.append(f"### Pattern: {desc[:200]}")
-                    # Source provenance
-                    tags = getattr(methodology, "tags", []) or []
-                    source_tags = [t for t in tags if t.startswith("source:")]
-                    if source_tags:
-                        section_lines.append(f"Source: {source_tags[0].removeprefix('source:')}")
-                    # Capability data — rich structured context
-                    cap_raw = getattr(methodology, "capability_data", None)
-                    cap = {}
-                    if isinstance(cap_raw, dict):
-                        cap = cap_raw
-                    elif isinstance(cap_raw, str) and cap_raw not in ("", "null"):
-                        try:
-                            parsed = json.loads(cap_raw)
-                            if isinstance(parsed, dict):
-                                cap = parsed
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    applicability = cap.get("applicability")
-                    applicability_sketch = ""
-                    if isinstance(applicability, dict):
-                        applicability_sketch = applicability.get("sketch", "")
-                    impl_sketch = cap.get("implementation_sketch") or applicability_sketch
-                    triggers = cap.get("activation_triggers") or []
-                    if impl_sketch:
-                        section_lines.append(f"Implementation approach: {str(impl_sketch)[:600]}")
-                    if triggers:
-                        trigger_str = ", ".join(str(t) for t in triggers[:5]) if isinstance(triggers, list) else str(triggers)[:200]
-                        section_lines.append(f"When to apply: {trigger_str}")
-                    # Solution code / methodology notes — the actual pattern
-                    sol = getattr(methodology, "solution_code", "") or ""
-                    notes = getattr(methodology, "methodology_notes", "") or ""
-                    pattern_text = sol or notes
-
-                    # Context pointer for large methodologies
-                    mid = getattr(methodology, "id", "unknown")
-                    if pattern_text and len(pattern_text) > pointer_threshold:
-                        # Truncate with pointer for budget preservation
-                        summary = pattern_text[:600]
-                        # Check if this is an HF-sourced methodology
-                        source_repos = cap.get("source_repos", [])
-                        hf_source = next((r for r in source_repos if "huggingface.co" in r), None) if isinstance(source_repos, list) else None
-                        if hf_source:
-                            pointer = f"[TRUNCATED. Full content: hf://{hf_source}]"
-                        else:
-                            pointer = f"[TRUNCATED. Full content: methodology_id#{mid}]"
-                        section_lines.append(f"Pattern details:\n{summary}\n{pointer}")
-                    elif pattern_text and not impl_sketch:
-                        section_lines.append(f"Pattern details:\n{pattern_text[:1500]}")
-                    elif pattern_text and impl_sketch:
-                        section_lines.append(f"Reference:\n{pattern_text[:800]}")
-
-                    if section_lines:
-                        section = "\n".join(section_lines)
-                        if knowledge_chars + len(section) > max_knowledge_chars:
-                            break
-                        knowledge_parts.append(section)
-                        knowledge_chars += len(section)
-                if knowledge_parts:
-                    parts.append("\n## Retrieved Knowledge (from PULSE-mined methodologies)")
-                    parts.append(
-                        "The following patterns were retrieved from the knowledge base. "
-                        "Use these as guidance for your implementation where applicable."
-                    )
-                    parts.extend(knowledge_parts)
+                    knowledge_parts.append(section)
+                    knowledge_chars += len(section)
+            if knowledge_parts:
+                parts.append("\n## Retrieved Knowledge (from PULSE-mined methodologies)")
+                parts.append(
+                    "The following patterns were retrieved from the knowledge base. "
+                    "Use these as guidance for your implementation where applicable."
+                )
+                parts.extend(knowledge_parts)
 
         if self.can_use_internal_workspace_executor():
             # Include workspace file contents so the model knows what exists

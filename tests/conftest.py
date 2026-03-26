@@ -90,6 +90,14 @@ requires_claude_code = pytest.mark.skipif(
     reason="Claude Code CLI not available",
 )
 
+# Unified integration gate — set CLAW_RUN_INTEGRATION=1 to include live tests
+# that hit real external services (beyond simple API key checks).
+# Inspired by Agent_Pidgeon's AGENT_PIDGIN_RUN_STDIO_INTEGRATION pattern.
+requires_integration = pytest.mark.skipif(
+    os.environ.get("CLAW_RUN_INTEGRATION", "") != "1",
+    reason="Set CLAW_RUN_INTEGRATION=1 to run live integration tests",
+)
+
 
 # ---------------------------------------------------------------------------
 # Config fixtures
