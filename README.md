@@ -2,13 +2,124 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,348 tests** | **122 learned methodologies** | **11 proven showpieces** | **4 agent backends** | **$0 — MIT licensed**
+**2,577 tests** | **1,848 learned methodologies** | **273 source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
 
-> **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute
+> **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
 <p align="center">
   <img src="demos/cam-pulse-demo.gif" alt="CAM-PULSE demo: cam mine-self --quick showing language breakdown, domain signals, and test results" width="700">
 </p>
+
+---
+
+## How CAM Thinks: The Brain Transplant Analogy
+
+Every other AI coding tool is **stateless** — it forgets everything when you close the tab. CAM-PULSE is different. Think of it as a **brain transplant hospital for coding knowledge**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  THE CODE (public, on GitHub)                                    │
+│  44K lines of Python, 2,577 tests, CLI, prompts, schema         │
+│  = the body — same for every CAM instance                        │
+├─────────────────────────────────────────────────────────────────┤
+│  THE BRAIN (local only, never pushed)                            │
+│  data/claw.db — 1,848 methodologies, agent scores,               │
+│  task history, 384-dim embeddings, lifecycle states               │
+│  = unique to YOUR instance — YOUR learned experience             │
+├─────────────────────────────────────────────────────────────────┤
+│  THE KEYS (local only)                                           │
+│  .env — API keys for OpenRouter, Google, xAI                     │
+│  = credentials — never shared                                    │
+├─────────────────────────────────────────────────────────────────┤
+│  THE CONFIG (public, with your model picks)                      │
+│  claw.toml — model choices, thresholds, feature flags            │
+│  = personality — how this instance behaves                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**When you clone CAM from GitHub, you get an empty brain.** Zero methodologies, zero agent scores, zero task history. The schema creates the empty tables on first run.
+
+**This instance's brain has learned from experience:**
+
+| Metric | This Instance | Fresh Clone |
+|--------|:------------:|:-----------:|
+| Learned methodologies | 1,848 | 0 |
+| Source repos mined | 273 | 0 |
+| Tasks executed | 1,668 | 0 |
+| Lifecycle promotions (embryonic → viable) | 18 | 0 |
+| Languages covered | 11 | 0 |
+| Agent quality scores | Bayesian-tracked | Uniform prior (0.5) |
+
+**The knowledge evolves through use.** When CAM retrieves a methodology and uses it for a task:
+- **Success** → methodology's fitness increases, lifecycle advances (embryonic → viable → thriving)
+- **Failure** → fitness decreases, lifecycle may decline, routing shifts to other methodologies
+- **Retrieval patterns** → co-retrieval stigmergic links strengthen synergistic knowledge pairs
+
+This is not a static lookup table. The knowledge base is a **living system** that rewards what works and deprioritizes what doesn't.
+
+### Specialist Team: Run Multiple CAM Instances
+
+Why have one generalist brain when you can have a **team of domain experts**?
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Same Code (GitHub)  →  Multiple Brains (local claw.db each)     │
+│                                                                   │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │ quantum.db  │  │ webdesign.db│  │ memory.db   │              │
+│  │ 200 methods │  │ 150 methods │  │ 180 methods │              │
+│  │ python,rust │  │ ts,css,html │  │ python,go   │              │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
+│         │                │                │                      │
+│         └────────────────┼────────────────┘                      │
+│                          ▼                                       │
+│                 ┌─────────────────┐                              │
+│                 │ Brain Manifests │ ← lightweight JSON indexes   │
+│                 │ (what I know)   │                              │
+│                 └────────┬────────┘                              │
+│                          ▼                                       │
+│                 ┌─────────────────┐                              │
+│                 │   Federation    │ ← cross-query when local     │
+│                 │   (read-only)   │   knowledge is sparse        │
+│                 └─────────────────┘                              │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Each instance generates a **brain manifest** — a compact JSON index summarizing its expertise. When one instance works on a task outside its domain, it reads sibling manifests, scores relevance, and queries the best match via read-only FTS5 search. No data is copied — the sibling's brain stays intact.
+
+**Use cases:**
+- **Quantum computing researcher** with a CAM that knows qubits, error correction, and circuit optimization — while also querying a sibling that knows Python packaging patterns
+- **Web agency** with separate instances for React/Next.js, accessibility, and backend API design — each specialist deepens its own domain while sharing patterns laterally
+- **ML team** with one instance focused on training pipelines and another on deployment/inference — when a task spans both, federation bridges the gap
+- **Solo developer** with one general-purpose instance plus a specialized one for your most complex project — switch via `CLAW_DB_PATH=data/myproject.db cam create ...`
+
+```bash
+# Generate this instance's brain manifest
+cam kb instances manifest
+
+# Register a sibling
+cam kb instances add "quantum-physics" /path/to/quantum/data/claw.db \
+    --description "Quantum computing, qubits, error correction"
+
+# Test cross-instance retrieval
+cam kb instances query "quantum error correction for stabilizer codes"
+
+# List all siblings
+cam kb instances list
+```
+
+### Community Knowledge Sharing (Coming Soon)
+
+CAM instances will be able to share their brain safely via HuggingFace datasets:
+
+```
+cam kb community publish     # Export proven knowledge (7-gate validated)
+cam kb community browse      # Preview others' knowledge before importing
+cam kb community import      # Pull through 7 validation gates + quarantine
+cam kb community approve     # Review quarantined imports before activation
+```
+
+The infrastructure is built and tested (44 tests) — imports go through 7 validation gates (schema, field allowlist, content safety, manifest hash, dedup, niche collision, lifecycle reset). All imported knowledge starts as **embryonic** regardless of the source. The community hub HuggingFace dataset will be published when the first wave of users establishes diverse knowledge bases worth sharing.
 
 ---
 
@@ -36,7 +147,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  122 methodologies with
+                    |  SQLite + Vectors  |  1,848 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -163,7 +274,7 @@ Then prescreened repos (bytedance/deer-flow, github/spec-kit, heroui-inc/heroui,
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 122 methodologies + lifecycle | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 1,848 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -241,7 +352,7 @@ CAM can improve itself. After mining or PULSE ingestion accumulates enough new k
 
 Protected files (`verifier.py`, `factory.py`, `engine.py`, `schema.sql`, `config.py`) require human review even when all gates pass. Cooldown period prevents runaway self-modification.
 
-Proven end-to-end: clone → enhance (1 task, quality 0.97) → all 7 gates PASS → 2,348/2,348 tests pass on enhanced copy.
+Proven end-to-end: clone → enhance (1 task, quality 0.97) → all 7 gates PASS → all tests pass on enhanced copy.
 
 ### Inner Correction Loop
 When verification catches correctable failures (test failures, insufficient coverage, placeholder code), CAM doesn't just log the failure — it retries with full context:
@@ -265,7 +376,12 @@ The verifier auto-extracts structured metric targets from natural language specs
 Supported metrics: `min_coverage_pct`, `min_test_count`, `min_files_changed`, `max_files_changed`. Operators: `gte/gt/lte/lt/eq`. Coverage extraction parses `TOTAL` line from `pytest --cov` output.
 
 ### HuggingFace Model Repository Mining
-CAM mines HuggingFace model repos alongside GitHub. The `HFMountAdapter` (`pulse/hf_adapter.py`) classifies repos into 3 tiers and applies size-appropriate mining strategies:
+
+**Why this matters:** HuggingFace is where the ML community publishes models, datasets, and spaces — not just weights, but training configs, architecture code, and README documentation that encode design decisions. Without HF integration, CAM was blind to half the AI ecosystem.
+
+**How fast this shipped:** HF mining went from concept to production-tested in 2 days — `hf-mount` FUSE adapter, tiered size classification, fallback to `snapshot_download()`, URL routing (`huggingface.co/` auto-detected), and full test coverage. CAM's own knowledge injection pipeline accelerated the build: retrieved patterns from previously-mined repos informed the adapter architecture.
+
+CAM mines HuggingFace model repos alongside GitHub using `hf-mount` (lazy FUSE filesystem) with automatic fallback to `huggingface_hub.snapshot_download()`. The `HFMountAdapter` classifies repos into 3 tiers to avoid downloading multi-GB weight files:
 
 | Tier | Size | Strategy | What's Mined |
 |------|------|----------|-------------|
@@ -273,12 +389,19 @@ CAM mines HuggingFace model repos alongside GitHub. The `HFMountAdapter` (`pulse
 | **standard** | 100 MB – 2 GB | Metadata-only | README + config.json via HF Hub API (no weights downloaded) |
 | **large** | > 2 GB | Metadata-only | Same API approach, avoids multi-GB weight downloads |
 
-```bash
-# Ingest a HuggingFace model repo
-cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
+The `hf-mount` integration streams files on-demand over FUSE — CAM reads what it needs without materializing the full repo. Falls back gracefully to `snapshot_download()` when `hf-mount` isn't installed.
 
-# Works transparently — same command, different URL
+```bash
+# Ingest a HuggingFace model repo — same command, different URL
+cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
 cam pulse ingest https://github.com/bytedance/deer-flow
+
+# Configure in claw.toml:
+# [pulse.hf_mount]
+# enabled = true
+# mount_base = "data/hf_mounts"
+# cache_size_bytes = 1073741824  # 1GB per mount
+# fallback_to_download = true
 ```
 
 ### Repo Freshness Monitor
@@ -329,11 +452,81 @@ When multiple methodologies are retrieved together and the build succeeds, CAM r
 - **Auto-backup** before self-enhancement swaps
 - **Confirmation prompts** before re-mining (which retires old methodologies)
 - **Infrastructure failure isolation** — API timeouts and rate limits never penalize methodology fitness scores
+- **Pre-assimilation secret scanning** — TruffleHog (800+ detectors) blocks repos with critical credentials; regex fallback when binary absent
 
 ### Budget Controls (3 Layers)
 - **Per-scan**: `max_cost_per_scan_usd = 0.50`
 - **Per-day**: `max_cost_per_day_usd = 10.0`
 - **Per-agent**: `max_budget_usd` in each agent section
+
+### Multi-Instance Federation
+Run multiple specialized CAM instances (quantum physics, web design, agentic memory — whatever domains you work in), each with its own `claw.db` and brain manifest. When one instance encounters a task outside its domain, it automatically queries sibling instances via read-only FTS5 search. No data is mutated in sibling databases.
+
+The system works in three steps:
+1. **Manifest generation** — Each instance summarizes its expertise (categories, languages, source repos, lifecycle distribution) into a lightweight JSON manifest
+2. **Relevance scoring** — Keyword overlap (60%), language match (20%), and maturity (20%) determine which siblings to query
+3. **FTS5 cross-query** — Read-only full-text search against relevant siblings, results tagged with source instance
+
+```toml
+# claw.toml
+[instances]
+enabled = true
+instance_name = "general"
+instance_description = "General-purpose AI development patterns"
+
+[[instances.siblings]]
+name = "quantum-physics"
+db_path = "/data/quantum/claw.db"
+description = "Quantum computing, qubits, error correction"
+```
+
+### Community Knowledge Hub Infrastructure
+Full 7-gate validation pipeline for cross-instance knowledge sharing via HuggingFace datasets. Records are packed with provenance metadata, sanitized (API keys stripped, secrets redacted), hashed for integrity, and quarantined until human approval.
+
+The **7 validation gates** (in order):
+1. **Schema** — Required fields, format version, instance ID length, text size limit (32KB)
+2. **Field allowlist** — Strips unknown metadata keys, redacts remaining secrets
+3. **Content safety** — Blocks `exec`, `eval`, `__import__`, `subprocess`, `os.system`, shell injection
+4. **Manifest hash** — Recomputes SHA-256 content hash, rejects on mismatch (tamper detection)
+5. **Dedup** — Checks against existing knowledge base by content hash
+6. **Niche collision** — Soft warning when imported knowledge overlaps existing domain
+7. **Lifecycle reset** — Forces embryonic state, zeroes counters, sets project scope (trust must be earned)
+
+### Fitness History Tracking
+Every fitness recomputation is logged with its full 6-dimensional vector and trigger event (`outcome_success`, `outcome_failure`, `lifecycle_transition`). This enables analysis of how specific methodologies evolved over time — which ones improved with use and which declined.
+
+### License-Aware Mining
+Before mining a repository, CAM detects its license from LICENSE/COPYING files and classifies it as `permissive`, `copyleft`, `unknown`, or `none`. The license type is stored in both `pulse_discoveries` and methodology `capability_data`, so downstream consumers can filter by license compatibility.
+
+### Pre-Assimilation Secret Scanning (TruffleHog + Regex Fallback)
+Before any repository enters the mining pipeline, CAM scans it for hardcoded secrets using a two-gate architecture:
+
+**Gate 1 — TruffleHog filesystem scan** (in `assimilator.py`, before `mine_repo()`):
+- Runs `trufflehog filesystem <path> --json --no-verification` on the cloned/mounted repo
+- CRITICAL findings (private keys, verified credentials, Stripe live keys) → assimilation blocked, status = `blocked_secrets`
+- Non-critical findings → logged, assimilation continues with Gate 2 filtering
+- Falls back to built-in regex scanner (11 patterns: AWS AKIA, GitHub PAT, Slack tokens, Stripe keys, PEM private keys, GCP service accounts, OpenAI keys, etc.) when TruffleHog is not installed
+
+**Gate 2 — Serializer file filtering** (in `miner.py:serialize_repo()`):
+- Files with any secret findings are excluded from the serialized content sent to the LLM
+- Prevents leaked credentials from entering methodology `solution_code` or agent prompts
+
+Both GitHub and HuggingFace ingestion paths are protected. Configurable via `[security]` in `claw.toml`:
+
+```toml
+[security]
+secret_scan_enabled = true
+secret_scan_fail_on_critical = true
+secret_scan_timeout_seconds = 60
+```
+
+```bash
+# Manual scan — check any directory
+cam security scan /path/to/repo
+
+# Check scanner status
+cam security status
+```
 
 ---
 
@@ -348,7 +541,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 2,348 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 2,577 tests passing. Zero skips with API keys configured.
 
 ### Other Install Options
 
@@ -487,12 +680,16 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 2348 passed, 0 skipped (with API keys configured)
+# → 2488 passed, 0 skipped (with API keys configured)
+
+# Scan for secrets before ingestion
+cam security scan /path/to/repo
+cam security status
 ```
 
 ---
 
-## 11 Proven Showpieces
+## 12 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
@@ -509,6 +706,7 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 | 9 | **Inner Correction Loop** | Workspace restore + agent re-prompt with violations. Proven: 3 retries → success on next run. |
 | 10 | **Metric Expectations** | Natural language → structured gates. "90% coverage" auto-extracted and enforced. 51 tests. |
 | 11 | **Repo Freshness Monitor** | ETag caching + significance scoring. Phase 1 costs 0 rate limit for unchanged repos. |
+| 12 | **Pre-Assimilation Secret Scanner** | Two-gate TruffleHog + regex fallback blocks secrets before they reach the LLM. 73 tests. |
 
 Run any showpiece:
 ```bash
@@ -525,9 +723,9 @@ Run any showpiece:
 
 ```
 src/claw/
-  cli.py              # Typer CLI — 66 commands across evaluate, mine, create, validate, pulse, self-enhance
+  cli.py              # Typer CLI — 80+ commands across 10 subapps (10,300+ lines)
   miner.py            # 3-pass mining pipeline + _repair_json()
-  cycle.py            # Inner correction loop: act → verify → restore → re-prompt (up to 3x)
+  cycle.py            # 4-level orchestration + inner correction loop + federation integration
   verifier.py         # 7 checks + MetricExpectation enforcement (coverage, test count, file count)
   reconstruct.py      # Self-enhancement: clone → enhance → validate → swap
   validation_gate.py  # 7-gate validation (syntax, config, import, DB, CLI, pytest, diff)
@@ -538,23 +736,33 @@ src/claw/
     scout.py          # X-Scout: xAI Responses API + x_search
     novelty.py        # Embedding-based novelty filter
     orchestrator.py   # Scan orchestration + circuit breaker
-    assimilator.py    # Clone → serialize → mine → store pipeline
+    assimilator.py    # Clone → license detect → mine → store pipeline
     freshness.py      # Repo freshness monitor: ETag caching + significance scoring + auto re-mine
-    hf_adapter.py     # HuggingFace model repo mining (micro/standard/large tier strategies)
+    hf_adapter.py     # HuggingFace model repo mining (hf-mount FUSE + fallback)
     pr_bridge.py      # PR-based fleet registration and enhancement queuing
     models.py         # Pydantic models for PULSE data
+  security/
+    scanner.py        # TruffleHog + regex fallback secret scanner (Gate 1 + Gate 2)
+  community/
+    manifest.py       # Brain manifest generation + relevance scoring
+    federation.py     # Cross-instance FTS5 search with read-only sibling queries
+    packer.py         # Export methodologies to JSONL with provenance + hash integrity
+    validator.py      # 7-gate import validation (schema, safety, dedup, lifecycle reset)
+    importer.py       # Quarantine-first import with approve/reject workflow
+    hub.py            # HuggingFace dataset push/pull operations
   memory/
     hybrid_search.py  # BM25 text + cosine vector + deepConf 6-factor confidence scoring
     semantic.py       # Semantic memory, co-retrieval stigmergic links, outcome feedback
+    fitness.py        # 6-dimensional fitness scoring + history logging
+    lifecycle.py      # Gause competitive exclusion state machine
   db/
-    engine.py         # SQLite + sqlite-vec (WAL mode), 12 migrations
+    engine.py         # SQLite + sqlite-vec (WAL mode), 15 migrations
   evolution/
-    assimilation.py   # Methodology lifecycle management
-  embeddings/
-    engine.py         # Gemini API / sentence-transformers / MLX fallback
+    assimilation.py   # Methodology lifecycle management + synergy discovery
+    prompt_evolver.py # Bayesian A/B testing + deterministic prompt mutations
 ```
 
-**Database**: SQLite with `sqlite-vec` extension for vector similarity search. WAL mode for concurrent reads. Stores methodologies, embeddings (384-dim), provenance, lifecycle state, usage logs, scan history, and discovery records.
+**Database**: SQLite with `sqlite-vec` extension for vector similarity search. WAL mode for concurrent reads. Stores methodologies, embeddings (384-dim), provenance, lifecycle state, fitness history, community imports, usage logs, scan history, and discovery records. 15 migrations applied automatically.
 
 ---
 
@@ -577,7 +785,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 - `cam create --execute` is gated behind preflight checks — not yet fully autonomous
 - Local mode (Ollama/MLX-LM) works but hasn't been battle-tested as deeply as OpenRouter mode
 - Knowledge retrieval quality depends on the diversity of mined repos
-- Mined methodologies record source repo URL and discovery date. License-aware mining (pre-mine license detection and compatibility gating) is on the roadmap
+- Mined methodologies record source repo URL, discovery date, and license type (permissive/copyleft/unknown/none)
 
 ---
 
@@ -590,8 +798,9 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 3**: PULSE — X-Scout discovery, multi-pass mining, knowledge injection, attribution | **Complete** |
 | **Phase 3.5**: Self-Enhancement — Clone → enhance → 7-gate validate → atomic swap | **Complete** |
 | **Phase 3.75**: Resilience — Inner correction loop, metric expectations, HF-mount, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations | **Complete** |
+| **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), multi-instance federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
 | **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
-| **Phase 5**: Premier — Community rollout, fleet-scale self-enhancement | Planned |
+| **Phase 5**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 
 ---
 
@@ -615,7 +824,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 ## Development
 
 ```bash
-# Run tests (2,348 passing, 0 skipped with API keys)
+# Run tests (2,577 passing, 0 skipped with API keys)
 pytest tests/ -q
 
 # CLI help

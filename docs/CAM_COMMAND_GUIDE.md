@@ -75,6 +75,10 @@ cam pulse daemon --interval 30
 
 # View what CAM has learned
 cam learn report --limit 10
+
+# Scan a repo for secrets before manual review
+cam security scan /path/to/repo
+
 ```
 
 ### If you want CAM to improve itself
@@ -527,6 +531,69 @@ Purpose: Daily assimilation report.
 ```bash
 cam pulse report [--date YYYY-MM-DD]
 ```
+
+---
+
+## Security Scanner
+
+The security commands handle pre-assimilation secret scanning to prevent leaked credentials from entering the knowledge base.
+
+### `cam security scan`
+
+Purpose: Scan a directory for hardcoded secrets, API keys, and credentials using TruffleHog (with regex fallback).
+
+```bash
+cam security scan PATH [--json] [--timeout 60]
+```
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `PATH` | required | Directory to scan |
+| `--json` | false | Output results as JSON |
+| `--timeout` | 60 | TruffleHog subprocess timeout in seconds |
+
+How it works:
+- **TruffleHog available**: Runs `trufflehog filesystem <path> --json --no-verification` — detects 800+ credential types with high precision
+- **TruffleHog not available**: Falls back to built-in regex scanner with 11 high-value patterns (AWS AKIA, GitHub PAT, Slack tokens, Stripe keys, PEM private keys, GCP service accounts, etc.)
+- Findings are classified by severity: CRITICAL, HIGH, MEDIUM, LOW
+- CRITICAL findings (verified credentials, private keys, Stripe live keys) are highlighted in red
+- File paths are shown relative to the scanned directory
+
+Example:
+```bash
+# Scan a directory for secrets
+cam security scan /path/to/repo
+
+# JSON output for CI integration
+cam security scan /path/to/repo --json
+```
+
+### `cam security status`
+
+Purpose: Show TruffleHog availability and current security scanner configuration.
+
+```bash
+cam security status
+```
+
+What it shows:
+- Whether TruffleHog is installed and its version
+- Current `[security]` config from `claw.toml`:
+  - `secret_scan_enabled` — whether scanning is active
+  - `secret_scan_fail_on_critical` — whether critical findings block assimilation
+  - `secret_scan_timeout_seconds` — subprocess timeout
+  - `secret_scan_filter_in_serializer` — whether Gate 2 file filtering is active
+
+Example:
+```bash
+cam security status
+# TruffleHog: AVAILABLE (v3.94.1)
+# Secret scanning: ENABLED
+# Fail on critical: YES
+# Timeout: 60s
+# Filter in serializer: YES
+```
+
 
 ---
 
@@ -1503,3 +1570,5 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 - `pulse discoveries`: browse recent discoveries
 - `pulse scans`: show scan history
 - `pulse report`: daily assimilation report
+- `security scan`: scan a directory for hardcoded secrets and credentials
+- `security status`: show TruffleHog availability and scanner configuration

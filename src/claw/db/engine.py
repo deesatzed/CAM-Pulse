@@ -406,6 +406,73 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration 13 applied: added license_type column")
 
+        # Migration 14: create methodology_fitness_log table
+        mfl_check = await self.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='methodology_fitness_log'"
+        )
+        if not mfl_check:
+            await self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS methodology_fitness_log (
+                    id TEXT PRIMARY KEY,
+                    methodology_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+                    fitness_total REAL NOT NULL,
+                    fitness_vector TEXT NOT NULL DEFAULT '{}',
+                    trigger_event TEXT NOT NULL DEFAULT 'recompute',
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                )
+            """)
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fitness_log_meth ON methodology_fitness_log(methodology_id)"
+            )
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fitness_log_created ON methodology_fitness_log(created_at DESC)"
+            )
+            await self.conn.commit()
+            logger.info("Migration 14 applied: created methodology_fitness_log table")
+
+        # Migration 15: create community sharing tables
+        ci_check = await self.fetch_all(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='community_imports'"
+        )
+        if not ci_check:
+            await self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_imports (
+                    id TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    contributor_instance_id TEXT NOT NULL,
+                    contributor_alias TEXT,
+                    origin_id TEXT,
+                    status TEXT DEFAULT 'quarantined'
+                        CHECK (status IN ('quarantined','approved','rejected')),
+                    gate_results TEXT NOT NULL DEFAULT '{}',
+                    sanitized_record TEXT NOT NULL,
+                    imported_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    approved_at TEXT,
+                    UNIQUE(content_hash)
+                )
+            """)
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_community_imports_status ON community_imports(status)"
+            )
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_community_imports_contributor ON community_imports(contributor_instance_id)"
+            )
+            await self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_import_audit (
+                    id TEXT PRIMARY KEY,
+                    contributor_instance_id TEXT,
+                    action TEXT NOT NULL,
+                    gate_name TEXT,
+                    detail TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                )
+            """)
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_community_audit_action ON community_import_audit(action)"
+            )
+            await self.conn.commit()
+            logger.info("Migration 15 applied: created community sharing tables")
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:

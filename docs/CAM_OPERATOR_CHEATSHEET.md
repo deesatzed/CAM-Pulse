@@ -22,6 +22,7 @@ Preferred mental split:
   - `cam learn ...`
   - `cam task ...`
   - `cam forge ...`
+  - `cam security ...`
 
 ## 1. Check That CAM Is Healthy
 
@@ -292,6 +293,26 @@ Use this when:
 ```
 
 Use this when you need to know whether CAM's highest-trust methodologies are actually backed by attributed, expectation-matched outcomes instead of legacy/raw-success counters.
+
+## 13. Scan For Secrets Before Assimilation
+
+```bash
+# Check if TruffleHog is installed and configured
+.venv/bin/cam security status
+
+# Scan a directory for hardcoded secrets
+.venv/bin/cam security scan /path/to/repo
+
+# JSON output for CI pipelines
+.venv/bin/cam security scan /path/to/repo --json
+```
+
+Use this when:
+- you are about to ingest a repo and want to verify it is free of leaked credentials
+- you want to audit your own codebase for accidental secret exposure
+- you want to check TruffleHog availability before running PULSE ingestion
+
+Note: PULSE ingestion (`cam pulse ingest`) runs this scan automatically as Gate 1 — repos with CRITICAL findings are blocked from assimilation. This command lets you run the scan manually outside of PULSE.
 
 ## Rules Of Thumb
 

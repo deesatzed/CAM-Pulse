@@ -87,6 +87,12 @@ ab_test_app = typer.Typer(
     no_args_is_help=True,
 )
 
+security_app = typer.Typer(
+    name="security",
+    help="Security tools — secret scanning, policy checks",
+    no_args_is_help=True,
+)
+
 _FOUNDATION_CHARTER = [
     {
         "name": "learn",
@@ -7973,6 +7979,118 @@ app.add_typer(kb_app, name="kb")
 app.add_typer(pulse_app, name="pulse")
 app.add_typer(self_enhance_app, name="self-enhance")
 app.add_typer(ab_test_app, name="ab-test")
+app.add_typer(security_app, name="security")
+
+
+# ---------------------------------------------------------------------------
+# Security commands
+# ---------------------------------------------------------------------------
+
+@security_app.command(name="scan")
+def security_scan(
+    path: str = typer.Argument(..., help="Path to directory to scan for secrets"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show all findings"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Scan a directory for hardcoded secrets using TruffleHog (or regex fallback)."""
+    import asyncio
+
+    async def _run():
+        from claw.security.scanner import SecretScanner, ScanSeverity
+
+        target = Path(path).resolve()
+        if not target.is_dir():
+            console.print(f"[red]Error:[/red] {path} is not a directory")
+            raise typer.Exit(1)
+
+        scanner = SecretScanner()
+        scanner_name = "trufflehog" if scanner._trufflehog_available else "regex (fallback)"
+        console.print(f"\n[bold]Secret Scan[/bold] — {target}")
+        console.print(f"  Scanner: {scanner_name}\n")
+
+        result = await scanner.scan(target)
+
+        if result.error:
+            console.print(f"[red]Scan error:[/red] {result.error}")
+            raise typer.Exit(1)
+
+        if json_output:
+            import json
+            output = {
+                "path": result.path,
+                "scanner": result.scanner_used,
+                "duration_seconds": round(result.scan_duration_seconds, 2),
+                "findings_count": len(result.findings),
+                "critical_count": result.critical_count,
+                "findings": [
+                    {
+                        "file": f.file_path,
+                        "line": f.line,
+                        "detector": f.detector_name,
+                        "severity": f.severity,
+                        "verified": f.verified,
+                        "redacted": f.redacted_match,
+                    }
+                    for f in result.findings
+                ],
+            }
+            console.print(json.dumps(output, indent=2))
+        else:
+            if not result.has_any:
+                console.print(
+                    f"  [green]CLEAN[/green] — 0 findings ({result.scan_duration_seconds:.1f}s)"
+                )
+            else:
+                for f in result.findings:
+                    if f.severity in (ScanSeverity.CRITICAL, ScanSeverity.HIGH) or verbose:
+                        if f.severity == ScanSeverity.CRITICAL:
+                            icon = "[red]CRITICAL[/red]"
+                        elif f.severity == ScanSeverity.HIGH:
+                            icon = "[yellow]HIGH[/yellow]"
+                        else:
+                            icon = f"[dim]{f.severity}[/dim]"
+                        console.print(
+                            f"  {icon} {f.file_path}:{f.line} — "
+                            f"{f.detector_name} ({f.redacted_match})"
+                        )
+                console.print(
+                    f"\n  Total: {len(result.findings)} findings "
+                    f"({result.critical_count} critical) in "
+                    f"{result.scan_duration_seconds:.1f}s"
+                )
+
+        raise typer.Exit(1 if result.has_critical else 0)
+
+    asyncio.run(_run())
+
+
+@security_app.command(name="status")
+def security_status() -> None:
+    """Check secret scanner availability and configuration."""
+    from claw.security.scanner import _trufflehog_available
+    from claw.core.config import load_config
+
+    config = load_config()
+
+    console.print("\n[bold]Security Scanner Status[/bold]")
+    console.print(f"  Enabled: {config.security.secret_scan_enabled}")
+    console.print(f"  Fail on critical: {config.security.secret_scan_fail_on_critical}")
+    console.print(f"  Filter in serializer: {config.security.secret_scan_filter_in_serializer}")
+    console.print(f"  Timeout: {config.security.secret_scan_timeout_seconds}s")
+
+    if _trufflehog_available():
+        import subprocess
+        try:
+            version = subprocess.run(
+                ["trufflehog", "--version"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except Exception:
+            version = "unknown"
+        console.print(f"  TruffleHog: [green]AVAILABLE[/green] ({version})")
+    else:
+        console.print("  TruffleHog: [yellow]NOT FOUND[/yellow] (using regex fallback)")
+        console.print("  Install: [dim]brew install trufflehog[/dim]")
 
 
 async def _kb_engine():
@@ -9860,6 +9978,479 @@ def ab_test_stop() -> None:
 
     asyncio.run(_run())
     console.print("[green]Knowledge ablation test stopped and data cleared.[/green]")
+
+
+# ---------------------------------------------------------------------------
+# kb community — Community knowledge sharing sub-app
+# ---------------------------------------------------------------------------
+
+community_app = typer.Typer(
+    name="community",
+    help="Share and import knowledge between CAM instances via HuggingFace",
+    no_args_is_help=True,
+)
+kb_app.add_typer(community_app, name="community")
+
+
+@community_app.command()
+def publish(
+    alias: str = typer.Option("", "--alias", "-a", help="Contributor alias (human-readable)"),
+    hf_repo: str = typer.Option("cam-community/knowledge-hub", "--hf-repo", help="HuggingFace dataset repo"),
+    min_lifecycle: str = typer.Option("viable", "--min-lifecycle", help="Minimum lifecycle state to include"),
+    max_count: int = typer.Option(500, "--max", help="Max methodologies to publish"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without uploading"),
+) -> None:
+    """Export proven knowledge to a HuggingFace community hub."""
+
+    async def _run():
+        from pathlib import Path
+
+        from claw.community.packer import pack_methodologies
+
+        engine, _ = await _kb_engine()
+        try:
+            state_path = Path("data/community_state.json")
+            records, manifest = await pack_methodologies(
+                engine, state_path, min_lifecycle=min_lifecycle,
+                max_count=max_count, contributor_alias=alias,
+            )
+            if not records:
+                console.print("[yellow]No methodologies match the lifecycle filter.[/yellow]")
+                return
+
+            console.print(f"[bold]Packed {len(records)} methodologies[/bold]")
+            console.print(f"  Instance ID: {manifest['instance_id'][:12]}...")
+            console.print(f"  Languages: {manifest['language_breakdown']}")
+            console.print(f"  Lifecycle filter: {manifest['lifecycle_filter']}")
+
+            if dry_run:
+                console.print("[yellow]Dry run — not uploading.[/yellow]")
+                # Write locally for inspection
+                out_path = Path(f"data/community_pack_{manifest['instance_id'][:12]}.jsonl")
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                import json
+                with open(out_path, "w") as f:
+                    for r in records:
+                        f.write(json.dumps(r) + "\n")
+                console.print(f"  Written to: {out_path}")
+                return
+
+            from claw.community.hub import push_pack
+            url = await push_pack(records, manifest, hf_repo=hf_repo, instance_id=manifest["instance_id"])
+            console.print(f"[green]Published to {url}[/green]")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@community_app.command()
+def browse(
+    hf_repo: str = typer.Option("cam-community/knowledge-hub", "--hf-repo", help="HuggingFace dataset repo"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max methodologies to preview"),
+) -> None:
+    """Preview knowledge available in the community hub."""
+
+    async def _run():
+        from claw.community.hub import list_contributors
+        contributors = await list_contributors(hf_repo=hf_repo)
+        if not contributors:
+            console.print("[yellow]No contributors found in the hub.[/yellow]")
+            return
+
+        from rich.table import Table
+        table = Table(title=f"Community Hub: {hf_repo}")
+        table.add_column("Alias")
+        table.add_column("Methodologies", justify="right")
+        table.add_column("Languages")
+        table.add_column("Exported")
+        table.add_column("Instance ID")
+
+        for c in contributors:
+            table.add_row(
+                c.get("contributor_alias", "—"),
+                str(c.get("methodology_count", 0)),
+                ", ".join(c.get("domains", [])),
+                c.get("exported_at", "—")[:10],
+                c.get("instance_id", "—")[:12] + "...",
+            )
+        console.print(table)
+
+    asyncio.run(_run())
+
+
+@community_app.command(name="import")
+def import_(
+    hf_repo: str = typer.Option("cam-community/knowledge-hub", "--hf-repo", help="HuggingFace dataset repo"),
+    contributor: str = typer.Option("", "--contributor", "-c", help="Instance ID or alias to import from"),
+    from_file: str = typer.Option("", "--from-file", "-f", help="Import from local JSONL file instead of HF"),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Skip quarantine — write directly to KB"),
+    max_records: int = typer.Option(200, "--max", help="Max records to import"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Validate only, no DB writes"),
+) -> None:
+    """Import knowledge from a community hub or local JSONL file."""
+
+    async def _run():
+        import json
+        from pathlib import Path
+
+        from claw.community.importer import import_records
+
+        engine, _ = await _kb_engine()
+        try:
+            records = []
+            if from_file:
+                path = Path(from_file)
+                if not path.exists():
+                    console.print(f"[red]File not found: {from_file}[/red]")
+                    return
+                for line in path.read_text().strip().splitlines():
+                    if line.strip():
+                        records.append(json.loads(line))
+                console.print(f"Loaded {len(records)} records from {from_file}")
+            elif contributor:
+                from claw.community.hub import pull_contributor_pack
+                records = await pull_contributor_pack(contributor, hf_repo=hf_repo)
+                console.print(f"Pulled {len(records)} records from contributor {contributor[:12]}...")
+            else:
+                console.print("[red]Specify --contributor or --from-file[/red]")
+                return
+
+            if dry_run:
+                from claw.community.validator import validate_record
+                from claw.community.importer import _ensure_tables
+                await _ensure_tables(engine)
+                passed = 0
+                failed = 0
+                for r in records[:max_records]:
+                    result = await validate_record(r, engine)
+                    if result.passed:
+                        passed += 1
+                    else:
+                        failed += 1
+                        gates = [g.gate_name for g in result.gates if not g.passed]
+                        console.print(f"  [red]REJECT[/red] {r.get('id', '?')[:20]}: {gates}")
+                console.print(f"\n[bold]Dry run: {passed} would pass, {failed} would fail[/bold]")
+                return
+
+            summary = await import_records(
+                records, engine, max_records=max_records, auto_approve=auto_approve,
+            )
+            action = "auto-approved" if auto_approve else "quarantined"
+            console.print(f"[green]{summary['imported']} records {action}[/green]")
+            if summary["rejected"]:
+                console.print(f"[yellow]{summary['rejected']} records rejected[/yellow]")
+            if summary["skipped"]:
+                console.print(f"[dim]{summary['skipped']} duplicates skipped[/dim]")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@community_app.command()
+def approve(
+    record_id: str = typer.Option("", "--id", help="Approve specific quarantined record"),
+    show: bool = typer.Option(False, "--show", help="List quarantined records"),
+) -> None:
+    """Review and approve quarantined community imports."""
+
+    async def _run():
+        from claw.community.importer import approve_all, approve_one, list_quarantined
+
+        engine, _ = await _kb_engine()
+        try:
+            if show:
+                quarantined = await list_quarantined(engine)
+                if not quarantined:
+                    console.print("[green]No records in quarantine.[/green]")
+                    return
+                from rich.table import Table
+                table = Table(title="Quarantined Imports")
+                table.add_column("ID")
+                table.add_column("Contributor")
+                table.add_column("Imported")
+                table.add_column("Warnings")
+                for q in quarantined:
+                    table.add_row(
+                        q["id"][:12] + "...",
+                        q.get("contributor", "—"),
+                        q.get("imported_at", "—")[:10],
+                        str(len(q.get("gate_warnings", []))),
+                    )
+                console.print(table)
+                return
+
+            if record_id:
+                ok = await approve_one(engine, record_id)
+                if ok:
+                    console.print(f"[green]Approved {record_id}[/green]")
+                else:
+                    console.print(f"[red]Record not found in quarantine: {record_id}[/red]")
+            else:
+                count = await approve_all(engine)
+                console.print(f"[green]Approved {count} records into the knowledge base.[/green]")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@community_app.command()
+def status() -> None:
+    """Show community sharing status — local instance, quarantine count, hub info."""
+
+    async def _run():
+        import json
+        from pathlib import Path
+
+        from claw.community.packer import _get_instance_id
+
+        engine, _ = await _kb_engine()
+        try:
+            state_path = Path("data/community_state.json")
+            instance_id = _get_instance_id(state_path)
+
+            # Quarantine count
+            quarantine_count = 0
+            try:
+                rows = await engine.fetch_all(
+                    "SELECT COUNT(*) as cnt FROM community_imports WHERE status = 'quarantined'"
+                )
+                quarantine_count = rows[0]["cnt"] if rows else 0
+            except Exception:
+                pass
+
+            # Imported count
+            imported_count = 0
+            try:
+                rows = await engine.fetch_all(
+                    "SELECT COUNT(*) as cnt FROM community_imports WHERE status = 'approved'"
+                )
+                imported_count = rows[0]["cnt"] if rows else 0
+            except Exception:
+                pass
+
+            # Community-tagged methodologies
+            community_meths = 0
+            try:
+                rows = await engine.fetch_all(
+                    "SELECT COUNT(*) as cnt FROM methodologies WHERE tags LIKE '%imported%'"
+                )
+                community_meths = rows[0]["cnt"] if rows else 0
+            except Exception:
+                pass
+
+            console.print("[bold]Community Status[/bold]")
+            console.print(f"  Instance ID: {instance_id[:16]}...")
+            console.print(f"  Quarantined: {quarantine_count}")
+            console.print(f"  Approved imports: {imported_count}")
+            console.print(f"  Community methodologies in KB: {community_meths}")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# cam kb instances — Multi-instance federation management
+# ---------------------------------------------------------------------------
+
+instances_app = typer.Typer(
+    name="instances",
+    help="Manage multi-instance CAM federation — manifests, siblings, cross-queries.",
+)
+kb_app.add_typer(instances_app, name="instances")
+
+
+@instances_app.command(name="list")
+def instances_list() -> None:
+    """List registered sibling instances and their manifest summaries."""
+
+    async def _run():
+        from claw.community.federation import Federation
+        from claw.core.config import load_config
+
+        config = load_config()
+        if not config.instances.siblings:
+            console.print("[yellow]No sibling instances configured.[/yellow]")
+            console.print("Add [[instances.siblings]] entries to claw.toml")
+            return
+
+        federation = Federation(config.instances)
+        summaries = await federation.get_sibling_summaries()
+
+        table = Table(title="Registered Sibling Instances")
+        table.add_column("Name", style="cyan")
+        table.add_column("Description")
+        table.add_column("DB Exists", justify="center")
+        table.add_column("Methodologies", justify="right")
+        table.add_column("Top Categories")
+        table.add_column("Languages")
+
+        for s in summaries:
+            db_status = "[green]Yes[/green]" if s["db_exists"] else "[red]No[/red]"
+            cats = ", ".join(s["top_categories"][:3]) if s["top_categories"] else "-"
+            langs = ", ".join(s["languages"][:3]) if s["languages"] else "-"
+            table.add_row(
+                s["name"],
+                s["description"][:50] or "-",
+                db_status,
+                str(s["total_methodologies"]),
+                cats,
+                langs,
+            )
+
+        console.print(table)
+
+        # Show this instance's info
+        console.print(f"\n[bold]This instance:[/bold] {config.instances.instance_name or '(unnamed)'}")
+        console.print(f"  Description: {config.instances.instance_description or '(none)'}")
+        console.print(f"  Manifest: {config.instances.manifest_path}")
+        console.print(f"  Federation: {'[green]enabled[/green]' if config.instances.enabled else '[red]disabled[/red]'}")
+
+    asyncio.run(_run())
+
+
+@instances_app.command()
+def manifest() -> None:
+    """Generate/refresh this instance's brain manifest."""
+
+    async def _run():
+        from pathlib import Path
+
+        from claw.community.manifest import save_manifest
+        from claw.core.config import load_config
+
+        config = load_config()
+        engine, _ = await _kb_engine()
+        try:
+            manifest_path = Path(config.instances.manifest_path)
+            result = await save_manifest(
+                engine,
+                manifest_path,
+                instance_name=config.instances.instance_name,
+                instance_description=config.instances.instance_description,
+            )
+            console.print(f"[green]Brain manifest saved to {manifest_path}[/green]")
+            console.print(f"  Total methodologies: {result['total_methodologies']}")
+            console.print(f"  Source repos: {result['source_repo_count']}")
+            console.print(f"  Top categories: {', '.join(list(result['top_categories'].keys())[:5])}")
+            console.print(f"  Languages: {', '.join(list(result['language_breakdown'].keys())[:5])}")
+            console.print(f"  PULSE discoveries: {result['pulse_discoveries_assimilated']}")
+            console.print(f"  Fingerprint: {result['fingerprint']}")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@instances_app.command()
+def query(
+    text: str = typer.Argument(..., help="Task description or query to search for"),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
+    max_results: int = typer.Option(5, "--max", "-m", help="Max results"),
+) -> None:
+    """Test cross-instance federation query against all siblings."""
+
+    async def _run():
+        from claw.community.federation import Federation
+        from claw.core.config import load_config
+
+        config = load_config()
+        if not config.instances.enabled:
+            console.print("[yellow]Federation is disabled. Set instances.enabled = true in claw.toml[/yellow]")
+            return
+        if not config.instances.siblings:
+            console.print("[yellow]No sibling instances configured.[/yellow]")
+            return
+
+        federation = Federation(config.instances)
+        results = await federation.query(text, language=language, max_total=max_results)
+
+        if not results:
+            console.print("[dim]No results from sibling instances.[/dim]")
+            return
+
+        console.print(f"[bold]Federation results for:[/bold] {text[:80]}")
+        console.print()
+        for i, r in enumerate(results, 1):
+            m = r.methodology
+            console.print(f"[cyan]{i}.[/cyan] [bold]{(m.problem_description or 'Untitled')[:80]}[/bold]")
+            console.print(f"   Source: [magenta]{r.source_instance}[/magenta]  |  Relevance: {r.relevance_score:.3f}  |  FTS rank: {r.fts_rank:.3f}")
+            console.print(f"   Language: {m.language or '-'}  |  Lifecycle: {m.lifecycle_state}  |  Success: {m.success_count}")
+            if m.methodology_notes:
+                console.print(f"   Notes: {m.methodology_notes[:150]}")
+            console.print()
+
+    asyncio.run(_run())
+
+
+@instances_app.command()
+def add(
+    name: str = typer.Argument(..., help="Sibling instance name"),
+    db_path: str = typer.Argument(..., help="Absolute path to sibling's claw.db"),
+    description: str = typer.Option("", "--description", "-d", help="Domain description"),
+) -> None:
+    """Register a new sibling instance (appends to claw.toml)."""
+    from pathlib import Path
+
+    db = Path(db_path)
+    if not db.exists():
+        console.print(f"[yellow]Warning: DB file not found at {db_path}[/yellow]")
+        console.print("The sibling will be registered but won't be queryable until the DB exists.")
+
+    # Find claw.toml
+    toml_path = Path("claw.toml")
+    if not toml_path.exists():
+        console.print("[red]claw.toml not found in current directory[/red]")
+        raise typer.Exit(1)
+
+    content = toml_path.read_text()
+
+    # Append the sibling entry
+    entry = f"""
+[[instances.siblings]]
+name = "{name}"
+db_path = "{db_path}"
+description = "{description}"
+"""
+    content += entry
+    toml_path.write_text(content)
+    console.print(f"[green]Added sibling '{name}' → {db_path}[/green]")
+    console.print("Run [bold]cam kb instances manifest[/bold] on the sibling to generate its brain manifest.")
+
+
+@instances_app.command()
+def remove(
+    name: str = typer.Argument(..., help="Sibling instance name to remove"),
+) -> None:
+    """Remove a sibling instance from claw.toml."""
+    import toml as toml_lib
+    from pathlib import Path
+
+    toml_path = Path("claw.toml")
+    if not toml_path.exists():
+        console.print("[red]claw.toml not found[/red]")
+        raise typer.Exit(1)
+
+    with open(toml_path) as f:
+        data = toml_lib.load(f)
+
+    siblings = data.get("instances", {}).get("siblings", [])
+    original_count = len(siblings)
+    siblings = [s for s in siblings if s.get("name") != name]
+
+    if len(siblings) == original_count:
+        console.print(f"[yellow]No sibling named '{name}' found[/yellow]")
+        return
+
+    data.setdefault("instances", {})["siblings"] = siblings
+
+    with open(toml_path, "w") as f:
+        toml_lib.dump(data, f)
+
+    console.print(f"[green]Removed sibling '{name}'[/green]")
 
 
 def app_main() -> None:

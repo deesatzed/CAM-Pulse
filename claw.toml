@@ -60,6 +60,12 @@ safe_env_vars = [
     "GOOGLE_API_KEY", "XAI_API_KEY",
     "OPENROUTER_API_KEY",
 ]
+# Pre-assimilation secret scanning (TruffleHog + regex fallback)
+secret_scan_enabled = true
+secret_scan_fail_on_critical = true
+secret_scan_timeout_seconds = 60
+secret_scan_no_verification = true
+secret_scan_filter_in_serializer = true
 
 [token_tracking]
 enabled = true
@@ -309,6 +315,65 @@ trigger_after_mine = false      # Auto-assess trigger after cam mine
 trigger_after_pulse_ingest = false  # Auto-assess trigger after cam pulse ingest
 cooldown_hours = 24             # Minimum hours between runs
 max_enhance_tasks = 10          # Max tasks per self-enhance run
+
+# ---------------------------------------------------------------------------
+# Community Knowledge Sharing
+# ---------------------------------------------------------------------------
+# Share and import learned methodologies safely via HuggingFace datasets.
+# Records are packed with provenance metadata and validated through 7 gates.
+# Imported knowledge enters quarantine (unless auto_approve = true).
+
+[community]
+hf_repo = "cam-community/knowledge-hub"
+hf_token_env = "HF_TOKEN"
+novelty_threshold = 0.70
+min_lifecycle_to_publish = "viable"
+auto_approve = false
+max_import_per_session = 200
+max_publish_count = 500
+instance_id_file = "data/community_state.json"
+
+# ---------------------------------------------------------------------------
+# Multi-Instance Federation
+# ---------------------------------------------------------------------------
+# Run multiple specialized CAM instances (e.g. quantum-physics, web-design,
+# agentic-memory) each with their own claw.db. Instances can discover and
+# cross-reference each other's knowledge via brain manifests.
+#
+# Each instance generates a manifest summarizing what it knows (categories,
+# languages, source repos). During task execution, if local knowledge is sparse,
+# CAM queries relevant siblings for supplemental methodologies.
+
+[instances]
+enabled = false
+manifest_path = "data/brain_manifest.json"
+instance_name = ""                           # e.g. "general", "quantum-physics", "web-design"
+instance_description = ""                    # e.g. "Quantum computing patterns and algorithms"
+federation_confidence_threshold = 0.3        # Skip federation if local confidence >= this
+federation_relevance_threshold = 0.2         # Min manifest relevance score to query sibling
+federation_max_results = 3                   # Max results per sibling query
+
+# ── Sibling instances (uncomment and configure) ──
+#
+# Each sibling needs: name, db_path (absolute), and a short description.
+# The manifest_path is auto-generated if left empty.
+#
+# Example: three specialized instances
+#
+# [[instances.siblings]]
+# name = "quantum-physics"
+# db_path = "/path/to/quantum/data/claw.db"
+# description = "Quantum computing, qubits, gates, error correction, circuit optimization"
+#
+# [[instances.siblings]]
+# name = "web-design"
+# db_path = "/path/to/webdesign/data/claw.db"
+# description = "Frontend frameworks, CSS patterns, responsive design, accessibility, UX"
+#
+# [[instances.siblings]]
+# name = "agentic-memory"
+# db_path = "/path/to/memory/data/claw.db"
+# description = "Agent memory systems, RAG, embeddings, knowledge graphs, vector search"
 
 # ---------------------------------------------------------------------------
 # Local LLM providers (Ollama / MLX-LM)

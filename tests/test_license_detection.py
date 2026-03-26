@@ -4,6 +4,7 @@ Covers:
 - _detect_license() classification for all license families
 - Migration 13 idempotency
 - License metadata flow into pulse_discoveries and capability_data
+- Miner _seed_capability_data_from_finding() license_type propagation
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ class TestDetectLicense:
     def test_empty_license_file(self, tmp_path: Path) -> None:
         """Empty LICENSE file is treated as unknown."""
         (tmp_path / "LICENSE").write_text("")
-        # Empty string is falsy → returns "none"
+        # Empty string is falsy -> returns "none"
         assert PulseAssimilator._detect_license(tmp_path) == "none"
 
     def test_license_priority_first_match_wins(self, tmp_path: Path) -> None:
@@ -222,7 +223,7 @@ class TestMigration13:
             await db_engine.connect()
             await db_engine.apply_migrations()
             await db_engine.initialize_schema()
-            # Run again — should be silent
+            # Run again -- should be silent
             await db_engine.apply_migrations()
             await db_engine.initialize_schema()
 
@@ -278,7 +279,7 @@ class TestModelFields:
 # ---------------------------------------------------------------------------
 
 class TestLicenseStorageRoundTrip:
-    """Verify license_type survives write → read in pulse_discoveries."""
+    """Verify license_type survives write -> read in pulse_discoveries."""
 
     def test_license_type_stored_and_retrieved(self) -> None:
         import uuid
@@ -309,3 +310,131 @@ class TestLicenseStorageRoundTrip:
             await engine.close()
 
         asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Miner capability_data license propagation
+# ---------------------------------------------------------------------------
+
+class TestMinerLicensePropagation:
+    """Verify RepoMiner._seed_capability_data_from_finding() includes license_type.
+
+    The _seed_capability_data_from_finding method at miner.py:861 reads
+    license_type from self._current_mine_metadata (set by the assimilator
+    before mining). This test verifies the full propagation chain using
+    a real RepoMiner instance with real dependencies.
+    """
+
+    def test_license_in_methodology_capability_data(self) -> None:
+        """Setting _current_mine_metadata on RepoMiner propagates license_type
+        into the capability_data dict produced by _seed_capability_data_from_finding().
+        """
+        from claw.core.config import DatabaseConfig, load_config
+        from claw.db.embeddings import EmbeddingEngine
+        from claw.db.engine import DatabaseEngine
+        from claw.db.repository import Repository
+        from claw.llm.client import LLMClient
+        from claw.memory.hybrid_search import HybridSearch
+        from claw.memory.semantic import SemanticMemory
+        from claw.miner import MiningFinding, RepoMiner
+
+        config = load_config()
+        db_config = DatabaseConfig(db_path=":memory:")
+        embedding_engine = EmbeddingEngine()
+
+        # Build a real RepoMiner with real dependencies.
+        # _seed_capability_data_from_finding is a sync method that only reads
+        # self._current_mine_metadata and the finding fields -- no network or
+        # DB calls are made, but the constructor requires these objects.
+        async def _build_and_test():
+            engine = DatabaseEngine(db_config)
+            await engine.connect()
+            repo = Repository(engine)
+            llm_client = LLMClient(config.llm)
+            hybrid_search = HybridSearch(repo, embedding_engine)
+            semantic_memory = SemanticMemory(repo, embedding_engine, hybrid_search)
+            miner = RepoMiner(repo, llm_client, semantic_memory, config)
+
+            try:
+                # Simulate what the assimilator sets before mining a repo
+                miner._current_mine_metadata = {"license_type": "permissive"}
+
+                finding = MiningFinding(
+                    title="Pattern: retry decorator",
+                    description="Exponential backoff retry logic with jitter",
+                    category="resilience",
+                    source_repo="https://github.com/test/repo",
+                    source_files=["src/retry.py"],
+                    relevance_score=0.75,
+                )
+
+                cap_data = miner._seed_capability_data_from_finding(finding)
+
+                # Verify license_type is present and has the correct value
+                assert "license_type" in cap_data, (
+                    f"license_type key missing from capability_data. "
+                    f"Keys present: {sorted(cap_data.keys())}"
+                )
+                assert cap_data["license_type"] == "permissive"
+
+                # Verify copyleft also propagates correctly
+                miner._current_mine_metadata = {"license_type": "copyleft"}
+                cap_data_copyleft = miner._seed_capability_data_from_finding(finding)
+                assert cap_data_copyleft["license_type"] == "copyleft"
+
+                # Verify default when no metadata is set (getattr fallback)
+                del miner._current_mine_metadata
+                cap_data_no_meta = miner._seed_capability_data_from_finding(finding)
+                assert cap_data_no_meta["license_type"] == ""
+
+            finally:
+                await engine.close()
+
+        asyncio.run(_build_and_test())
+
+    def test_license_empty_string_when_metadata_has_no_key(self) -> None:
+        """When _current_mine_metadata exists but lacks license_type key,
+        capability_data should contain license_type as empty string.
+        """
+        from claw.core.config import DatabaseConfig, load_config
+        from claw.db.embeddings import EmbeddingEngine
+        from claw.db.engine import DatabaseEngine
+        from claw.db.repository import Repository
+        from claw.llm.client import LLMClient
+        from claw.memory.hybrid_search import HybridSearch
+        from claw.memory.semantic import SemanticMemory
+        from claw.miner import MiningFinding, RepoMiner
+
+        config = load_config()
+        db_config = DatabaseConfig(db_path=":memory:")
+        embedding_engine = EmbeddingEngine()
+
+        async def _build_and_test():
+            engine = DatabaseEngine(db_config)
+            await engine.connect()
+            repo = Repository(engine)
+            llm_client = LLMClient(config.llm)
+            hybrid_search = HybridSearch(repo, embedding_engine)
+            semantic_memory = SemanticMemory(repo, embedding_engine, hybrid_search)
+            miner = RepoMiner(repo, llm_client, semantic_memory, config)
+
+            try:
+                # Metadata exists but has no license_type key
+                miner._current_mine_metadata = {"some_other_field": "value"}
+
+                finding = MiningFinding(
+                    title="Pattern: circuit breaker",
+                    description="Circuit breaker pattern for external calls",
+                    category="resilience",
+                    source_repo="https://github.com/test/repo2",
+                    source_files=["src/breaker.py"],
+                    relevance_score=0.80,
+                )
+
+                cap_data = miner._seed_capability_data_from_finding(finding)
+                assert cap_data["license_type"] == ""
+
+            finally:
+                await engine.close()
+
+        asyncio.run(_build_and_test())

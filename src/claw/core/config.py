@@ -99,6 +99,12 @@ class SecurityConfig(BaseModel):
             "OPENROUTER_API_KEY",
         ]
     )
+    # Pre-assimilation secret scanning
+    secret_scan_enabled: bool = True
+    secret_scan_fail_on_critical: bool = True
+    secret_scan_timeout_seconds: int = 60
+    secret_scan_no_verification: bool = True
+    secret_scan_filter_in_serializer: bool = True
 
 
 class TokenTrackingConfig(BaseModel):
@@ -303,6 +309,38 @@ class SelfEnhanceConfig(BaseModel):
     max_enhance_tasks: int = 10  # Max enhancement tasks per run
 
 
+class CommunityConfig(BaseModel):
+    """Community knowledge sharing configuration."""
+    hf_repo: str = "cam-community/knowledge-hub"
+    hf_token_env: str = "HF_TOKEN"
+    novelty_threshold: float = 0.70
+    min_lifecycle_to_publish: str = "viable"
+    auto_approve: bool = False
+    max_import_per_session: int = 200
+    max_publish_count: int = 500
+    instance_id_file: str = "data/community_state.json"
+
+
+class InstanceConfig(BaseModel):
+    """Configuration for a single sibling CAM instance."""
+    name: str  # Human-readable name (e.g. "quantum-physics")
+    db_path: str  # Absolute path to sibling's claw.db
+    description: str = ""  # Domain focus description
+    manifest_path: str = ""  # Path to cached manifest JSON (auto-set if empty)
+
+
+class InstanceRegistryConfig(BaseModel):
+    """Multi-instance federation configuration."""
+    enabled: bool = False
+    manifest_path: str = "data/brain_manifest.json"  # This instance's manifest
+    instance_name: str = ""  # This instance's human-readable name
+    instance_description: str = ""  # This instance's domain focus
+    federation_confidence_threshold: float = 0.3  # Min local confidence to skip federation
+    federation_relevance_threshold: float = 0.2  # Min manifest relevance to query sibling
+    federation_max_results: int = 3  # Max results per sibling
+    siblings: list[InstanceConfig] = Field(default_factory=list)
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -326,6 +364,8 @@ class ClawConfig(BaseModel):
     pulse: PulseConfig = Field(default_factory=PulseConfig)
     deep_conf: DeepConfConfig = Field(default_factory=DeepConfConfig)
     self_enhance: SelfEnhanceConfig = Field(default_factory=SelfEnhanceConfig)
+    community: CommunityConfig = Field(default_factory=CommunityConfig)
+    instances: InstanceRegistryConfig = Field(default_factory=InstanceRegistryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
@@ -408,6 +448,16 @@ def load_config(config_path: Optional[Path] = None) -> ClawConfig:
     for agent_name, agent_data in agents_raw.items():
         if isinstance(agent_data, dict):
             agents[agent_name] = AgentConfig(**agent_data)
+
+    # Convert instances.siblings: list of TOML tables → list[InstanceConfig]
+    instances_raw = raw.get("instances", {})
+    if isinstance(instances_raw, dict) and "siblings" in instances_raw:
+        siblings_raw = instances_raw.get("siblings", [])
+        if isinstance(siblings_raw, list):
+            instances_raw["siblings"] = [
+                InstanceConfig(**s) if isinstance(s, dict) else s
+                for s in siblings_raw
+            ]
 
     # Environment variable overrides
     db_path_env = os.getenv("CLAW_DB_PATH")

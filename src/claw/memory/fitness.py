@@ -127,3 +127,32 @@ def get_fitness_score(methodology: Methodology) -> float:
         except (TypeError, ValueError):
             pass
     return 0.5  # Neutral fallback for legacy/unscored entries
+
+
+async def log_fitness_change(
+    engine: "DatabaseEngine",
+    methodology_id: str,
+    fitness_total: float,
+    fitness_vector: dict[str, float],
+    trigger_event: str = "recompute",
+) -> None:
+    """Persist a fitness computation to the history log.
+
+    Args:
+        engine: The DatabaseEngine instance for DB access.
+        methodology_id: Which methodology was scored.
+        fitness_total: The computed total fitness score.
+        fitness_vector: Full dimension breakdown dict.
+        trigger_event: What caused this recomputation (e.g. 'recompute',
+            'outcome_success', 'outcome_failure', 'lifecycle_transition').
+    """
+    import json
+    import uuid
+
+    try:
+        await engine.execute(
+            "INSERT INTO methodology_fitness_log (id, methodology_id, fitness_total, fitness_vector, trigger_event) VALUES (?, ?, ?, ?, ?)",
+            [str(uuid.uuid4()), methodology_id, fitness_total, json.dumps(fitness_vector), trigger_event],
+        )
+    except Exception as e:
+        logger.warning("Failed to log fitness change for %s: %s", methodology_id, e)

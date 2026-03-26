@@ -809,6 +809,34 @@ class MicroClaw(ClawCycle):
                     "Semantic memory lookup failed for task %s: %s", task.id, e
                 )
 
+        # Cross-instance federation: query siblings if local knowledge is sparse
+        if (
+            self.ctx.config.instances.enabled
+            and self.ctx.config.instances.siblings
+            and retrieval_confidence < self.ctx.config.instances.federation_confidence_threshold
+        ):
+            try:
+                from claw.community.federation import Federation
+                federation = Federation(self.ctx.config.instances)
+                fed_results = await federation.query(
+                    task.description,
+                    language=getattr(task, "language", None),
+                    max_total=self.ctx.config.instances.federation_max_results,
+                )
+                for fr in fed_results:
+                    if fr.methodology not in past_solutions:
+                        past_solutions.append(fr.methodology)
+                        if fr.methodology.methodology_notes:
+                            hints.append(
+                                f"[from {fr.source_instance}] {fr.methodology.methodology_notes}"
+                            )
+                        logger.info(
+                            "Federation: added methodology %s from sibling %s (relevance=%.3f)",
+                            fr.methodology.id, fr.source_instance, fr.relevance_score,
+                        )
+            except Exception as e:
+                logger.warning("Federation query failed: %s", e)
+
         # Surface top novel capabilities as hints (novelty >= 0.7)
         if self.ctx.repository is not None:
             try:

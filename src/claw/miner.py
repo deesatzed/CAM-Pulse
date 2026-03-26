@@ -364,7 +364,11 @@ def _file_priority(rel_path: Path) -> int:
     return 2
 
 
-def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> tuple[str, int]:
+def serialize_repo(
+    repo_path: str | Path,
+    max_bytes: int = _MAX_REPO_BYTES,
+    exclude_files: set[str] | None = None,
+) -> tuple[str, int]:
     """Read all source files in a directory and concatenate with file headers.
 
     Files are ordered by priority: README first, then config files, then core
@@ -377,6 +381,7 @@ def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> t
     Args:
         repo_path: Absolute path to the repository root.
         max_bytes: Maximum serialized size in bytes.
+        exclude_files: Set of relative file paths to skip (from secret scanner).
 
     Returns:
         Tuple of (serialized content, number of files read).
@@ -406,6 +411,11 @@ def serialize_repo(repo_path: str | Path, max_bytes: int = _MAX_REPO_BYTES) -> t
     file_count = 0
 
     for _prio, rel, filepath in eligible:
+        # Gate 2: Skip files flagged by secret scanner
+        if exclude_files and str(rel) in exclude_files:
+            logger.info("Skipping file with secret findings: %s", rel)
+            continue
+
         try:
             content = filepath.read_text(encoding="utf-8", errors="replace")
         except (OSError, PermissionError) as exc:
@@ -1000,6 +1010,7 @@ class RepoMiner:
         repo_name: str,
         target_project_id: str,
         metadata: dict[str, str] | None = None,
+        secret_scan_files: set[str] | None = None,
     ) -> RepoMiningResult:
         """Mine a single repository for patterns and features.
 
@@ -1009,6 +1020,8 @@ class RepoMiner:
             target_project_id: Project ID for storing findings.
             metadata: Optional metadata to inject into stored methodologies
                 (e.g., license_type from the assimilation pipeline).
+            secret_scan_files: Set of relative file paths to exclude from
+                serialization (flagged by pre-mine secret scanner).
 
         Returns:
             RepoMiningResult with findings and metadata.
@@ -1017,8 +1030,10 @@ class RepoMiner:
         start = time.monotonic()
         repo_path = Path(repo_path)
 
-        # Serialize repo content
-        repo_content, file_count = serialize_repo(repo_path)
+        # Serialize repo content (Gate 2: exclude files with secrets)
+        repo_content, file_count = serialize_repo(
+            repo_path, exclude_files=secret_scan_files
+        )
         if not repo_content:
             return RepoMiningResult(
                 repo_name=repo_name,

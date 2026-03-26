@@ -221,9 +221,26 @@ Why it matters:
 - Without this, mined repos that ship major rewrites silently make CAM's knowledge stale.
 - ETag caching means monitoring 50 repos costs nearly nothing if they haven't changed.
 
+
+## 13. Pre-Assimilation Secret Scanning
+
+Proven through test suite (73 tests in `test_scanner.py`):
+
+- **Gate 1**: TruffleHog filesystem scan runs on every cloned/mounted repo before mining begins. CRITICAL findings (private keys, verified credentials, Stripe live keys) block assimilation with `blocked_secrets` status.
+- **Gate 2**: Files flagged with any secret findings are excluded from `serialize_repo()`, preventing secret content from reaching the LLM prompt or knowledge base.
+- **Regex fallback**: When TruffleHog is not installed, a built-in regex scanner with 11 high-value patterns (AWS AKIA, GitHub PAT, Slack tokens, Stripe keys, PEM private keys, GCP service accounts, OpenAI keys, Bearer tokens, generic SECRET= assignments) provides baseline coverage.
+- **Both GitHub and HuggingFace paths**: Gate 1 runs identically in both `_assimilate_github_repo()` and `assimilate_hf_repo()`.
+
+Key files: `security/scanner.py:SecretScanner`, `pulse/assimilator.py:_scan_for_secrets()`, `miner.py:serialize_repo(exclude_files=)`
+
+Why it matters:
+- Without this, hardcoded credentials in mined repos leak into serialized content sent to the LLM and stored methodology `solution_code`.
+- The two-gate architecture ensures secrets are caught early (Gate 1 blocks) and filtered late (Gate 2 excludes files from serialization).
+- TruffleHog detects 800+ credential types with high precision; the regex fallback ensures coverage even without the binary.
+
 ## Current Verified Test Suite
 
-Command run on March 25, 2026:
+Command run on March 26, 2026:
 
 ```bash
 pytest tests/ -q
@@ -232,7 +249,7 @@ pytest tests/ -q
 Observed result:
 
 ```text
-2348 passed, 0 skipped
+2577 passed, 0 skipped
 ```
 
 Full suite coverage (70 test files, 35,911 LOC tests):
@@ -250,6 +267,7 @@ Full suite coverage (70 test files, 35,911 LOC tests):
 - Knowledge injection + attribution
 - DeepConf 6-factor scoring
 - Co-retrieval stigmergic links
+- Secret scanner (73 tests)
 
 ## What CAM Can Accomplish Today
 

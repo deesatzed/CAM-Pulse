@@ -77,7 +77,35 @@ class PulseAssimilator:
             # 1b. Capture HEAD SHA before mining (clone_path will be cleaned up in finally)
             head_sha = await self._get_head_sha(clone_path)
 
-            # 1c. Detect license
+            # 1c. Pre-mine secret scan (Gate 1)
+            secret_scan_files: set[str] | None = None
+            if self.config.security.secret_scan_enabled:
+                await self._update_discovery_status(discovery.canonical_url, "scanning")
+                scan_result = await self._scan_for_secrets(clone_path)
+                result.scan_result = scan_result
+                if scan_result.has_critical and self.config.security.secret_scan_fail_on_critical:
+                    error_msg = (
+                        f"Secret scan blocked assimilation: {scan_result.critical_count} "
+                        f"critical finding(s) detected by {scan_result.scanner_used}"
+                    )
+                    result.error = error_msg
+                    await self._update_discovery_status(
+                        discovery.canonical_url, "blocked_secrets", error=error_msg
+                    )
+                    logger.warning(
+                        "BLOCKED %s — %d critical secrets found",
+                        discovery.canonical_url, scan_result.critical_count,
+                    )
+                    return result
+                if scan_result.has_any:
+                    logger.info(
+                        "Secret scan for %s: %d non-critical finding(s), proceeding",
+                        discovery.canonical_url, len(scan_result.findings),
+                    )
+                    if self.config.security.secret_scan_filter_in_serializer:
+                        secret_scan_files = scan_result.file_paths_with_secrets
+
+            # 1d. Detect license
             license_type = self._detect_license(clone_path)
             result.license_type = license_type
             logger.info("License detected for %s: %s", discovery.canonical_url, license_type)
@@ -92,6 +120,7 @@ class PulseAssimilator:
                 repo_name=repo_name,
                 target_project_id=target_project_id,
                 metadata={"license_type": license_type},
+                secret_scan_files=secret_scan_files,
             )
 
             if mine_result.error:
@@ -198,6 +227,17 @@ class PulseAssimilator:
         if proc.returncode == 0:
             return stdout.decode().strip()
         return ""
+
+    async def _scan_for_secrets(self, path: Path) -> "ScanResult":
+        """Run secret scanner on a cloned/mounted repo."""
+        from claw.security.scanner import SecretScanner
+
+        scanner = SecretScanner(
+            timeout_seconds=self.config.security.secret_scan_timeout_seconds,
+            no_verification=self.config.security.secret_scan_no_verification,
+            fail_on_critical=self.config.security.secret_scan_fail_on_critical,
+        )
+        return await scanner.scan(path)
 
     @staticmethod
     def _detect_license(clone_path: Path) -> str:
@@ -400,6 +440,29 @@ class PulseAssimilator:
 
         mount_path = Path(mount_result.mount_path)
         try:
+            # Pre-mine secret scan (Gate 1) for HF repos
+            hf_secret_scan_files: set[str] | None = None
+            if self.config.security.secret_scan_enabled:
+                await self._update_discovery_status(canonical_url, "scanning")
+                scan_result = await self._scan_for_secrets(mount_path)
+                result.scan_result = scan_result
+                if scan_result.has_critical and self.config.security.secret_scan_fail_on_critical:
+                    error_msg = (
+                        f"Secret scan blocked HF assimilation: {scan_result.critical_count} "
+                        f"critical finding(s) detected by {scan_result.scanner_used}"
+                    )
+                    result.error = error_msg
+                    await self._update_discovery_status(
+                        canonical_url, "blocked_secrets", error=error_msg
+                    )
+                    logger.warning(
+                        "BLOCKED %s — %d critical secrets found",
+                        canonical_url, scan_result.critical_count,
+                    )
+                    return result
+                if scan_result.has_any and self.config.security.secret_scan_filter_in_serializer:
+                    hf_secret_scan_files = scan_result.file_paths_with_secrets
+
             await self._update_discovery_status(canonical_url, "mining")
 
             # Determine mining strategy based on tier
@@ -419,6 +482,7 @@ class PulseAssimilator:
                 repo_path=mount_path,
                 repo_name=repo_name,
                 target_project_id=target_project_id,
+                secret_scan_files=hf_secret_scan_files,
             )
 
             if mine_result.error:

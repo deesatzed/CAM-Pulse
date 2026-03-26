@@ -11,7 +11,7 @@
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="CAM-PULSE">
-  <meta name="twitter:description" content="CAM-PULSE: Discovers code patterns, learns from them, and applies them to your builds with proof. Free, open source, runs locally. 2,348 tests. 11 proven showpieces. Inner correction loop. Metric expectations. HF mining. Freshness monitor.">
+  <meta name="twitter:description" content="CAM-PULSE: Discovers code patterns, learns from them, and applies them to your builds with proof. Free, open source, runs locally. 2,577 tests. 12 proven showpieces. Inner correction loop. Metric expectations. HF mining. Freshness monitor.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -792,7 +792,7 @@
             <span class="dot dot-green"></span>
             <span class="title-text">cam mine-self --quick</span>
           </div>
-          <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 2,348 tests passing" loading="eager">
+          <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 2,577 tests passing" loading="eager">
         </div>
       </div>
     </div>
@@ -806,11 +806,11 @@
   <section id="features">
     <div class="container">
       <div class="trust-bar reveal">
-        <div class="trust-item"><div class="value"><span class="counter" data-target="2348">0</span></div><div class="label">Tests Passing</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="2577">0</span></div><div class="label">Tests Passing</div></div>
         <div class="trust-item"><div class="value">4</div><div class="label">Agent Backends</div></div>
         <div class="trust-item"><div class="value"><span class="counter" data-target="122">0</span></div><div class="label">Methodologies</div></div>
         <div class="trust-item"><div class="value">16/16</div><div class="label">First Scan</div></div>
-        <div class="trust-item"><div class="value">11</div><div class="label">Showpieces</div></div>
+        <div class="trust-item"><div class="value">12</div><div class="label">Showpieces</div></div>
         <div class="trust-item"><div class="value">$0</div><div class="label">Open Source</div></div>
       </div>
 
@@ -896,6 +896,14 @@
           <div>
             <h4>Self-Healing JSON Parser (100% Repair)</h4>
             <p>LLM mining output is malformed ~75% of the time. CAM's 3-stage parser achieves a <strong>100% repair rate</strong> on real-world malformed data. No repo is lost to syntax errors.</p>
+          </div>
+        </div>
+        <!-- NEW: Pre-Assimilation Secret Scanning -->
+        <div class="card feature-card reveal reveal-delay-3">
+          <div class="feature-icon" style="background: rgba(255,51,102,0.08); color: var(--crimson);">&#x1F6E1;</div>
+          <div>
+            <h4>Secret Scanning</h4>
+            <p>TruffleHog pre-assimilation gate blocks repos with leaked credentials before they reach the mining pipeline. Built-in regex fallback with 11 high-value patterns when binary is absent.</p>
           </div>
         </div>
       </div>
@@ -1135,7 +1143,7 @@ Failed:      <span class="terminal-green">0</span>
   <section id="showpieces">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Proven, Not Just Claimed</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Eleven end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Twelve end-to-end showpieces with real code, real validation, and real output. Each was run, checked, and documented.</p>
 
       <div class="grid-2" style="margin-bottom: 24px;">
         <!-- Showpiece 01: PULSE Knowledge Loop -->
@@ -1238,7 +1246,7 @@ Knowledge compounds: Build A patterns inform Build B</code>
             <span class="showpiece-tag">7-gate validation</span>
             <span class="showpiece-tag">atomic swap</span>
             <span class="showpiece-tag">quality 0.97</span>
-            <span class="showpiece-tag">2,348/2,348 tests</span>
+            <span class="showpiece-tag">2,577/2,577 tests</span>
           </div>
         </div>
 
@@ -1344,6 +1352,24 @@ Operators: gte, gt, lte, lt, eq<br>
 + readme_changed * 0.2<br>
 + size_delta * 0.1<br>
 Threshold: 0.4 (configurable in claw.toml)</code>
+          </div>
+        </div>
+
+        <!-- Showpiece 12: Pre-Assimilation Secret Scanner -->
+        <div class="card showpiece-card reveal reveal-delay-4" style="border-color: rgba(255,51,102,0.2);">
+          <span class="showpiece-number">12</span>
+          <div class="showpiece-type" style="color: var(--crimson);">NEW &mdash; Supply Chain Defense</div>
+          <h4>Pre-Assimilation Secret Scanning</h4>
+          <p>Two-gate architecture: TruffleHog (800+ credential detectors) scans every repo before mining. CRITICAL findings block assimilation. Non-critical findings trigger Gate 2 file filtering in the serializer. Regex fallback with 11 patterns when TruffleHog is absent.</p>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">TruffleHog + regex</span>
+            <span class="showpiece-tag">73 tests</span>
+            <span class="showpiece-tag">2-gate architecture</span>
+            <span class="showpiece-tag">800+ detectors</span>
+          </div>
+          <div class="showpiece-proof">
+            <span class="proof-label">Verified:</span>
+            <code>cam security scan src/ &rarr; CLEAN (0 findings)<br>cam security status &rarr; TruffleHog AVAILABLE (v3.94.1)</code>
           </div>
         </div>
       </div>
@@ -1635,7 +1661,7 @@ Threshold: 0.4 (configurable in claw.toml)</code>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 3.75</div>
-          <div class="timeline-desc">Resilience &mdash; Inner correction loop, metric expectations, HF mining, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations</div>
+          <div class="timeline-desc">Resilience &mdash; Inner correction loop, metric expectations, HF mining, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations, pre-assimilation secret scanning</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot planned">&#x25CB;</div>

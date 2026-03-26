@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -45,6 +45,7 @@ class AssimilationResult:
     head_sha: str = ""
     error: Optional[str] = None
     license_type: str = ""
+    scan_result: Optional[Any] = None  # ScanResult from security scanner
 
 @dataclass
 class Phase1Result:

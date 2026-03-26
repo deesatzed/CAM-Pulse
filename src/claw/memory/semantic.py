@@ -20,7 +20,7 @@ from typing import Any, Optional
 from claw.core.models import Methodology, Task
 from claw.db.embeddings import EmbeddingEngine
 from claw.db.repository import Repository
-from claw.memory.fitness import compute_fitness
+from claw.memory.fitness import compute_fitness, log_fitness_change
 from claw.memory.hybrid_search import HybridSearch, HybridSearchResult
 
 logger = logging.getLogger("claw.memory.semantic")
@@ -345,6 +345,16 @@ class SemanticMemory:
                 max_retrieval_count=max_retrieval,
             )
             await self.repository.update_methodology_fitness(methodology_id, fitness_vector)
+
+            # Log fitness change for time-series tracking
+            trigger = "outcome_success" if success else "outcome_failure"
+            await log_fitness_change(
+                self.repository.engine,
+                methodology_id,
+                fitness_vector.get("total", 0.0),
+                fitness_vector,
+                trigger_event=trigger,
+            )
 
             # Evaluate lifecycle transition
             from claw.memory.lifecycle import apply_transition
