@@ -1060,11 +1060,13 @@ class RepoMiner:
             prompt = "\n".join(context_lines) + "\n\n" + prompt
 
         # Adaptive token budget based on repo complexity
+        # Small repos still need enough tokens to extract 6-8 findings
+        # with full metadata (title, description, sketch, symbols).
         token_budget = {
-            "small": 2048,
-            "medium": 4096,
-            "large": 6144,
-        }.get(domain_info["complexity"], 4096)
+            "small": 4096,
+            "medium": 6144,
+            "large": 8192,
+        }.get(domain_info["complexity"], 6144)
 
         model = self._get_mining_model()
         try:
@@ -1400,7 +1402,10 @@ class RepoMiner:
 
         lines.append(
             "\n# Instructions: DO NOT repeat known patterns. "
-            "Prioritize novel findings in under-represented categories."
+            "Prioritize novel findings in under-represented categories. "
+            "ALSO extract novel implementation techniques from well-covered categories "
+            "— e.g. structured logging with perf_counter timing, idempotent operation "
+            "patterns, or result normalization even if similar categories exist."
         )
         return lines
 

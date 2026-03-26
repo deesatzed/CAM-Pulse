@@ -59,11 +59,12 @@ Return a JSON array of findings. Each finding must have these fields:
 ## Rules
 
 - Return ONLY the JSON array, no additional text before or after
-- Maximum 15 findings per repo
+- Maximum 15 findings per repo; aim for at least 6 when the repo has diverse patterns
 - Minimum relevance_score of 0.4 (skip trivial/irrelevant patterns)
 - relevance_score range: 0.4 (marginally useful) to 1.0 (directly applicable, high impact)
 - Focus on **transferable ideas**, not repo-specific business logic
 - Prefer patterns that are **novel or well-implemented**, not obvious boilerplate
+- Do NOT skip subtle operational patterns: idempotent operations (safe re-entry, "already exists" handling), structured logging with timing (perf_counter + duration_ms), and result normalization (handling multiple response formats) are high-value even if the category is already represented
 - Include the most relevant source files that demonstrate the pattern
 - Include `source_symbols` when a specific function, class, or module is the real carrier of the idea
 - implementation_sketch should reference specific CLAW modules where the pattern could be integrated
