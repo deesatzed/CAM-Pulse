@@ -351,12 +351,12 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ┌─────────────────────────────────────────────────────────────────┐
 │  THE CODE (public, on GitHub)                                    │
 │  44K lines of Python, 2,577 tests, CLI, prompts, schema         │
-│  = the body — same for every CAM instance                        │
+│  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
 │  data/claw.db — 1,848 methodologies, agent scores,               │
 │  task history, 384-dim embeddings, lifecycle states               │
-│  = unique to YOUR instance — YOUR learned experience             │
+│  = unique to YOUR ganglion — YOUR learned experience             │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE KEYS (local only)                                           │
 │  .env — API keys for OpenRouter, Google, xAI                     │
@@ -364,15 +364,15 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ├─────────────────────────────────────────────────────────────────┤
 │  THE CONFIG (public, with your model picks)                      │
 │  claw.toml — model choices, thresholds, feature flags            │
-│  = personality — how this instance behaves                        │
+│  = personality — how this ganglion behaves                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **When you clone CAM from GitHub, you get an empty brain.** Zero methodologies, zero agent scores, zero task history. The schema creates the empty tables on first run.
 
-**This instance's brain has learned from experience:**
+**This ganglion's brain has learned from experience:**
 
-| Metric | This Instance | Fresh Clone |
+| Metric | This Ganglion | Fresh Clone |
 |--------|:------------:|:-----------:|
 | Learned methodologies | 1,848 | 0 |
 | Source repos mined | 273 | 0 |
@@ -388,32 +388,47 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 
 This is not a static lookup table. The knowledge base is a **living system** that rewards what works and deprioritizes what doesn't.
 
-### Specialist Team: Run Multiple CAM Instances
+### CAM Swarm: Ganglion Federation
 
 Why have one generalist brain when you can have a **team of domain experts**?
 
-Each instance generates a **brain manifest** — a compact JSON index summarizing its expertise. When one instance works on a task outside its domain, it reads sibling manifests, scores relevance, and queries the best match via read-only FTS5 search. No data is copied — the sibling's brain stays intact.
+The **CAM Brain** is the full federated system. Each specialized instance is a **CAM Ganglion** — a semi-autonomous node with its own claw.db, its own learned knowledge, and its own domain focus. The **CAM Swarm** connects ganglia via read-only FTS5 queries through brain manifests.
+
+```
+┌─────────────────── CAM Brain ───────────────────┐
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│  │ Primary  │  │ Drive-Ops│  │ Quantum  │ ...  │
+│  │ Ganglion │  │ Ganglion │  │ Ganglion │      │
+│  │ 1877 mth │  │  42 mth  │  │  18 mth  │      │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
+│       └───── CAM Swarm (FTS5) ─────┘            │
+│            read-only · no copying                │
+└─────────────────────────────────────────────────┘
+```
+
+Each ganglion generates a **brain manifest** — a compact JSON summary of its expertise. When one ganglion works on a task outside its domain, the swarm scores sibling manifests for relevance and queries the best match. No data is copied — the sibling's brain stays intact.
 
 ```bash
-# Generate this instance's brain manifest
+# Generate this ganglion's brain manifest
 cam kb instances manifest
 
-# Register a sibling
+# Register a sibling ganglion
 cam kb instances add "quantum-physics" /path/to/quantum/data/claw.db \
     --description "Quantum computing, qubits, error correction"
 
-# Test cross-instance retrieval
+# Query the swarm
 cam kb instances query "quantum error correction for stabilizer codes"
 
-# List all siblings
+# List all ganglia in the swarm
 cam kb instances list
 ```
 
-See the [Standalone Instance Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) for full setup instructions — from clone to running specialist.
+See the [Ganglion Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) for full setup — from clone to running specialist ganglion.
 
 ### Community Knowledge Sharing (Coming Soon)
 
-CAM instances will be able to share their brain safely via HuggingFace datasets:
+CAM ganglia will be able to share their knowledge safely via HuggingFace datasets:
 
 ```
 cam kb community publish     # Export proven knowledge (7-gate validated)
@@ -470,7 +485,7 @@ When you run `cam create --execute`, CAM doesn't just generate code from scratch
 Proven result: `Retrieved=3 | Used=3 | Attributed=3 | Tests: 5/5 passing`
 
 ### Mission Profiles
-Focus your CAM instance on a specific domain. Profile-enriched keywords boost relevance:
+Focus your CAM ganglion on a specific domain. Profile-enriched keywords boost relevance:
 
 ```toml
 [pulse.profile]
@@ -601,26 +616,26 @@ When multiple methodologies are retrieved together and the build succeeds, CAM r
 - **Per-day**: `max_cost_per_day_usd = 10.0`
 - **Per-agent**: `max_budget_usd` in each agent section
 
-### Multi-Instance Federation
+### CAM Swarm Federation
 
-See [Specialist Team](#specialist-team-run-multiple-cam-instances) above for federation details and CLI commands.
+See [CAM Swarm: Ganglion Federation](#cam-swarm-ganglion-federation) above for the full picture and CLI commands.
 
-The system works in three steps:
-1. **Manifest generation** — Each instance summarizes its expertise (categories, languages, source repos, lifecycle distribution) into a lightweight JSON manifest
-2. **Relevance scoring** — Keyword overlap (60%), language match (20%), and maturity (20%) determine which siblings to query
-3. **FTS5 cross-query** — Read-only full-text search against relevant siblings, results tagged with source instance
+The swarm works in three steps:
+1. **Manifest generation** — Each ganglion summarizes its expertise (categories, languages, source repos, lifecycle distribution) into a lightweight JSON manifest
+2. **Relevance scoring** — Keyword overlap (60%), language match (20%), and maturity (20%) determine which sibling ganglia to query
+3. **FTS5 cross-query** — Read-only full-text search against relevant ganglia, results tagged with source ganglion
 
 ```toml
-# claw.toml
+# claw.toml — CAM Swarm configuration
 [instances]
 enabled = true
-instance_name = "general"
+instance_name = "general"                    # This ganglion's name
 instance_description = "General-purpose AI development patterns"
 
-[[instances.siblings]]
-name = "quantum-physics"
-db_path = "/data/quantum/claw.db"
-description = "Quantum computing, qubits, error correction"
+[[instances.siblings]]                       # A sibling ganglion
+name = "drive-ops"
+db_path = "/data/instances/drive-ops.db"
+description = "Drive scanning, repo dedup, code organization"
 ```
 
 ### Community Knowledge Hub Infrastructure
@@ -730,7 +745,7 @@ src/claw/
     scanner.py        # TruffleHog + regex fallback secret scanner (Gate 1 + Gate 2)
   community/
     manifest.py       # Brain manifest generation + relevance scoring
-    federation.py     # Cross-instance FTS5 search with read-only sibling queries
+    federation.py     # CAM Swarm — cross-ganglion FTS5 search with read-only queries
     packer.py         # Export methodologies to JSONL with provenance + hash integrity
     validator.py      # 7-gate import validation (schema, safety, dedup, lifecycle reset)
     importer.py       # Quarantine-first import with approve/reject workflow
@@ -783,7 +798,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 3**: PULSE — X-Scout discovery, multi-pass mining, knowledge injection, attribution | **Complete** |
 | **Phase 3.5**: Self-Enhancement — Clone → enhance → 7-gate validate → atomic swap | **Complete** |
 | **Phase 3.75**: Resilience — Inner correction loop, metric expectations, HF-mount, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations | **Complete** |
-| **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), multi-instance federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
+| **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), CAM Swarm ganglion federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
 | **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
 | **Phase 5**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 
@@ -802,7 +817,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | [Plugin Event System](docs/CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) | Cross-repo synthesis proof |
 | [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
 | [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
-| [Standalone Instance Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a domain specialist |
+| [Ganglion Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a specialist ganglion |
 | [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
 
 ---

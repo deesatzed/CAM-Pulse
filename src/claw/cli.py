@@ -10257,19 +10257,19 @@ def status() -> None:
 
 
 # ---------------------------------------------------------------------------
-# cam kb instances — Multi-instance federation management
+# cam kb instances — CAM Swarm: Ganglion federation management
 # ---------------------------------------------------------------------------
 
 instances_app = typer.Typer(
     name="instances",
-    help="Manage multi-instance CAM federation — manifests, siblings, cross-queries.",
+    help="CAM Swarm — manage ganglia (specialized instances), manifests, and cross-ganglion queries.",
 )
 kb_app.add_typer(instances_app, name="instances")
 
 
 @instances_app.command(name="list")
 def instances_list() -> None:
-    """List registered sibling instances and their manifest summaries."""
+    """List registered ganglia (sibling CAM instances) and their manifest summaries."""
 
     async def _run():
         from claw.community.federation import Federation
@@ -10277,16 +10277,16 @@ def instances_list() -> None:
 
         config = load_config()
         if not config.instances.siblings:
-            console.print("[yellow]No sibling instances configured.[/yellow]")
-            console.print("Add [[instances.siblings]] entries to claw.toml")
+            console.print("[yellow]No ganglia registered in the CAM Swarm.[/yellow]")
+            console.print("Add [[instances.siblings]] entries to claw.toml or run: cam kb instances add <name> <db_path>")
             return
 
         federation = Federation(config.instances)
         summaries = await federation.get_sibling_summaries()
 
-        table = Table(title="Registered Sibling Instances")
-        table.add_column("Name", style="cyan")
-        table.add_column("Description")
+        table = Table(title="CAM Swarm — Registered Ganglia")
+        table.add_column("Ganglion", style="cyan")
+        table.add_column("Specialization")
         table.add_column("DB Exists", justify="center")
         table.add_column("Methodologies", justify="right")
         table.add_column("Top Categories")
@@ -10307,18 +10307,18 @@ def instances_list() -> None:
 
         console.print(table)
 
-        # Show this instance's info
-        console.print(f"\n[bold]This instance:[/bold] {config.instances.instance_name or '(unnamed)'}")
-        console.print(f"  Description: {config.instances.instance_description or '(none)'}")
+        # Show this ganglion's info
+        console.print(f"\n[bold]This ganglion:[/bold] {config.instances.instance_name or '(unnamed)'}")
+        console.print(f"  Specialization: {config.instances.instance_description or '(none)'}")
         console.print(f"  Manifest: {config.instances.manifest_path}")
-        console.print(f"  Federation: {'[green]enabled[/green]' if config.instances.enabled else '[red]disabled[/red]'}")
+        console.print(f"  Swarm federation: {'[green]enabled[/green]' if config.instances.enabled else '[red]disabled[/red]'}")
 
     asyncio.run(_run())
 
 
 @instances_app.command()
 def manifest() -> None:
-    """Generate/refresh this instance's brain manifest."""
+    """Generate/refresh this ganglion's brain manifest for the CAM Swarm."""
 
     async def _run():
         from pathlib import Path
@@ -10355,7 +10355,7 @@ def query(
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     max_results: int = typer.Option(5, "--max", "-m", help="Max results"),
 ) -> None:
-    """Test cross-instance federation query against all siblings."""
+    """Query the CAM Swarm — search across all registered ganglia."""
 
     async def _run():
         from claw.community.federation import Federation
@@ -10363,25 +10363,25 @@ def query(
 
         config = load_config()
         if not config.instances.enabled:
-            console.print("[yellow]Federation is disabled. Set instances.enabled = true in claw.toml[/yellow]")
+            console.print("[yellow]CAM Swarm is disabled. Set instances.enabled = true in claw.toml[/yellow]")
             return
         if not config.instances.siblings:
-            console.print("[yellow]No sibling instances configured.[/yellow]")
+            console.print("[yellow]No ganglia registered in the swarm.[/yellow]")
             return
 
         federation = Federation(config.instances)
         results = await federation.query(text, language=language, max_total=max_results)
 
         if not results:
-            console.print("[dim]No results from sibling instances.[/dim]")
+            console.print("[dim]No results from sibling ganglia.[/dim]")
             return
 
-        console.print(f"[bold]Federation results for:[/bold] {text[:80]}")
+        console.print(f"[bold]Swarm query results for:[/bold] {text[:80]}")
         console.print()
         for i, r in enumerate(results, 1):
             m = r.methodology
             console.print(f"[cyan]{i}.[/cyan] [bold]{(m.problem_description or 'Untitled')[:80]}[/bold]")
-            console.print(f"   Source: [magenta]{r.source_instance}[/magenta]  |  Relevance: {r.relevance_score:.3f}  |  FTS rank: {r.fts_rank:.3f}")
+            console.print(f"   Ganglion: [magenta]{r.source_instance}[/magenta]  |  Relevance: {r.relevance_score:.3f}  |  FTS rank: {r.fts_rank:.3f}")
             console.print(f"   Language: {m.language or '-'}  |  Lifecycle: {m.lifecycle_state}  |  Success: {m.success_count}")
             if m.methodology_notes:
                 console.print(f"   Notes: {m.methodology_notes[:150]}")
@@ -10392,17 +10392,17 @@ def query(
 
 @instances_app.command()
 def add(
-    name: str = typer.Argument(..., help="Sibling instance name"),
-    db_path: str = typer.Argument(..., help="Absolute path to sibling's claw.db"),
-    description: str = typer.Option("", "--description", "-d", help="Domain description"),
+    name: str = typer.Argument(..., help="Ganglion name (e.g. 'drive-ops', 'quantum')"),
+    db_path: str = typer.Argument(..., help="Absolute path to the ganglion's claw.db"),
+    description: str = typer.Option("", "--description", "-d", help="Specialization description"),
 ) -> None:
-    """Register a new sibling instance (appends to claw.toml)."""
+    """Register a new ganglion (sibling CAM instance) in the swarm."""
     from pathlib import Path
 
     db = Path(db_path)
     if not db.exists():
         console.print(f"[yellow]Warning: DB file not found at {db_path}[/yellow]")
-        console.print("The sibling will be registered but won't be queryable until the DB exists.")
+        console.print("The ganglion will be registered but won't be queryable until the DB exists.")
 
     # Find claw.toml
     toml_path = Path("claw.toml")
@@ -10412,7 +10412,7 @@ def add(
 
     content = toml_path.read_text()
 
-    # Append the sibling entry
+    # Append the ganglion entry
     entry = f"""
 [[instances.siblings]]
 name = "{name}"
@@ -10421,15 +10421,15 @@ description = "{description}"
 """
     content += entry
     toml_path.write_text(content)
-    console.print(f"[green]Added sibling '{name}' → {db_path}[/green]")
-    console.print("Run [bold]cam kb instances manifest[/bold] on the sibling to generate its brain manifest.")
+    console.print(f"[green]Ganglion '{name}' added to the CAM Swarm → {db_path}[/green]")
+    console.print("Run [bold]cam kb instances manifest[/bold] on the ganglion to generate its brain manifest.")
 
 
 @instances_app.command()
 def remove(
-    name: str = typer.Argument(..., help="Sibling instance name to remove"),
+    name: str = typer.Argument(..., help="Ganglion name to remove from the swarm"),
 ) -> None:
-    """Remove a sibling instance from claw.toml."""
+    """Remove a ganglion from the CAM Swarm."""
     import toml as toml_lib
     from pathlib import Path
 
@@ -10446,7 +10446,7 @@ def remove(
     siblings = [s for s in siblings if s.get("name") != name]
 
     if len(siblings) == original_count:
-        console.print(f"[yellow]No sibling named '{name}' found[/yellow]")
+        console.print(f"[yellow]No ganglion named '{name}' found in the swarm[/yellow]")
         return
 
     data.setdefault("instances", {})["siblings"] = siblings
@@ -10454,7 +10454,7 @@ def remove(
     with open(toml_path, "w") as f:
         toml_lib.dump(data, f)
 
-    console.print(f"[green]Removed sibling '{name}'[/green]")
+    console.print(f"[green]Ganglion '{name}' removed from the CAM Swarm[/green]")
 
 
 def app_main() -> None:

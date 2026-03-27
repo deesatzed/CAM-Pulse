@@ -1,8 +1,10 @@
-"""Brain manifest generator for multi-instance CAM.
+"""Brain manifest generator for the CAM Swarm.
 
-Generates a lightweight JSON summary of what a claw.db instance knows:
+Each CAM Ganglion generates a manifest summarizing what its claw.db knows:
 categories, languages, source repos, methodology counts, lifecycle distribution.
-Sibling instances read this manifest to decide if cross-querying is worthwhile.
+Sibling ganglia read this manifest to decide if cross-querying is worthwhile.
+
+Together, all ganglion manifests form a map of the CAM Brain's total knowledge.
 """
 
 from __future__ import annotations

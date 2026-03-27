@@ -1,26 +1,53 @@
-# How to Create a Standalone CAM-PULSE Instance
+# How to Create a CAM Ganglion
 
 **Audience**: You know how to use a terminal and have Python installed. No prior CAM experience needed.
 
 ---
 
-## What This Guide Does
+## Terminology
 
-You will clone CAM-PULSE, point it at its own private database, and feed it repos from one specific domain (medical AI, game dev, quantum computing — whatever you care about). At the end, you will have a standalone brain that only knows about your domain.
-
-Think of it like this:
+Before we start, here's how the parts fit together:
 
 ```
-CAM-PULSE (the code)  =  a doctor's training and skills
-claw.db (the database) =  the doctor's memory of every patient they've seen
-
-Same medical school, different specialty:
-  - general.db    → knows a little about everything
-  - cardiac.db    → deep expertise in heart conditions
-  - neuro.db      → deep expertise in brain disorders
+CAM Brain    = the full federated system (all ganglia together)
+CAM Ganglion = a specialized instance with its own claw.db and focus area
+CAM Swarm    = the runtime layer that connects ganglia
 ```
 
-You are creating a new specialist.
+Think of it like neuroscience:
+
+```
+Brain        = the whole organ — all knowledge, all capabilities
+Ganglion     = a cluster of nerve cells specialized for one function
+               (a semi-autonomous processing node)
+Swarm        = the nerve fibers connecting ganglia
+               (read-only queries, no data copying)
+```
+
+You are creating a new **Ganglion** — a specialized CAM node that:
+- Has its own database (claw.db)
+- Only knows about one domain
+- Can be queried by other ganglia in the swarm
+- Can query other ganglia when it needs knowledge outside its specialty
+
+---
+
+## What You'll Build
+
+```
+CAM-Pulse/
+  data/
+    claw.db                    <- primary ganglion (default)
+    instances/
+      medical-ai.db            <- your new specialist ganglion
+      brain_manifest.json      <- this ganglion's resume for the swarm
+  claw.toml                    <- shared config (ganglion registry lives here)
+  .env                         <- your API keys (never committed)
+  src/                         <- CAM source code (same for all ganglia)
+```
+
+**Same code, different databases.** Each ganglion is an independent brain
+with its own methodologies, fitness scores, and lifecycle states.
 
 ---
 
@@ -54,8 +81,6 @@ cd CAM-Pulse
 ls claw.toml src/ tests/
 ```
 
-If you see "No such file or directory", you are in the wrong folder. Run `cd CAM-Pulse`.
-
 ---
 
 ## Step 2: Create a Virtual Environment and Install
@@ -72,18 +97,14 @@ pip install -e ".[dev]"
 cam --help
 ```
 
-You should see a list of commands starting with `chat`, `evaluate`, `enhance`, etc.
-
 **Troubleshoot**:
-- `command not found: cam` → Run `source .venv/bin/activate` again. Your terminal prompt should show `(.venv)`.
-- `pip install` fails → Make sure you have Python 3.11+. Run `python3 --version`.
-- Errors about `sqlite-vec` → This is normal on some systems. CAM will still work; vector search falls back gracefully.
+- `command not found: cam` — Run `source .venv/bin/activate` again
+- `pip install` fails — Make sure you have Python 3.11+
+- Errors about `sqlite-vec` — Normal on some systems, CAM falls back gracefully
 
 ---
 
 ## Step 3: Set Up Your API Keys
-
-Create a `.env` file in the project root:
 
 ```bash
 cp .env.example .env
@@ -102,169 +123,114 @@ GOOGLE_API_KEY=AIza-your-key-here
 cam doctor keycheck --for mine --live
 ```
 
-You should see green checkmarks. If you see red X marks, double-check that your keys are correct and have credit/quota.
-
-**Troubleshoot**:
-- `OPENROUTER_API_KEY not set` → Make sure `.env` is in the same directory as `claw.toml`.
-- `Google API key invalid` → Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey), create a new key, and make sure "Generative Language API" is enabled.
-
 ---
 
-## Step 4: Verify the Default Database Works
+## Step 4: Verify the Default Ganglion Works
 
 ```bash
 cam govern stats
 ```
 
-You should see something like:
+You should see:
 
 ```
 Memory Governance Stats
   Total methodologies:  0
   Active (non-dead):    0
-  Quota: 0/2000 (0.0%)
+  Quota: 0/5000 (0.0%)
   DB size: 0.46 MB
 ```
 
-This is a fresh brain — zero methodologies. That is correct.
-
-**Check**: Confirm where the database lives.
-
-```bash
-ls -la data/claw.db
-```
-
-This is the default database at `data/claw.db`.
+This is the primary ganglion — a fresh brain with zero methodologies.
 
 ---
 
-## Step 5: Create Your Standalone Database
+## Step 5: Create Your Specialist Ganglion
 
-Now create a separate database for your specialty. Pick a name that describes your domain.
+Now create a new ganglion for your domain.
 
 ```bash
 mkdir -p data/instances
 ```
 
-Tell CAM to use your new database by setting the `CLAW_DB_PATH` environment variable:
+Tell CAM to use the new ganglion's database via `CLAW_DB_PATH`:
 
 ```bash
 export CLAW_DB_PATH=data/instances/medical-ai.db
 ```
 
-**Check**: Verify CAM sees the new path.
+**Check**: Verify CAM sees the new database.
 
 ```bash
 cam govern stats
 ```
 
-You should see a fresh `0 methodologies` output again — this is a brand new brain. The database file is automatically created and initialized with all tables.
-
-```bash
-ls -la data/instances/medical-ai.db
-```
-
-**Troubleshoot**:
-- `No such file or directory` for the `.db` file → Run `cam govern stats` first. CAM creates the database on first access.
-- You see methodologies > 0 → You are still pointing at the old database. Check `echo $CLAW_DB_PATH`.
+You should see `0 methodologies` — this is a brand new ganglion. The database
+is automatically created and initialized.
 
 ---
 
-## Step 6: Feed Your Specialist Brain
+## Step 6: Feed Your Ganglion
 
-Now the fun part. You have three ways to teach your specialist:
+### Option A: Ingest Specific Repos (Recommended)
 
-### Option A: Feed It Specific Repos (Recommended for Starting)
-
-Pick 3-5 GitHub repos in your domain and ingest them directly:
+Pick 3-5 GitHub repos in your domain:
 
 ```bash
-# Example: Medical AI specialist
+# Medical AI ganglion
 cam pulse ingest \
   https://github.com/explosion/spacy-bio \
   https://github.com/allenai/scispacy \
   https://github.com/dmis-lab/biobert
 
-# Example: Game dev specialist
+# Game dev ganglion
 cam pulse ingest \
   https://github.com/bevyengine/bevy \
-  https://github.com/godotengine/godot \
-  https://github.com/phaserjs/phaser
+  https://github.com/godotengine/godot
 
-# Example: Quantum computing specialist
+# Drive-ops ganglion (filesystem patterns)
 cam pulse ingest \
-  https://github.com/Qiskit/qiskit \
-  https://github.com/quantumlib/Cirq \
-  https://github.com/PennyLaneAI/pennylane
+  https://github.com/sharkdp/fd \
+  https://github.com/BurntSushi/ripgrep
 ```
 
-Each repo takes 30-60 seconds. You will see output like:
-
-```
-Assimilating https://github.com/explosion/spacy-bio ...
-  Cloned (depth=1)
-  License: MIT (permissive)
-  Secret scan: CLEAN
-  Mining: 3-pass pipeline
-  Stored: 7 methodologies
-```
-
-**Check**: Verify your brain learned something.
-
-```bash
-cam govern stats
-```
-
-You should see `Total methodologies: N` where N > 0.
-
-### Option B: Feed It HuggingFace Model Repos
+### Option B: HuggingFace Model Repos
 
 ```bash
 cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
-cam pulse ingest-hf d4data/biomedical-ner-all --revision main
 ```
 
-### Option C: Let X-Scout Discover Repos Automatically
+### Option C: X-Scout Auto-Discovery
 
-This requires an `XAI_API_KEY` in your `.env`.
+Requires `XAI_API_KEY` in your `.env`:
 
 ```bash
 cam pulse scan --keywords "medical AI clinical decision support"
 ```
 
-X-Scout uses Grok to search X/Twitter for GitHub repos that developers are sharing, then mines them automatically.
+**Check**: Verify your ganglion learned something.
 
-**Troubleshoot**:
-- `Secret scan blocked assimilation` → The repo contains hardcoded credentials. This is CAM protecting you. Pick a different repo.
-- `Mining failed: timeout` → The repo is very large. Try a smaller one, or increase `[mining] timeout_seconds` in `claw.toml`.
-- `0 methodologies stored` → The LLM could not extract useful patterns. This happens with very small or empty repos.
+```bash
+cam govern stats
+```
 
 ---
 
-## Step 7: Search Your Knowledge
+## Step 7: Search Your Ganglion's Knowledge
 
 ```bash
-# See what your brain knows
 cam kb insights
-
-# Search for specific patterns
 cam kb search "named entity recognition for biomedical text"
-
-# See which domains you cover
 cam kb domains
 ```
-
-**Check**: `cam kb search` should return results related to the repos you ingested.
-
-**Troubleshoot**:
-- `0 results` → You may not have ingested enough repos, or your search terms do not match what was mined. Try broader terms.
-- `Embedding error` → Check that `GOOGLE_API_KEY` is set in `.env`.
 
 ---
 
 ## Step 8: Generate a Brain Manifest
 
-The manifest is a summary of what your specialist knows. Other CAM instances can read it.
+The manifest is your ganglion's resume — a compact JSON summary of what it
+knows. Other ganglia in the swarm read this to decide if cross-querying is
+worthwhile.
 
 ```bash
 cam kb instances manifest
@@ -276,138 +242,143 @@ cam kb instances manifest
 cat data/brain_manifest.json | python3 -m json.tool | head -20
 ```
 
-You should see fields like `total_methodologies`, `top_categories`, `language_breakdown`.
-
 ---
 
-## Step 9: Use Your Specialist for Builds
-
-Now your specialist can help build things in its domain:
+## Step 9: Use Your Ganglion for Builds
 
 ```bash
-# Create a new project using your specialist's knowledge
 cam create /path/to/new-project --repo-mode new \
   --request "Build a biomedical NER pipeline using spaCy" \
   --check "pytest -q" \
   --execute
 ```
 
-The agent will receive your specialist's knowledge as context when it generates code.
+The agent receives your ganglion's knowledge as context when generating code.
 
 ---
 
-## Step 10 (Optional): Connect Instances via Federation
+## Step 10: Connect Ganglia into a CAM Brain
 
-If you have multiple specialists, they can share knowledge.
+This is where the swarm comes alive. Register your specialist ganglion as
+a sibling of the primary ganglion.
 
-**On your general instance** (use the default database):
+**On the primary ganglion** (use the default database):
 
 ```bash
-unset CLAW_DB_PATH  # back to default data/claw.db
+unset CLAW_DB_PATH  # back to primary ganglion
 
-# Register your medical specialist as a sibling
+# Register the medical ganglion
 cam kb instances add "medical-ai" \
   "$(pwd)/data/instances/medical-ai.db" \
   --description "Clinical decision support, NER, pharmacology"
 
-# Check it shows up
+# Check the swarm
 cam kb instances list
 
-# Test a cross-instance query
+# Test a cross-ganglion query
 cam kb instances query "biomedical named entity recognition"
 ```
 
-Federation is **read-only** — the general instance can search the medical brain, but it never modifies it.
+The swarm is **read-only** — the primary ganglion can search the medical
+ganglion's brain, but it never modifies it.
+
+**Enable automatic swarm queries during builds:**
+
+Edit `claw.toml`:
+
+```toml
+[instances]
+enabled = true
+instance_name = "general"
+instance_description = "General-purpose AI development patterns"
+```
+
+Now when the primary ganglion works on a task and its local knowledge is
+sparse (confidence < 0.3), it automatically queries sibling ganglia for
+supplemental methodologies.
 
 ---
 
-## Quick Reference: Switching Between Instances
+## Quick Reference: Switching Ganglia
 
 ```bash
-# Use your medical specialist
+# Use your medical ganglion
 export CLAW_DB_PATH=data/instances/medical-ai.db
-cam govern stats   # Shows medical brain
-cam kb insights    # Shows medical knowledge
+cam govern stats   # Shows medical ganglion's knowledge
+cam kb insights    # Shows medical ganglion's domains
 
-# Switch back to general
+# Switch back to primary
 unset CLAW_DB_PATH
-cam govern stats   # Shows general brain
+cam govern stats   # Shows primary ganglion
 
-# Use a different specialist
-export CLAW_DB_PATH=data/instances/quantum.db
-cam govern stats   # Shows quantum brain
+# Use a different ganglion
+export CLAW_DB_PATH=data/instances/drive-ops.db
+cam govern stats   # Shows drive-ops ganglion
 ```
 
-You can also create a shell alias:
+Shell aliases for convenience:
 
 ```bash
-# Add to your ~/.zshrc or ~/.bashrc
+# Add to ~/.zshrc or ~/.bashrc
 alias cam-medical="CLAW_DB_PATH=data/instances/medical-ai.db cam"
+alias cam-drive="CLAW_DB_PATH=data/instances/drive-ops.db cam"
 alias cam-quantum="CLAW_DB_PATH=data/instances/quantum.db cam"
-alias cam-gamedev="CLAW_DB_PATH=data/instances/gamedev.db cam"
 ```
 
-Then just run:
+Then:
 
 ```bash
-cam-medical pulse ingest https://github.com/some/medical-repo
 cam-medical kb search "drug interaction"
+cam-drive kb search "repo dedup"
 cam-quantum kb search "error correction"
 ```
 
 ---
 
-## Troubleshooting Checklist
+## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
 | `cam: command not found` | venv not activated | `source .venv/bin/activate` |
-| `0 methodologies` after ingest | Check CLAW_DB_PATH | `echo $CLAW_DB_PATH` — is it pointing where you think? |
-| `OPENROUTER_API_KEY not set` | .env file missing or wrong location | `.env` must be next to `claw.toml` |
+| `0 methodologies` after ingest | Wrong ganglion active | `echo $CLAW_DB_PATH` |
+| `OPENROUTER_API_KEY not set` | .env missing | `.env` must be next to `claw.toml` |
 | `Secret scan blocked` | Repo has real credentials | Normal — pick a different repo |
 | `Embedding error` | GOOGLE_API_KEY missing | Add to `.env` |
-| `sqlite3.OperationalError: database is locked` | Another CAM process has the DB open | Close other terminals running CAM |
-| Federation returns 0 results | Sibling DB path wrong or empty | `cam kb instances list` — check DB exists |
-| `Mining: 0 patterns extracted` | Repo too small or not code | Try a larger, more established repo |
-| Tests fail on fresh clone | Missing API keys | Expected — 10 tests skip without keys |
+| `database is locked` | Another CAM process has DB open | Close other terminals |
+| Swarm returns 0 results | Ganglion DB path wrong or empty | `cam kb instances list` |
+| `0 patterns extracted` | Repo too small | Try a larger repo |
 
 ---
 
-## What You Built
+## How the CAM Brain Forms
 
 ```
-CAM-Pulse/
-  data/
-    claw.db                    ← general brain (default)
-    instances/
-      medical-ai.db            ← your specialist brain
-      brain_manifest.json      ← your specialist's resume
-  claw.toml                    ← shared config
-  .env                         ← your API keys (never committed)
-  src/                         ← CAM source code (same for all instances)
+┌──────────────────────────────────────────────────────────┐
+│                      CAM Brain                           │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │   Primary     │  │  Medical AI  │  │  Drive-Ops   │   │
+│  │   Ganglion    │  │  Ganglion    │  │  Ganglion    │   │
+│  │              │  │              │  │              │   │
+│  │  general.db  │  │ medical.db   │  │ drive-ops.db │   │
+│  │  1877 meths  │  │   42 meths   │  │    0 meths   │   │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
+│         │                 │                 │            │
+│         └────────CAM Swarm (FTS5)───────────┘            │
+│               read-only · no data copying                │
+└──────────────────────────────────────────────────────────┘
 ```
 
-- **Same code**, different databases
-- Each database is an independent brain with its own methodologies, fitness scores, and lifecycle states
-- Federation lets brains share knowledge without copying or modifying each other
-- You can create as many specialists as you want — just set `CLAW_DB_PATH` to a new path
-
----
-
-## Next Steps
-
-- **Add more repos**: `cam pulse ingest <url>` — each new repo deepens your specialist
-- **Check freshness**: `cam pulse freshness --verbose` — see if mined repos have changed
-- **Run PULSE daemon**: `cam pulse daemon` — auto-discover repos via X/Twitter
-- **Self-enhance**: `cam self-enhance start` — let CAM improve its own code using your specialist's knowledge
-- **Search knowledge**: `cam kb search "your topic"` — find patterns across everything you have mined
-- **Audit trust**: `cam doctor audit --limit 10` — see which methodologies have proven track records
+- Each ganglion operates independently
+- The swarm connects them via brain manifests
+- During task execution, if local confidence is low, the swarm queries
+  relevant ganglia and injects their methodologies into the prompt
+- Results are tagged with source ganglion name for attribution
+- Federation never modifies sibling databases
 
 ---
 
 ## Full Verification Script
-
-Run this to verify everything works end-to-end:
 
 ```bash
 #!/bin/bash
@@ -419,9 +390,9 @@ cam --help > /dev/null && echo "PASS: cam CLI works"
 echo "=== Step 2: Verify keys ==="
 cam doctor keycheck --for mine --live && echo "PASS: API keys valid"
 
-echo "=== Step 3: Create standalone DB ==="
-export CLAW_DB_PATH=data/instances/test-instance.db
-cam govern stats | grep "Total methodologies" && echo "PASS: DB initialized"
+echo "=== Step 3: Create specialist ganglion ==="
+export CLAW_DB_PATH=data/instances/test-ganglion.db
+cam govern stats | grep "Total methodologies" && echo "PASS: Ganglion DB initialized"
 
 echo "=== Step 4: Ingest a repo ==="
 cam pulse ingest https://github.com/pallets/flask --force
@@ -440,3 +411,13 @@ cam security status | grep "AVAILABLE\|ENABLED" && echo "PASS: Security scanner 
 echo "=== All checks passed ==="
 unset CLAW_DB_PATH
 ```
+
+---
+
+## Next Steps
+
+- **Grow your ganglion**: `cam pulse ingest <url>` — each repo deepens its expertise
+- **Check freshness**: `cam pulse freshness --verbose` — see if mined repos have been updated
+- **Self-enhance**: `cam self-enhance start` — let the ganglion improve its own code
+- **Connect more ganglia**: `cam kb instances add <name> <db_path>` — expand the brain
+- **Audit trust**: `cam doctor audit --limit 10` — see which methodologies have proven track records

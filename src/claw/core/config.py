@@ -328,23 +328,48 @@ class CommunityConfig(BaseModel):
 
 
 class InstanceConfig(BaseModel):
-    """Configuration for a single sibling CAM instance."""
-    name: str  # Human-readable name (e.g. "quantum-physics")
-    db_path: str  # Absolute path to sibling's claw.db
+    """Configuration for a single CAM Ganglion (sibling instance).
+
+    CAM Terminology:
+        - **CAM Brain**: The full federated system (all ganglia together).
+        - **CAM Ganglion**: A specialized instance with its own claw.db and focus area.
+        - **CAM Swarm**: The runtime coordination layer connecting ganglia.
+    """
+    name: str  # Ganglion name (e.g. "drive-ops", "quantum-physics")
+    db_path: str  # Absolute path to this ganglion's claw.db
     description: str = ""  # Domain focus description
     manifest_path: str = ""  # Path to cached manifest JSON (auto-set if empty)
 
 
+# Alias for clarity in the new terminology
+GanglionConfig = InstanceConfig
+
+
 class InstanceRegistryConfig(BaseModel):
-    """Multi-instance federation configuration."""
+    """CAM Swarm configuration — federation of CAM Ganglia.
+
+    Each ganglion is a semi-autonomous CAM instance with its own claw.db,
+    its own specialty, and its own learned knowledge.  Ganglia communicate
+    via read-only FTS5 queries through brain manifests.  Together, all
+    ganglia form the CAM Brain.
+
+    CAM Terminology:
+        - **CAM Brain**: The full federated system (all ganglia together).
+        - **CAM Ganglion**: A specialized instance with its own claw.db.
+        - **CAM Swarm**: The runtime coordination that connects them.
+    """
     enabled: bool = False
-    manifest_path: str = "data/brain_manifest.json"  # This instance's manifest
-    instance_name: str = ""  # This instance's human-readable name
-    instance_description: str = ""  # This instance's domain focus
+    manifest_path: str = "data/brain_manifest.json"  # This ganglion's manifest
+    instance_name: str = ""  # This ganglion's human-readable name
+    instance_description: str = ""  # This ganglion's domain focus
     federation_confidence_threshold: float = 0.3  # Min local confidence to skip federation
-    federation_relevance_threshold: float = 0.2  # Min manifest relevance to query sibling
-    federation_max_results: int = 3  # Max results per sibling
+    federation_relevance_threshold: float = 0.2  # Min manifest relevance to query sibling ganglion
+    federation_max_results: int = 3  # Max results per sibling ganglion query
     siblings: list[InstanceConfig] = Field(default_factory=list)
+
+
+# Alias for clarity in the new terminology
+SwarmConfig = InstanceRegistryConfig
 
 
 class LoggingConfig(BaseModel):

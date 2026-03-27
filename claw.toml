@@ -338,31 +338,37 @@ max_publish_count = 500
 instance_id_file = "data/community_state.json"
 
 # ---------------------------------------------------------------------------
-# Multi-Instance Federation
+# CAM Swarm — Ganglion Federation
 # ---------------------------------------------------------------------------
-# Run multiple specialized CAM instances (e.g. quantum-physics, web-design,
-# agentic-memory) each with their own claw.db. Instances can discover and
-# cross-reference each other's knowledge via brain manifests.
+# The CAM Brain is the full federated system. Each specialized CAM instance
+# is a Ganglion — a semi-autonomous node with its own claw.db and domain
+# focus. The CAM Swarm connects ganglia via read-only FTS5 queries.
 #
-# Each instance generates a manifest summarizing what it knows (categories,
-# languages, source repos). During task execution, if local knowledge is sparse,
-# CAM queries relevant siblings for supplemental methodologies.
+# Terminology:
+#   CAM Brain    = all ganglia together (the whole)
+#   CAM Ganglion = one specialized instance (a part)
+#   CAM Swarm    = the runtime layer connecting them
+#
+# Each ganglion generates a manifest summarizing what it knows (categories,
+# languages, source repos). During task execution, if local knowledge is
+# sparse, the swarm queries relevant sibling ganglia for supplemental
+# methodologies.
 
 [instances]
 enabled = false
 manifest_path = "data/brain_manifest.json"
-instance_name = ""                           # e.g. "general", "quantum-physics", "web-design"
-instance_description = ""                    # e.g. "Quantum computing patterns and algorithms"
-federation_confidence_threshold = 0.3        # Skip federation if local confidence >= this
-federation_relevance_threshold = 0.2         # Min manifest relevance score to query sibling
-federation_max_results = 3                   # Max results per sibling query
+instance_name = ""                           # This ganglion's name (e.g. "general", "drive-ops")
+instance_description = ""                    # This ganglion's specialization
+federation_confidence_threshold = 0.3        # Skip swarm query if local confidence >= this
+federation_relevance_threshold = 0.2         # Min manifest relevance to query a sibling ganglion
+federation_max_results = 3                   # Max results per sibling ganglion query
 
-# ── Sibling instances (uncomment and configure) ──
+# ── Sibling ganglia (uncomment and configure) ──
 #
-# Each sibling needs: name, db_path (absolute), and a short description.
+# Each ganglion needs: name, db_path (absolute), and a specialization.
 # The manifest_path is auto-generated if left empty.
 #
-# Example: three specialized instances
+# Example: three ganglia forming a CAM Brain
 #
 # [[instances.siblings]]
 # name = "quantum-physics"
@@ -370,9 +376,9 @@ federation_max_results = 3                   # Max results per sibling query
 # description = "Quantum computing, qubits, gates, error correction, circuit optimization"
 #
 # [[instances.siblings]]
-# name = "web-design"
-# db_path = "/path/to/webdesign/data/claw.db"
-# description = "Frontend frameworks, CSS patterns, responsive design, accessibility, UX"
+# name = "drive-ops"
+# db_path = "/path/to/drive-ops/data/claw.db"
+# description = "Drive scanning, repo discovery, dedup, archival, code organization"
 #
 # [[instances.siblings]]
 # name = "agentic-memory"

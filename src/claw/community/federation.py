@@ -1,9 +1,18 @@
-"""Cross-instance federation for multi-CAM knowledge sharing.
+"""CAM Swarm — cross-ganglion federation for knowledge sharing.
 
-Opens read-only connections to sibling claw.db files, queries their
-methodologies via FTS5 text search, and returns results tagged with
-source instance metadata. Vector search is avoided since siblings
+The CAM Brain is made of specialized Ganglia (CAM instances), each with
+its own claw.db and domain focus.  The Swarm layer connects them via
+read-only FTS5 queries through brain manifests.
+
+Opens read-only connections to sibling ganglion claw.db files, queries
+their methodologies via FTS5 text search, and returns results tagged
+with source ganglion metadata.  Vector search is avoided since ganglia
 may use different embedding models.
+
+Terminology:
+    - **CAM Brain**: The full federated system (all ganglia together).
+    - **CAM Ganglion**: A specialized instance with its own claw.db.
+    - **CAM Swarm**: This module — the runtime coordination layer.
 
 Usage:
     federation = Federation(config.instances)
