@@ -157,6 +157,12 @@ class EvolutionConfig(BaseModel):
     promotion_threshold: float = 0.6
 
 
+class MiningConfig(BaseModel):
+    """Mining and serialization configuration."""
+    extra_code_extensions: list[str] = []  # e.g. [".cpp", ".rb", ".swift"]
+    extra_skip_dirs: list[str] = []        # e.g. ["migrations", "vendor"]
+
+
 class GovernanceConfig(BaseModel):
     """Memory governance configuration."""
     max_methodologies: int = 5000  # 0 = unlimited; set higher as your instance grows
@@ -359,6 +365,7 @@ class ClawConfig(BaseModel):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
     fleet: FleetConfig = Field(default_factory=FleetConfig)
+    mining: MiningConfig = Field(default_factory=MiningConfig)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     assimilation: AssimilationConfig = Field(default_factory=AssimilationConfig)
     pulse: PulseConfig = Field(default_factory=PulseConfig)

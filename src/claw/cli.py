@@ -5213,7 +5213,7 @@ def mine_report(
 
     cfg = load_config(Path(config) if config else None)
     ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
-    candidates = _discover_repos(dir_path, max_depth=depth)
+    candidates = _discover_repos(dir_path, max_depth=depth, config=cfg)
     skipped: list = []
     selected = candidates
     if dedup:
@@ -5314,8 +5314,8 @@ def _mine_scan_only(
     console.print()
 
     console.print("[cyan]Scanning for repos...[/cyan]")
-    candidates = _discover_repos(dir_path, max_depth=depth)
     cfg = load_config(Path(config_path) if config_path else None)
+    candidates = _discover_repos(dir_path, max_depth=depth, config=cfg)
     ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
 
     if not candidates:
@@ -5659,12 +5659,13 @@ def _mine_workspace_scan_only(
 
     # Discover repos from each directory and merge
     console.print("[cyan]Scanning directories for repos...[/cyan]")
+    cfg = load_config()
     all_candidates: list = []
     source_map: dict[str, str] = {}  # resolved path -> scan root name
     seen_resolved: set[str] = set()
 
     for dir_path in dir_paths:
-        candidates = _discover_repos(dir_path, max_depth=depth)
+        candidates = _discover_repos(dir_path, max_depth=depth, config=cfg)
         for c in candidates:
             try:
                 resolved = str(c.path.resolve())
@@ -5751,7 +5752,7 @@ def _mine_workspace_scan_only(
     console.print(f"  Total discovered: {len(all_candidates)}")
     console.print(f"  Eligible after filters: {len(effective)}")
     console.print(f"  Skipped (dedup): {len(skipped)}")
-    console.print(f"  Cross-path duplicates removed: {sum(len(_discover_repos(p, max_depth=depth)) for p in dir_paths) - len(all_candidates)}")
+    console.print(f"  Cross-path duplicates removed: {sum(len(_discover_repos(p, max_depth=depth, config=cfg)) for p in dir_paths) - len(all_candidates)}")
     if max_repos < ledger_selected:
         console.print(f"  Will mine (--max-repos): {max_repos}")
     else:
@@ -5793,7 +5794,7 @@ async def _mine_workspace_async(
         all_candidates: list = []
         seen_resolved: set[str] = set()
         for dir_path in dir_paths:
-            candidates = _discover_repos(dir_path, max_depth=max_depth)
+            candidates = _discover_repos(dir_path, max_depth=max_depth, config=ctx.config)
             for c in candidates:
                 try:
                     resolved = str(c.path.resolve())

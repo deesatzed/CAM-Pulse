@@ -115,6 +115,10 @@ self_consume_lookback = 20
 max_db_size_mb = 500
 mining_min_description_length = 20
 
+[mining]
+extra_code_extensions = [".cpp", ".c", ".h", ".rb", ".swift", ".kt", ".scala", ".lua", ".r", ".jl"]
+extra_skip_dirs = ["migrations", "vendor", "third_party", "generated", ".terraform", "Pods"]
+
 [assimilation]
 enabled = true
 synergy_candidate_limit = 20

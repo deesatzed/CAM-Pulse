@@ -307,7 +307,7 @@ class TestIncrementalMiningLedger:
         target = repo / "main.py"
         target.write_text("print('v1')\n", encoding="utf-8")
 
-        count_1, ts_1, size_1, sig_1 = _collect_repo_metadata(repo)
+        count_1, ts_1, size_1, sig_1, _ = _collect_repo_metadata(repo)
         assert count_1 == 1
         assert size_1 > 0
         assert sig_1
@@ -315,7 +315,7 @@ class TestIncrementalMiningLedger:
         time.sleep(0.01)
         target.write_text("print('v2')\nprint('more')\n", encoding="utf-8")
 
-        count_2, ts_2, size_2, sig_2 = _collect_repo_metadata(repo)
+        count_2, ts_2, size_2, sig_2, _ = _collect_repo_metadata(repo)
         assert count_2 == 1
         assert size_2 > size_1
         assert ts_2 >= ts_1
@@ -1549,7 +1549,7 @@ class TestCollectRepoMetadata:
         (tmp_path / "utils.py").write_text("y = 2", encoding="utf-8")
         (tmp_path / "data.bin").write_bytes(b"\x00")
 
-        file_count, _, total_bytes, scan_signature = _collect_repo_metadata(tmp_path)
+        file_count, _, total_bytes, scan_signature, _ = _collect_repo_metadata(tmp_path)
         assert file_count >= 2  # at least top-level .py files
         assert total_bytes > 0
         assert scan_signature
@@ -1562,7 +1562,7 @@ class TestCollectRepoMetadata:
         (src / "app.py").write_text("pass", encoding="utf-8")
         (src / "lib.py").write_text("pass", encoding="utf-8")
 
-        file_count, _, _, _ = _collect_repo_metadata(tmp_path)
+        file_count, _, _, _, _ = _collect_repo_metadata(tmp_path)
         assert file_count >= 2
 
     def test_uses_git_mtime_for_timestamp(self, tmp_path):
@@ -1571,13 +1571,13 @@ class TestCollectRepoMetadata:
         git_dir.mkdir()
         (git_dir / "HEAD").write_text("ref: refs/heads/main", encoding="utf-8")
 
-        _, last_commit_ts, _, _ = _collect_repo_metadata(tmp_path)
+        _, last_commit_ts, _, _, _ = _collect_repo_metadata(tmp_path)
         assert last_commit_ts > 0
 
     def test_handles_no_git_dir(self, tmp_path):
         """Falls back to source file mtimes when no .git directory exists."""
         (tmp_path / "main.py").write_text("x = 1", encoding="utf-8")
-        _, last_commit_ts, _, _ = _collect_repo_metadata(tmp_path)
+        _, last_commit_ts, _, _, _ = _collect_repo_metadata(tmp_path)
         assert last_commit_ts > 0.0
 
 
@@ -1765,7 +1765,7 @@ class TestMineSelfQuickPreview:
         (project / "main.py").write_text("print('hello world')\n")
         (project / "utils.py").write_text("def add(a, b): return a + b\n")
         (project / "README.md").write_text("# My Project\n")
-        file_count, _, total_bytes, sig = _collect_repo_metadata(project)
+        file_count, _, total_bytes, sig, _ = _collect_repo_metadata(project)
         assert file_count == 3
         assert total_bytes > 0
         assert len(sig) == 40  # SHA-1 hex digest

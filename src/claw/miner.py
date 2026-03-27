@@ -49,6 +49,71 @@ _SKIP_DIRS: set[str] = {
 # Maximum serialized repo size in bytes (900 KB).
 _MAX_REPO_BYTES: int = 900 * 1024
 
+# Maximum bytes to read per file for content hashing (4 KB).
+_CONTENT_HASH_CHUNK: int = 4096
+
+# Maximum files to hash during content-level dedup.
+_CONTENT_HASH_MAX_FILES: int = 200
+
+
+def _get_code_extensions(config: ClawConfig | None = None) -> set[str]:
+    """Return merged code extensions: base defaults + config extras."""
+    merged = set(_CODE_EXTENSIONS)
+    if config and config.mining.extra_code_extensions:
+        merged |= {ext if ext.startswith(".") else f".{ext}"
+                    for ext in config.mining.extra_code_extensions}
+    return merged
+
+
+def _get_skip_dirs(config: ClawConfig | None = None) -> set[str]:
+    """Return merged skip dirs: base defaults + config extras."""
+    merged = set(_SKIP_DIRS)
+    if config and config.mining.extra_skip_dirs:
+        merged |= set(config.mining.extra_skip_dirs)
+    return merged
+
+
+def _load_mineignore(base_path: Path) -> list[str]:
+    """Load .mineignore patterns from a directory.
+
+    Supports gitignore-style patterns:
+      - Lines starting with # are comments
+      - Blank lines are ignored
+      - Patterns are matched against relative paths
+    """
+    ignore_file = base_path / ".mineignore"
+    if not ignore_file.is_file():
+        return []
+    try:
+        patterns = []
+        for line in ignore_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                patterns.append(line)
+        return patterns
+    except OSError:
+        return []
+
+
+def _is_mineignored(rel_path: str, patterns: list[str]) -> bool:
+    """Check if a relative path matches any .mineignore pattern."""
+    from fnmatch import fnmatch
+    for pattern in patterns:
+        # Strip trailing slash for directory patterns
+        clean = pattern.rstrip("/")
+        # Match against full relative path and individual path components
+        if fnmatch(rel_path, pattern) or fnmatch(rel_path, f"**/{pattern}"):
+            return True
+        # Check if any path component matches exactly
+        parts = rel_path.replace("\\", "/").split("/")
+        if clean in parts:
+            return True
+        # Check fnmatch against each component
+        for part in parts:
+            if fnmatch(part, clean):
+                return True
+    return False
+
 # Valid categories for findings.
 _VALID_CATEGORIES: set[str] = {
     "architecture", "ai_integration", "memory", "code_quality",
@@ -213,6 +278,7 @@ class RepoCandidate:
     last_commit_ts: float = 0.0  # timestamp of last git activity
     total_bytes: int = 0     # approximate source size
     scan_signature: str = "" # lightweight content/mtime signature for incremental mining
+    content_hash: str = ""   # SHA-256 of file contents for cross-repo dedup
 
 
 @dataclass
@@ -229,6 +295,7 @@ class RepoScanRecord:
     last_mined_at: float
     findings_count: int = 0
     tokens_used: int = 0
+    content_hash: str = ""
     methodology_ids: list[str] = field(default_factory=list)
     action_template_ids: list[str] = field(default_factory=list)
 
@@ -239,6 +306,7 @@ class RepoScanLedger:
     def __init__(self, path: Path):
         self.path = path
         self._records: dict[str, RepoScanRecord] = {}
+        self._content_hash_index: dict[str, str] = {}  # content_hash → repo_path
         self._loaded = False
 
     def _load(self) -> None:
@@ -262,6 +330,10 @@ class RepoScanLedger:
                 continue
             try:
                 self._records[key] = RepoScanRecord(**value)
+                # Build content hash reverse index
+                ch = value.get("content_hash", "")
+                if ch:
+                    self._content_hash_index[ch] = key
             except TypeError:
                 continue
 
@@ -305,6 +377,12 @@ class RepoScanLedger:
 
         existing = self.get_record(candidate.path)
         if existing is None:
+            # Check if any OTHER record has the same content_hash
+            if candidate.content_hash:
+                self._load()
+                dup_path = self._content_hash_index.get(candidate.content_hash)
+                if dup_path and dup_path != self.repo_key(candidate.path):
+                    return False, f"content-duplicate of {dup_path}"
             return True, "new"
         if existing.scan_signature != candidate.scan_signature:
             return True, "changed"
@@ -312,8 +390,9 @@ class RepoScanLedger:
 
     def record_result(self, candidate: RepoCandidate, result: RepoMiningResult) -> None:
         self._load()
-        self._records[self.repo_key(candidate.path)] = RepoScanRecord(
-            repo_path=self.repo_key(candidate.path),
+        key = self.repo_key(candidate.path)
+        self._records[key] = RepoScanRecord(
+            repo_path=key,
             repo_name=candidate.name,
             canonical_name=candidate.canonical_name,
             source_kind=candidate.source_kind,
@@ -324,9 +403,13 @@ class RepoScanLedger:
             last_mined_at=time.time(),
             findings_count=len(result.findings),
             tokens_used=result.tokens_used,
+            content_hash=candidate.content_hash,
             methodology_ids=list(result.methodology_ids),
             action_template_ids=list(result.action_template_ids),
         )
+        # Update content hash index
+        if candidate.content_hash:
+            self._content_hash_index[candidate.content_hash] = key
         self._save()
 
 
@@ -368,6 +451,7 @@ def serialize_repo(
     repo_path: str | Path,
     max_bytes: int = _MAX_REPO_BYTES,
     exclude_files: set[str] | None = None,
+    config: ClawConfig | None = None,
 ) -> tuple[str, int]:
     """Read all source files in a directory and concatenate with file headers.
 
@@ -382,6 +466,7 @@ def serialize_repo(
         repo_path: Absolute path to the repository root.
         max_bytes: Maximum serialized size in bytes.
         exclude_files: Set of relative file paths to skip (from secret scanner).
+        config: Optional ClawConfig for extra extensions/skip dirs.
 
     Returns:
         Tuple of (serialized content, number of files read).
@@ -391,15 +476,21 @@ def serialize_repo(
         logger.warning("Repo path is not a directory: %s", repo_path)
         return "", 0
 
+    code_exts = _get_code_extensions(config)
+    skip_dirs = _get_skip_dirs(config)
+    ignore_patterns = _load_mineignore(root)
+
     # Collect eligible files with priority ordering
     eligible: list[tuple[int, Path, Path]] = []  # (priority, rel_path, abs_path)
     for filepath in root.rglob("*"):
         if not filepath.is_file():
             continue
         rel = filepath.relative_to(root)
-        if any(part in _SKIP_DIRS for part in rel.parts):
+        if any(part in skip_dirs for part in rel.parts):
             continue
-        if filepath.suffix.lower() not in _CODE_EXTENSIONS:
+        if filepath.suffix.lower() not in code_exts:
+            continue
+        if ignore_patterns and _is_mineignored(str(rel), ignore_patterns):
             continue
         eligible.append((_file_priority(rel), rel, filepath))
 
@@ -927,7 +1018,7 @@ class RepoMiner:
             raise NotADirectoryError(f"Not a directory: {base}")
 
         # Discover repos by looking for .git directories
-        candidates = _discover_repos(base, max_depth=max_depth)
+        candidates = _discover_repos(base, max_depth=max_depth, config=self.config)
         if not candidates:
             logger.info("No git repos found in %s", base)
             return MiningReport()
@@ -1032,7 +1123,7 @@ class RepoMiner:
 
         # Serialize repo content (Gate 2: exclude files with secrets)
         repo_content, file_count = serialize_repo(
-            repo_path, exclude_files=secret_scan_files
+            repo_path, exclude_files=secret_scan_files, config=self.config
         )
         if not repo_content:
             return RepoMiningResult(
@@ -1610,25 +1701,34 @@ def _canonicalize_name(name: str) -> str:
     return result
 
 
-def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int, str]:
+def _collect_repo_metadata(
+    repo_path: Path,
+    code_extensions: set[str] | None = None,
+    skip_dirs: set[str] | None = None,
+) -> tuple[int, float, int, str, str]:
     """Collect lightweight metadata for a repo (no subprocess calls).
 
     Returns:
-        (file_count, last_commit_ts, total_bytes, scan_signature)
+        (file_count, last_commit_ts, total_bytes, scan_signature, content_hash)
     """
+    exts = code_extensions or _CODE_EXTENSIONS
+    dirs = skip_dirs or _SKIP_DIRS
+
     file_count = 0
     total_bytes = 0
     latest_source_ts = 0.0
     fingerprint = hashlib.sha1()
+    content_hasher = hashlib.sha256()
+    content_files_hashed = 0
 
     try:
         for path in sorted(repo_path.rglob("*")):
             if not path.is_file():
                 continue
             rel = path.relative_to(repo_path)
-            if any(part in _SKIP_DIRS for part in rel.parts):
+            if any(part in dirs for part in rel.parts):
                 continue
-            if path.suffix.lower() not in _CODE_EXTENSIONS:
+            if path.suffix.lower() not in exts:
                 continue
             try:
                 stat = path.stat()
@@ -1637,12 +1737,25 @@ def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int, str]:
             file_count += 1
             total_bytes += stat.st_size
             latest_source_ts = max(latest_source_ts, stat.st_mtime)
+            # Metadata fingerprint (mtime-based, for incremental skip)
             fingerprint.update(str(rel).encode("utf-8", errors="replace"))
             fingerprint.update(b":")
             fingerprint.update(str(stat.st_size).encode())
             fingerprint.update(b":")
             fingerprint.update(str(stat.st_mtime_ns).encode())
             fingerprint.update(b"\n")
+            # Content hash (first 4KB per file, for cross-repo dedup)
+            if content_files_hashed < _CONTENT_HASH_MAX_FILES:
+                try:
+                    with open(path, "rb") as fh:
+                        chunk = fh.read(_CONTENT_HASH_CHUNK)
+                    content_hasher.update(str(rel).encode("utf-8", errors="replace"))
+                    content_hasher.update(b":")
+                    content_hasher.update(chunk)
+                    content_hasher.update(b"\n")
+                    content_files_hashed += 1
+                except (OSError, PermissionError):
+                    pass
     except (PermissionError, OSError):
         pass
 
@@ -1664,13 +1777,15 @@ def _collect_repo_metadata(repo_path: Path) -> tuple[int, float, int, str]:
     scan_signature = hashlib.sha1(
         f"{file_count}:{total_bytes}:{last_commit_ts:.6f}:{fingerprint.hexdigest()}".encode("utf-8")
     ).hexdigest()
+    content_hash = content_hasher.hexdigest() if content_files_hashed > 0 else ""
 
-    return file_count, last_commit_ts, total_bytes, scan_signature
+    return file_count, last_commit_ts, total_bytes, scan_signature, content_hash
 
 
 def _discover_repos(
     base: Path,
     max_depth: int = 6,
+    config: ClawConfig | None = None,
 ) -> list[RepoCandidate]:
     """Find repositories or repo-like source trees under a base directory using BFS.
 
@@ -1681,10 +1796,15 @@ def _discover_repos(
     Args:
         base: Root directory to scan.
         max_depth: Maximum directory depth to search (default 6).
+        config: Optional ClawConfig for extra extensions/skip dirs.
 
     Returns:
         List of RepoCandidate objects sorted by canonical_name then name.
     """
+    code_exts = _get_code_extensions(config)
+    skip_dirs = _get_skip_dirs(config)
+    ignore_patterns = _load_mineignore(base)
+
     candidates: list[RepoCandidate] = []
     seen: set[str] = set()  # resolved path strings for dedup
 
@@ -1695,6 +1815,15 @@ def _discover_repos(
         next_frontier: list[tuple[Path, int]] = []
 
         for dir_path, depth in frontier:
+            # Check .mineignore against relative path from base
+            if ignore_patterns and dir_path != base:
+                try:
+                    rel_str = str(dir_path.relative_to(base))
+                except ValueError:
+                    rel_str = dir_path.name
+                if _is_mineignored(rel_str, ignore_patterns):
+                    continue
+
             # Check if this directory is a git repo or extracted source tree
             git_marker = dir_path / ".git"
             try:
@@ -1704,7 +1833,7 @@ def _discover_repos(
 
             is_source_tree = False
             if not is_repo:
-                is_source_tree = _looks_like_source_tree(dir_path)
+                is_source_tree = _looks_like_source_tree(dir_path, code_exts, skip_dirs)
 
             if is_repo or is_source_tree:
                 try:
@@ -1715,7 +1844,9 @@ def _discover_repos(
                 if resolved not in seen:
                     seen.add(resolved)
                     name = dir_path.name
-                    file_count, last_commit_ts, total_bytes, scan_signature = _collect_repo_metadata(dir_path)
+                    file_count, last_commit_ts, total_bytes, scan_signature, content_hash = (
+                        _collect_repo_metadata(dir_path, code_exts, skip_dirs)
+                    )
                     candidates.append(RepoCandidate(
                         path=dir_path,
                         name=name,
@@ -1726,6 +1857,7 @@ def _discover_repos(
                         last_commit_ts=last_commit_ts,
                         total_bytes=total_bytes,
                         scan_signature=scan_signature,
+                        content_hash=content_hash,
                     ))
                 # Don't descend into candidate repos — they're leaf nodes
                 continue
@@ -1741,7 +1873,7 @@ def _discover_repos(
                             continue
                         if entry.name.startswith("."):
                             continue
-                        if entry.name in _SKIP_DIRS:
+                        if entry.name in skip_dirs:
                             continue
                         next_frontier.append((Path(entry.path), depth + 1))
             except (PermissionError, OSError):
@@ -1754,13 +1886,20 @@ def _discover_repos(
     return candidates
 
 
-def _looks_like_source_tree(dir_path: Path) -> bool:
+def _looks_like_source_tree(
+    dir_path: Path,
+    code_extensions: set[str] | None = None,
+    skip_dirs: set[str] | None = None,
+) -> bool:
     """Heuristic for extracted source folders that are not git repos.
 
     A directory is considered mineable if it has at least one common project
     marker file and at least one code/config/document file near the root, or
     if it contains multiple source files near the root.
     """
+    exts = code_extensions or _CODE_EXTENSIONS
+    dirs = skip_dirs or _SKIP_DIRS
+
     marker_names = {
         "README.md", "README.rst", "README.txt",
         "pyproject.toml", "package.json", "Cargo.toml", "go.mod",
@@ -1781,16 +1920,16 @@ def _looks_like_source_tree(dir_path: Path) -> bool:
                     if name in marker_names:
                         has_marker = True
                     _, ext = os.path.splitext(name)
-                    if ext.lower() in _CODE_EXTENSIONS:
+                    if ext.lower() in exts:
                         root_code_hits += 1
-                elif entry.is_dir(follow_symlinks=False) and name not in _SKIP_DIRS:
+                elif entry.is_dir(follow_symlinks=False) and name not in dirs:
                     try:
                         with os.scandir(entry.path) as sub_entries:
                             for sub in sub_entries:
                                 if not sub.is_file(follow_symlinks=False):
                                     continue
                                 _, ext = os.path.splitext(sub.name)
-                                if ext.lower() in _CODE_EXTENSIONS:
+                                if ext.lower() in exts:
                                     nested_code_hits += 1
                                     if nested_code_hits >= 2:
                                         break
@@ -1857,8 +1996,40 @@ def _dedup_iterations(
                 len(group) - 1,
             )
 
-    selected.sort(key=lambda c: (c.canonical_name, c.name))
-    return selected, skipped
+    # Second pass: content hash dedup across different canonical names
+    content_groups: dict[str, list[RepoCandidate]] = defaultdict(list)
+    for c in selected:
+        if c.content_hash:
+            content_groups[c.content_hash].append(c)
+
+    content_deduped: list[RepoCandidate] = []
+    content_seen: set[str] = set()
+    for c in selected:
+        if not c.content_hash or c.content_hash not in content_groups:
+            content_deduped.append(c)
+            continue
+        if c.content_hash in content_seen:
+            continue  # already processed this group
+        content_seen.add(c.content_hash)
+        group = content_groups[c.content_hash]
+        if len(group) == 1:
+            content_deduped.append(group[0])
+        else:
+            group.sort(
+                key=lambda x: (x.last_commit_ts, x.file_count, x.total_bytes),
+                reverse=True,
+            )
+            winner = group[0]
+            content_deduped.append(winner)
+            for loser in group[1:]:
+                skipped.append((loser, f"content-duplicate of {winner.name} ({winner.path})"))
+            logger.info(
+                "Content dedup: '%s' matches %d other repos, kept '%s'",
+                winner.content_hash[:12], len(group) - 1, winner.name,
+            )
+
+    content_deduped.sort(key=lambda c: (c.canonical_name, c.name))
+    return content_deduped, skipped
 
 
 def _relevance_to_priority(relevance: float) -> int:
