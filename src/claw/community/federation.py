@@ -294,7 +294,7 @@ class Federation:
 
                 # Parse JSON string fields
                 json_list_fields = ("tags", "tech_stack", "files_affected", "parent_ids")
-                json_dict_fields = ("capability_data", "fitness_vector")
+                json_dict_fields = ("capability_data", "fitness_vector", "prism_data")
                 for field in json_list_fields:
                     val = meth_dict.get(field)
                     if isinstance(val, str):
