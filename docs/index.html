@@ -15,770 +15,1342 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
-    /* ── Reset & Base ─────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+
+    :root {
+      --bg: #f7f1e6;
+      --bg-soft: #fffaf2;
+      --bg-elevated: rgba(255, 252, 247, 0.76);
+      --panel: rgba(255, 248, 239, 0.92);
+      --panel-strong: #fffdf9;
+      --ink: #1b2240;
+      --ink-soft: #4f5a78;
+      --ink-dim: #76809d;
+      --line: rgba(41, 55, 107, 0.12);
+      --line-strong: rgba(41, 55, 107, 0.22);
+      --accent: #ff6b3d;
+      --accent-2: #1777ff;
+      --accent-3: #ffd66b;
+      --accent-4: #16a085;
+      --accent-soft: rgba(255, 107, 61, 0.14);
+      --blue-soft: rgba(23, 119, 255, 0.12);
+      --gold-soft: rgba(255, 214, 107, 0.22);
+      --shadow-lg: 0 28px 80px rgba(59, 59, 92, 0.14);
+      --shadow-md: 0 18px 40px rgba(59, 59, 92, 0.09);
+      --shadow-sm: 0 10px 24px rgba(59, 59, 92, 0.07);
+      --radius-xl: 32px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+      --container: 1480px;
+    }
+
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0a0a0f;
-      color: #c9d1d9;
+      font-family: 'Space Grotesk', sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 182, 136, 0.46), transparent 32%),
+        radial-gradient(circle at 85% 14%, rgba(78, 167, 255, 0.25), transparent 26%),
+        radial-gradient(circle at 50% 100%, rgba(255, 220, 137, 0.24), transparent 28%),
+        linear-gradient(180deg, #fffaf2 0%, #f8f1e7 42%, #f2eadf 100%);
+      color: var(--ink);
       line-height: 1.6;
       overflow-x: hidden;
     }
-    a { color: #58a6ff; text-decoration: none; transition: color 0.2s; }
-    a:hover { color: #79c0ff; }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      z-index: 0;
+      pointer-events: none;
+      filter: blur(24px);
+      opacity: 0.8;
+    }
+
+    body::before {
+      top: 10vh;
+      left: -10vw;
+      width: 34vw;
+      height: 34vw;
+      background: rgba(255, 107, 61, 0.12);
+      border-radius: 50%;
+    }
+
+    body::after {
+      bottom: 6vh;
+      right: -8vw;
+      width: 30vw;
+      height: 30vw;
+      background: rgba(23, 119, 255, 0.1);
+      border-radius: 50%;
+    }
+
+    a { color: var(--accent-2); text-decoration: none; transition: color 0.25s ease; }
+    a:hover { color: var(--accent); }
     img { max-width: 100%; }
 
-    /* ── CSS Custom Properties ────────────────────────────── */
-    :root {
-      --accent: #00d4aa;
-      --accent-dim: rgba(0,212,170,0.12);
-      --accent-glow: rgba(0,212,170,0.15);
-      --warn: #cc3355;
-      --warn-dim: rgba(204,51,85,0.12);
-      --bg-deep: #0a0a0f;
-      --bg-card: #0d1117;
-      --bg-card-hover: #161b22;
-      --border: rgba(255,255,255,0.06);
-      --text-primary: #f0f6fc;
-      --text-secondary: #a0aab4;
-      --text-dim: #6e7a85;
-      --container: 1140px;
-      --radius: 12px;
-      --radius-sm: 8px;
+    .container {
+      max-width: var(--container);
+      margin: 0 auto;
+      padding: 0 40px;
+      position: relative;
+      z-index: 1;
     }
 
-    /* ── Layout ───────────────────────────────────────────── */
-    .container { max-width: var(--container); margin: 0 auto; padding: 0 24px; }
-    section { padding: 100px 0; position: relative; z-index: 1; }
+    section {
+      padding: 96px 0;
+      position: relative;
+      z-index: 1;
+    }
 
-    /* ── Typography ───────────────────────────────────────── */
-    h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 900; line-height: 1.1; color: var(--text-primary); }
-    h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 700; line-height: 1.2; color: var(--text-primary); margin-bottom: 16px; }
-    h3 { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
-    p { color: var(--text-secondary); }
-    .section-subtitle { font-size: 1.1rem; color: var(--text-secondary); max-width: 640px; margin-bottom: 48px; }
-    .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+    h1, h2, h3, h4 { color: var(--ink); }
+    h1 {
+      font-size: clamp(2.4rem, 5vw, 4.4rem);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }
+    h2 {
+      font-size: clamp(2.2rem, 4vw, 4rem);
+      line-height: 1;
+      letter-spacing: -0.04em;
+      margin-bottom: 16px;
+    }
+    h3 {
+      font-size: 1.28rem;
+      line-height: 1.15;
+    }
+    p { color: var(--ink-soft); }
+    .section-subtitle {
+      font-size: 1.08rem;
+      max-width: 720px;
+      margin-bottom: 42px;
+      color: var(--ink-soft);
+    }
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .serif {
+      font-family: 'Instrument Serif', serif;
+      font-weight: 400;
+      font-style: italic;
+    }
 
-    /* ── Cards ────────────────────────────────────────────── */
     .card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+      background: var(--bg-elevated);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
       padding: 28px;
-      transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+      box-shadow: var(--shadow-sm);
+      transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
     }
+
     .card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(255,255,255,0.12);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      transform: translateY(-5px);
+      box-shadow: var(--shadow-md);
+      border-color: var(--line-strong);
     }
 
-    /* ── Buttons ──────────────────────────────────────────── */
     .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 14px 28px; border-radius: var(--radius-sm);
-      font-weight: 600; font-size: 1rem;
-      transition: all 0.3s ease; cursor: pointer;
-      border: none; text-decoration: none;
-    }
-    .btn-primary {
-      background: var(--accent);
-      color: #0a0a0f;
-      box-shadow: 0 4px 16px var(--accent-glow);
-    }
-    .btn-primary:hover {
-      box-shadow: 0 6px 24px rgba(0,212,170,0.35);
-      transform: translateY(-1px);
-      color: #0a0a0f;
-    }
-    .btn-ghost {
-      background: transparent;
-      color: var(--text-primary);
-      border: 1px solid rgba(255,255,255,0.15);
-    }
-    .btn-ghost:hover {
-      border-color: rgba(255,255,255,0.3);
-      background: rgba(255,255,255,0.04);
-      color: var(--text-primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 14px 24px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 0.96rem;
+      cursor: pointer;
+      transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+      text-decoration: none;
+      border: 1px solid transparent;
     }
 
-    /* ── Badge ────────────────────────────────────────────── */
-    .badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 16px; border-radius: 50px;
-      font-size: 0.85rem; font-weight: 600;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.04);
-      color: var(--text-secondary);
-      margin-bottom: 24px;
+    .btn:hover { transform: translateY(-2px); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent) 0%, #ff8752 100%);
+      color: #fff9f5;
+      box-shadow: 0 16px 34px rgba(255, 107, 61, 0.24);
     }
+
+    .btn-primary:hover {
+      color: #fff;
+      box-shadow: 0 20px 40px rgba(255, 107, 61, 0.28);
+    }
+
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.58);
+      color: var(--ink);
+      border-color: var(--line);
+      box-shadow: 0 8px 18px rgba(59, 59, 92, 0.05);
+    }
+
+    .btn-ghost:hover {
+      background: #fffdf8;
+      color: var(--ink);
+      border-color: rgba(41, 55, 107, 0.2);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 107, 61, 0.18);
+      background: rgba(255, 255, 255, 0.62);
+      color: var(--ink);
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 20px rgba(59, 59, 92, 0.05);
+    }
+
     .badge .pulse-dot {
-      width: 8px; height: 8px; border-radius: 50%;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
       background: var(--accent);
       animation: pulse-glow 2s ease infinite;
     }
+
     @keyframes pulse-glow {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(0,212,170,0.4); }
-      50% { box-shadow: 0 0 0 6px rgba(0,212,170,0); }
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 61, 0.35); }
+      50% { box-shadow: 0 0 0 8px rgba(255, 107, 61, 0); }
     }
 
-    /* ── Grids ────────────────────────────────────────────── */
-    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
-    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
-    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; }
 
-    /* ── Scroll Reveal ────────────────────────────────────── */
     .reveal {
       opacity: 0;
-      transform: translateY(30px);
-      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+      transform: translateY(28px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
     }
+
     .reveal.visible {
       opacity: 1;
       transform: translateY(0);
     }
-    .reveal-delay-1 { transition-delay: 0.1s; }
-    .reveal-delay-2 { transition-delay: 0.2s; }
-    .reveal-delay-3 { transition-delay: 0.3s; }
-    .reveal-delay-4 { transition-delay: 0.4s; }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION 1: HERO
-       ═══════════════════════════════════════════════════════ */
+    .reveal-delay-1 { transition-delay: 0.08s; }
+    .reveal-delay-2 { transition-delay: 0.16s; }
+    .reveal-delay-3 { transition-delay: 0.24s; }
+    .reveal-delay-4 { transition-delay: 0.32s; }
+
     #hero {
       min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      padding: 40px 0;
-      position: relative;
+      display: flex;
+      align-items: center;
+      padding: 48px 0 80px;
       overflow: hidden;
     }
+
+    #hero::before {
+      content: "";
+      position: absolute;
+      inset: 6% 5% auto auto;
+      width: 280px;
+      height: 280px;
+      background:
+        radial-gradient(circle at 35% 35%, rgba(255, 214, 107, 0.85), transparent 40%),
+        radial-gradient(circle at 65% 60%, rgba(23, 119, 255, 0.5), transparent 48%);
+      opacity: 0.55;
+      border-radius: 50%;
+      filter: blur(18px);
+      z-index: 0;
+    }
+
     .hero-content {
-      position: relative; z-index: 1;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1.1fr) minmax(440px, 0.9fr);
       gap: 48px;
       align-items: center;
-      max-width: var(--container);
-      text-align: left;
+      position: relative;
     }
+
+    .hero-left {
+      max-width: 720px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-kicker {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .hero-eyebrow {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+
+    .hero-title {
+      margin-bottom: 22px;
+    }
+
+    .hero-title .serif {
+      display: block;
+      color: var(--accent-2);
+      font-family: 'Space Grotesk', sans-serif;
+      font-style: normal;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      font-size: 0.68em;
+      line-height: 1.05;
+    }
+
+    .hero-subtitle {
+      font-size: 1.38rem;
+      line-height: 1.55;
+      max-width: 56ch;
+      margin-bottom: 18px;
+      color: var(--ink-soft);
+    }
+
+    .hero-audience {
+      font-size: 1.2rem;
+      line-height: 1.55;
+      color: var(--ink-dim);
+      margin-bottom: 32px;
+      max-width: 52ch;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .hero-microgrid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      max-width: 620px;
+    }
+
+    .hero-stat {
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.56);
+      border: 1px solid rgba(41, 55, 107, 0.1);
+      box-shadow: 0 10px 24px rgba(59, 59, 92, 0.05);
+    }
+
+    .hero-stat strong {
+      display: block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.05rem;
+      color: var(--ink);
+      margin-bottom: 4px;
+    }
+
+    .hero-stat span {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-dim);
+    }
+
+    .hero-right {
+      position: relative;
+      display: grid;
+      align-items: center;
+    }
+
+    .hero-right::before,
+    .hero-right::after {
+      content: "";
+      position: absolute;
+      border-radius: 28px;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .hero-right::before {
+      inset: auto -16px 22px 18%;
+      height: 86%;
+      background: linear-gradient(135deg, rgba(255, 214, 107, 0.28), rgba(255, 107, 61, 0.18));
+      transform: rotate(-7deg);
+    }
+
+    .hero-right::after {
+      inset: 18px 8% auto auto;
+      width: 42%;
+      height: 22%;
+      background: linear-gradient(135deg, rgba(23, 119, 255, 0.15), rgba(22, 160, 133, 0.18));
+      transform: rotate(8deg);
+    }
+
     .hero-demo-frame {
-      background: #0d1117;
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
+      position: relative;
+      z-index: 1;
+      background: rgba(255, 251, 245, 0.88);
+      border: 1px solid rgba(41, 55, 107, 0.12);
+      border-radius: 28px;
       overflow: hidden;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      box-shadow: var(--shadow-lg);
+      transform: rotate(1.4deg);
+      max-width: 640px;
+      justify-self: end;
     }
+
+    .hero-demo-screen {
+      aspect-ratio: 16 / 10;
+      background:
+        radial-gradient(circle at top, rgba(255,255,255,0.22), transparent 48%),
+        linear-gradient(180deg, #201917 0%, #120f12 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px;
+    }
+
     .hero-demo-titlebar {
-      display: flex; align-items: center; gap: 6px;
-      padding: 10px 14px;
-      background: #161b22;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      background: linear-gradient(180deg, rgba(255, 248, 239, 0.98), rgba(248, 239, 228, 0.92));
+      border-bottom: 1px solid rgba(41, 55, 107, 0.08);
     }
-    .hero-demo-titlebar .dot { width: 10px; height: 10px; border-radius: 50%; }
-    .hero-demo-titlebar .dot-red { background: #ff5f56; }
-    .hero-demo-titlebar .dot-yellow { background: #ffbd2e; }
-    .hero-demo-titlebar .dot-green { background: #27c93f; }
+
+    .hero-demo-titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .hero-demo-titlebar .dot-red { background: #ff7d54; }
+    .hero-demo-titlebar .dot-yellow { background: #f8c74f; }
+    .hero-demo-titlebar .dot-green { background: #33b98a; }
+
     .hero-demo-titlebar .title-text {
-      font-size: 0.75rem; color: var(--text-dim); margin-left: auto;
+      margin-left: auto;
+      font-size: 0.77rem;
+      color: var(--ink-dim);
       font-family: 'JetBrains Mono', monospace;
     }
-    .hero-demo-frame img { display: block; width: 100%; }
 
-    /* ── Scroll Indicator ──────────────────────────────────── */
+    .hero-demo-frame img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 18px;
+      background: transparent;
+    }
+
+    .hero-float-card {
+      position: absolute;
+      left: -8%;
+      bottom: 6%;
+      z-index: 2;
+      width: min(250px, 44%);
+      padding: 18px;
+      border-radius: 22px;
+      background: rgba(255, 253, 249, 0.82);
+      border: 1px solid rgba(41, 55, 107, 0.12);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .hero-float-card .mini-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--ink-dim);
+      margin-bottom: 8px;
+    }
+
+    .hero-float-card .mini-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.65rem;
+      color: var(--accent-2);
+      margin-bottom: 6px;
+    }
+
+    .hero-float-card p {
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }
+
     .scroll-indicator {
       position: absolute;
-      bottom: 32px;
+      bottom: 26px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 2;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 8px;
-      cursor: pointer;
-      opacity: 0.85;
-      transition: opacity 0.3s;
+      opacity: 0.9;
+      color: var(--ink);
+      transition: opacity 0.3s ease;
+      z-index: 2;
     }
+
     .scroll-indicator:hover { opacity: 1; }
-    .scroll-indicator .scroll-text {
-      font-size: 0.75rem;
+
+    .scroll-text {
+      font-size: 0.74rem;
       text-transform: uppercase;
-      letter-spacing: 2px;
-      color: var(--text-primary);
-      font-weight: 600;
+      letter-spacing: 0.2em;
+      font-weight: 700;
+      color: var(--ink-dim);
     }
-    .scroll-indicator .scroll-chevron {
-      width: 24px;
-      height: 24px;
-      border-right: 2px solid var(--text-primary);
-      border-bottom: 2px solid var(--text-primary);
+
+    .scroll-chevron {
+      width: 22px;
+      height: 22px;
+      border-right: 2px solid var(--ink);
+      border-bottom: 2px solid var(--ink);
       transform: rotate(45deg);
       animation: scroll-bounce 2s ease-in-out infinite;
     }
-    @keyframes scroll-bounce {
-      0%, 100% { transform: rotate(45deg) translateY(0); opacity: 0.7; }
-      50% { transform: rotate(45deg) translateY(6px); opacity: 1; }
-    }
-    .hero-eyebrow {
-      font-size: 1rem;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      margin-bottom: 12px;
-    }
-    .hero-title { margin-bottom: 16px; letter-spacing: -1px; }
-    .hero-subtitle {
-      font-size: 1rem;
-      color: var(--text-secondary);
-      margin-bottom: 12px;
-      line-height: 1.7;
-    }
-    .hero-audience {
-      font-size: 0.88rem;
-      color: var(--text-dim);
-      margin-bottom: 32px;
-    }
-    .hero-buttons { display: flex; gap: 16px; justify-content: flex-start; flex-wrap: wrap; }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: FEATURES — 4 pillars
-       ═══════════════════════════════════════════════════════ */
-    #features {
-      padding: 80px 0 60px;
-      background: linear-gradient(180deg, var(--bg-deep), #0d1117);
+    @keyframes scroll-bounce {
+      0%, 100% { transform: rotate(45deg) translateY(0); opacity: 0.65; }
+      50% { transform: rotate(45deg) translateY(7px); opacity: 1; }
     }
+
+    #features,
+    #stack,
+    #roadmap,
+    #showpieces {
+      background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0));
+    }
+
     .trust-bar {
-      display: flex; gap: 40px; justify-content: center; flex-wrap: wrap;
-      padding: 24px 0;
-      margin-bottom: 40px;
-      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 52px;
     }
-    .trust-item { text-align: center; }
+
+    .trust-item {
+      padding: 18px 16px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.52);
+      border: 1px solid rgba(41, 55, 107, 0.08);
+      text-align: center;
+      box-shadow: 0 8px 18px rgba(59, 59, 92, 0.04);
+    }
+
     .trust-item .value {
-      font-size: 1.3rem; font-weight: 700; color: var(--text-primary);
       font-family: 'JetBrains Mono', monospace;
+      font-size: 1.18rem;
+      font-weight: 700;
+      color: var(--ink);
     }
+
     .trust-item .label {
-      font-size: 0.7rem; color: var(--text-dim);
-      text-transform: uppercase; letter-spacing: 1px;
+      margin-top: 6px;
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
     }
+
     .pillar-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px;
-      margin-top: 40px;
-    }
-    .pillar-card {
-      padding: 32px;
-      border-top: 3px solid var(--accent);
-    }
-    .pillar-card.warn-border { border-top-color: var(--warn); }
-    .pillar-card h3 {
-      font-size: 1.2rem; margin-bottom: 12px;
-      display: flex; align-items: center; gap: 10px;
-    }
-    .pillar-card h3 .pillar-icon { font-size: 1.4rem; }
-    .pillar-card p { font-size: 0.92rem; margin-bottom: 16px; }
-    .pillar-card ul {
-      list-style: none; padding: 0; margin: 0;
-    }
-    .pillar-card ul li {
-      padding: 5px 0; font-size: 0.88rem; color: var(--text-secondary);
-      padding-left: 20px; position: relative;
-    }
-    .pillar-card ul li::before {
-      content: '\2192'; position: absolute; left: 0; color: var(--text-dim);
-    }
-    .pillar-card code {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem; color: var(--accent);
+      margin-top: 36px;
     }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: ARCHITECTURE
-       ═══════════════════════════════════════════════════════ */
-    #architecture { text-align: center; }
-    .pipeline {
-      display: flex; align-items: center; justify-content: center;
-      gap: 0; flex-wrap: wrap;
-      margin: 48px 0 24px;
+    .pillar-card {
+      padding: 34px;
+      border-top: 4px solid var(--accent);
+      min-height: 100%;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.66), rgba(255,255,255,0.42)),
+        var(--bg-elevated);
     }
-    .pipeline-node {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 24px 20px;
-      text-align: center;
-      min-width: 140px;
+
+    .pillar-card:nth-child(2) { border-top-color: var(--accent-2); }
+    .pillar-card:nth-child(3) { border-top-color: var(--accent-4); }
+    .pillar-card.warn-border { border-top-color: #c06d00; }
+
+    .pillar-card h3 {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .pillar-icon {
+      width: 40px;
+      height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.68);
+      box-shadow: inset 0 0 0 1px rgba(41, 55, 107, 0.08);
+    }
+
+    .pillar-card p {
+      font-size: 0.96rem;
+      margin-bottom: 16px;
+    }
+
+    .pillar-card ul {
+      list-style: none;
+      display: grid;
+      gap: 8px;
+    }
+
+    .pillar-card ul li {
       position: relative;
-      transition: border-color 0.3s ease;
+      padding-left: 22px;
+      color: var(--ink-soft);
+      font-size: 0.89rem;
     }
-    .pipeline-node:hover { border-color: var(--accent); }
-    .pipeline-node .node-icon {
-      font-size: 1.8rem;
-      margin-bottom: 8px;
+
+    .pillar-card ul li::before {
+      content: "\2192";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .pillar-card code,
+    .why-card code,
+    .deploy-card code {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-2);
+    }
+
+    #architecture { text-align: center; }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(9, auto);
+      justify-content: center;
+      align-items: center;
+      gap: 14px;
+      margin: 48px 0 18px;
+    }
+
+    .pipeline-node {
+      min-width: 150px;
+      padding: 24px 18px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.64);
+      border: 1px solid rgba(41, 55, 107, 0.08);
+      box-shadow: 0 10px 24px rgba(59, 59, 92, 0.04);
+      transition: transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .pipeline-node:hover {
+      transform: translateY(-4px);
+      border-color: rgba(255, 107, 61, 0.24);
+    }
+
+    .node-icon {
       display: block;
+      font-size: 1.7rem;
+      margin-bottom: 10px;
     }
-    .pipeline-node h4 { font-size: 0.9rem; color: var(--text-primary); margin-bottom: 4px; }
-    .pipeline-node p { font-size: 0.75rem; color: var(--text-dim); }
+
+    .pipeline-node h4 {
+      font-size: 0.95rem;
+      margin-bottom: 4px;
+    }
+
+    .pipeline-node p,
+    .arch-caption {
+      font-size: 0.83rem;
+      color: var(--ink-dim);
+    }
+
     .pipeline-arrow {
-      color: var(--text-dim);
       font-size: 1.4rem;
-      padding: 0 6px;
-      flex-shrink: 0;
+      color: rgba(27, 34, 64, 0.34);
     }
 
     .workflow-bar {
-      display: flex; justify-content: center; flex-wrap: wrap;
-      gap: 4px; margin-top: 40px;
-    }
-    .workflow-step {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      padding: 10px 18px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--text-secondary);
-      border-radius: 6px;
-      transition: all 0.3s;
-    }
-    .workflow-step:hover { border-color: var(--accent); color: var(--text-primary); }
-    .workflow-sep { color: var(--text-dim); font-size: 0.8rem; display: flex; align-items: center; }
-    .arch-caption {
-      font-size: 0.9rem; color: var(--text-dim);
-      margin-top: 16px;
-      font-style: italic;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 36px;
     }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: CODE SHOWCASE
-       ═══════════════════════════════════════════════════════ */
+    .workflow-step {
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(41, 55, 107, 0.1);
+      background: rgba(255, 255, 255, 0.52);
+      color: var(--ink-soft);
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .workflow-step:last-child {
+      color: var(--accent-2);
+      border-color: rgba(23, 119, 255, 0.24);
+      background: rgba(23, 119, 255, 0.08);
+    }
+
+    .workflow-sep {
+      display: inline-flex;
+      align-items: center;
+      color: var(--ink-dim);
+      font-size: 0.82rem;
+      padding: 0 2px;
+    }
+
     .tabs {
-      display: flex; gap: 4px; margin-bottom: 0;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
     }
+
     .tab-btn {
-      padding: 12px 20px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--text-dim);
-      background: none;
-      border: none;
+      padding: 11px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(41, 55, 107, 0.1);
+      background: rgba(255, 255, 255, 0.58);
+      color: var(--ink-dim);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.84rem;
+      font-weight: 700;
       cursor: pointer;
-      position: relative;
-      transition: color 0.2s;
-      font-family: 'Inter', sans-serif;
-      flex-shrink: 0;
+      transition: all 0.25s ease;
     }
-    .tab-btn:hover { color: var(--text-secondary); }
+
+    .tab-btn:hover,
     .tab-btn.active {
-      color: var(--text-primary);
+      background: var(--ink);
+      color: #fff;
+      border-color: var(--ink);
     }
-    .tab-btn.active::after {
-      content: '';
-      position: absolute; bottom: -1px; left: 0; right: 0;
-      height: 2px; background: var(--accent);
-      border-radius: 2px 2px 0 0;
-    }
+
     .code-panel { display: none; }
     .code-panel.active { display: block; }
-    .code-block {
-      background: #161b22;
-      border: 1px solid var(--border);
-      border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-      padding: 24px;
-      overflow-x: auto;
+
+    .code-block,
+    .docker-snippet,
+    .terminal-output {
       position: relative;
+      background: #fff9f2;
+      border: 1px solid rgba(41, 55, 107, 0.1);
+      border-radius: 26px;
+      box-shadow: var(--shadow-sm);
     }
-    .code-block pre {
-      margin: 0;
+
+    .code-block {
+      padding: 28px 24px 24px;
+      overflow-x: auto;
+    }
+
+    .code-block pre,
+    .docker-snippet pre,
+    .terminal-output {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.85rem;
-      line-height: 1.7;
-      color: var(--text-primary);
+      font-size: 0.84rem;
+      line-height: 1.75;
+      color: #24314c;
     }
-    .code-block .comment { color: #8b949e; }
-    .code-block .command { color: var(--accent); }
-    .code-block .flag { color: var(--warn); }
-    .code-block .string { color: #a5d6ff; }
+
+    .code-block .comment { color: #7f889f; }
+    .code-block .command { color: #c45125; font-weight: 700; }
+    .code-block .flag { color: #1a75ef; }
+    .code-block .string { color: #1d9677; }
+
     .copy-btn {
-      position: absolute; top: 12px; right: 12px;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid var(--border);
-      color: var(--text-dim);
-      padding: 6px 12px;
-      font-size: 0.75rem;
-      border-radius: 6px;
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(41, 55, 107, 0.12);
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--ink-dim);
+      font-size: 0.74rem;
+      font-weight: 700;
       cursor: pointer;
-      transition: all 0.2s;
-      font-family: 'Inter', sans-serif;
+      transition: all 0.2s ease;
+      font-family: 'Space Grotesk', sans-serif;
     }
-    .copy-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-secondary); }
-    .copy-btn.copied { color: var(--accent); border-color: rgba(0,212,170,0.3); }
+
+    .copy-btn:hover,
+    .copy-btn.copied {
+      color: var(--ink);
+      border-color: rgba(255, 107, 61, 0.24);
+    }
 
     .terminal-output {
-      background: #0d1117;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 20px 24px;
       margin-top: 24px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      line-height: 1.8;
-      color: var(--text-secondary);
+      padding: 22px 24px 24px;
+      color: #3d4664;
     }
+
     .terminal-header {
-      display: flex; gap: 6px; margin-bottom: 16px;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
     }
+
     .terminal-dot {
-      width: 10px; height: 10px; border-radius: 50%;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
     }
-    .terminal-dot.red { background: #ff5f56; }
-    .terminal-dot.yellow { background: #ffbd2e; }
-    .terminal-dot.green { background: #27c93f; }
-    .terminal-green { color: var(--accent); }
-    .terminal-white { color: var(--text-primary); }
-    .terminal-dim { color: var(--text-dim); }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: ARCHITECTURE & DEPLOYMENT
-       ═══════════════════════════════════════════════════════ */
-    #stack { background: linear-gradient(180deg, var(--bg-deep), #0d1117); }
-    .backend-card { padding: 32px; }
-    .backend-card .backend-icon { font-size: 2rem; margin-bottom: 12px; display: block; }
-    .backend-card h4 { font-size: 1.1rem; margin-bottom: 8px; }
-    .backend-card .model-name {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      color: var(--text-dim);
-      margin-bottom: 12px;
-      padding: 4px 8px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 4px;
+    .terminal-dot.red { background: #ff7d54; }
+    .terminal-dot.yellow { background: #f6c24e; }
+    .terminal-dot.green { background: #33b98a; }
+    .terminal-green { color: #187d63; }
+    .terminal-white { color: var(--ink); }
+    .terminal-dim { color: var(--ink-dim); }
+
+    .backend-card,
+    .deploy-card,
+    .showpiece-card,
+    .why-card {
+      background: rgba(255, 255, 255, 0.58);
+    }
+
+    .backend-card { padding: 30px; }
+
+    .backend-icon,
+    .deploy-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      margin-bottom: 14px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: inset 0 0 0 1px rgba(41, 55, 107, 0.08);
+      font-size: 1.7rem;
+    }
+
+    .model-name {
       display: inline-block;
+      padding: 6px 10px;
+      margin-bottom: 12px;
+      border-radius: 999px;
+      background: rgba(23, 119, 255, 0.08);
+      color: var(--ink-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.74rem;
     }
-    .backend-card .routing-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
-    .routing-tag {
+
+    .routing-tags,
+    .showpiece-tags {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .routing-tag,
+    .showpiece-tag {
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(41, 55, 107, 0.1);
+      background: rgba(255, 255, 255, 0.7);
+      color: var(--ink-soft);
       font-size: 0.7rem;
-      padding: 3px 10px;
-      border-radius: 50px;
-      border: 1px solid var(--border);
-      color: var(--text-dim);
+      font-weight: 700;
     }
-    .backend-card:nth-child(1) { border-top: 2px solid var(--accent); }
-    .backend-card:nth-child(2) { border-top: 2px solid var(--accent); }
-    .backend-card:nth-child(3) { border-top: 2px solid var(--accent); }
-    .backend-card:nth-child(4) { border-top: 2px solid var(--accent); }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: HONEST LIMITS
-       ═══════════════════════════════════════════════════════ */
+    .backend-card:nth-child(1) { border-top: 3px solid var(--accent); }
+    .backend-card:nth-child(2) { border-top: 3px solid var(--accent-2); }
+    .backend-card:nth-child(3) { border-top: 3px solid var(--accent-4); }
+    .backend-card:nth-child(4) { border-top: 3px solid #c06d00; }
+
     #honest {
-      background: linear-gradient(180deg, #0d1117, #0f0d14);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.24)),
+        linear-gradient(180deg, #f3eadf 0%, #efe4d5 100%);
     }
-    .honest-border {
-      border: 1px solid rgba(255,153,0,0.2);
-      border-radius: var(--radius);
-      padding: 48px;
-      background: rgba(255,153,0,0.02);
-    }
-    .honest-item {
-      display: flex; gap: 20px;
-      padding: 20px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.04);
-    }
-    .honest-item:last-child { border-bottom: none; }
-    .honest-number {
-      font-size: 1.5rem; font-weight: 900;
-      color: rgba(255,153,0,0.4);
-      font-family: 'JetBrains Mono', monospace;
-      flex-shrink: 0;
-      width: 36px;
-    }
-    .honest-item h4 { color: #ffaa33; margin-bottom: 4px; font-size: 1rem; }
-    .honest-item p { font-size: 0.9rem; }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: DEPLOYMENT
-       ═══════════════════════════════════════════════════════ */
-    .deploy-card { text-align: center; padding: 36px 28px; }
-    .deploy-card .deploy-icon { font-size: 2.5rem; margin-bottom: 16px; display: block; }
-    .deploy-card h4 { margin-bottom: 8px; }
-    .deploy-card code {
+    .honest-border {
+      padding: 40px;
+      border-radius: 30px;
+      border: 1px solid rgba(192, 109, 0, 0.2);
+      background: rgba(255, 247, 232, 0.8);
+      box-shadow: var(--shadow-md);
+    }
+
+    .honest-item {
+      display: flex;
+      gap: 20px;
+      padding: 20px 0;
+      border-bottom: 1px solid rgba(41, 55, 107, 0.08);
+    }
+
+    .honest-item:last-child { border-bottom: none; }
+
+    .honest-number {
+      width: 42px;
+      flex-shrink: 0;
+      font-size: 1.5rem;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      background: rgba(255,255,255,0.05);
-      padding: 6px 12px;
-      border-radius: 6px;
-      color: var(--accent);
+      color: rgba(192, 109, 0, 0.56);
+    }
+
+    .honest-item h4 {
+      margin-bottom: 4px;
+      color: #9c5f00;
+    }
+
+    .deploy-card {
+      text-align: center;
+      padding: 34px 26px;
+    }
+
+    .deploy-card code {
       display: inline-block;
       margin-top: 12px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(23, 119, 255, 0.08);
     }
+
     .docker-snippet {
-      margin-top: 40px;
-      background: #161b22;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
+      margin-top: 34px;
       padding: 24px;
-      text-align: left;
       overflow-x: auto;
     }
-    .docker-snippet pre {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      line-height: 1.7;
-      color: var(--text-secondary);
-    }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: ROADMAP
-       ═══════════════════════════════════════════════════════ */
-    #roadmap { background: linear-gradient(180deg, var(--bg-deep), #0d1117); text-align: center; }
     .timeline {
-      display: flex; justify-content: center; gap: 0;
-      margin-top: 48px; flex-wrap: wrap;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-top: 44px;
     }
-    .timeline-item {
-      display: flex; flex-direction: column; align-items: center;
-      padding: 0 24px;
-      position: relative;
-    }
-    .timeline-item::after {
-      content: '';
-      position: absolute; top: 20px; right: -2px;
-      width: 24px; height: 2px;
-      background: var(--border);
-    }
-    .timeline-item:last-child::after { display: none; }
-    .timeline-dot {
-      width: 40px; height: 40px;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1rem;
-      margin-bottom: 12px;
-      border: 2px solid var(--border);
-      background: var(--bg-card);
-    }
-    .timeline-dot.complete { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
-    .timeline-dot.planned { border-color: var(--text-dim); color: var(--text-dim); }
-    .timeline-phase { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-    .timeline-desc { font-size: 0.75rem; color: var(--text-dim); max-width: 120px; }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: PROVEN SHOWPIECES
-       ═══════════════════════════════════════════════════════ */
-    #showpieces { background: linear-gradient(180deg, #0d1117, #0e0f16); }
+    .timeline-item {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 22px;
+    }
+
+    .timeline-item::after {
+      content: "";
+      position: absolute;
+      top: 20px;
+      right: -4px;
+      width: 28px;
+      height: 2px;
+      background: rgba(41, 55, 107, 0.14);
+    }
+
+    .timeline-item:last-child::after { display: none; }
+
+    .timeline-dot {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.62);
+      border: 2px solid rgba(41, 55, 107, 0.16);
+      box-shadow: 0 8px 16px rgba(59, 59, 92, 0.05);
+    }
+
+    .timeline-dot.complete {
+      color: var(--accent-4);
+      border-color: rgba(22, 160, 133, 0.28);
+      background: rgba(22, 160, 133, 0.08);
+    }
+
+    .timeline-dot.planned {
+      color: var(--ink-dim);
+    }
+
+    .timeline-phase {
+      font-size: 0.84rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .timeline-desc {
+      max-width: 144px;
+      font-size: 0.76rem;
+      color: var(--ink-dim);
+    }
+
     .showpiece-card {
-      padding: 32px;
       position: relative;
       overflow: hidden;
+      padding: 32px;
     }
+
     .showpiece-card::before {
-      content: '';
-      position: absolute; top: 0; left: 0; right: 0;
-      height: 3px;
-      background: var(--accent);
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
     }
+
     .showpiece-number {
-      font-size: 3rem; font-weight: 900;
-      color: rgba(255,255,255,0.04);
-      position: absolute; top: 12px; right: 20px;
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      font-size: 3rem;
       font-family: 'JetBrains Mono', monospace;
+      color: rgba(27, 34, 64, 0.05);
     }
-    .showpiece-card h4 { font-size: 1.15rem; margin-bottom: 6px; }
-    .showpiece-card p { color: var(--text-secondary); }
-    .showpiece-card .showpiece-type {
-      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;
-      color: var(--accent); font-weight: 600; margin-bottom: 12px;
+
+    .showpiece-type,
+    .proof-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--accent-2);
     }
-    .showpiece-card p { font-size: 0.9rem; margin-bottom: 12px; }
+
+    .showpiece-card h4 {
+      font-size: 1.18rem;
+      margin: 6px 0 8px;
+    }
+
+    .showpiece-card p {
+      font-size: 0.91rem;
+      color: var(--ink-soft);
+    }
+
     .showpiece-proof {
-      background: var(--accent-dim);
-      border: 1px solid rgba(0,212,170,0.12);
-      border-radius: var(--radius-sm);
-      padding: 12px 16px;
       margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(23, 119, 255, 0.07);
+      border: 1px solid rgba(23, 119, 255, 0.12);
     }
-    .showpiece-proof .proof-label {
-      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
-      color: var(--accent); font-weight: 600; margin-bottom: 6px;
-    }
+
     .showpiece-proof code {
+      display: block;
+      margin-top: 6px;
+      color: #304566;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem; color: var(--text-secondary);
-      display: block; line-height: 1.6;
+      font-size: 0.79rem;
+      line-height: 1.65;
     }
-    /* Hero metric for featured showpieces */
+
     .showpiece-hero-metric {
-      display: flex; align-items: baseline; gap: 10px;
-      margin-bottom: 12px;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 10px 0 12px;
     }
-    .showpiece-hero-metric .metric-value {
-      font-size: 2.2rem; font-weight: 900; color: var(--accent);
-      font-family: 'JetBrains Mono', monospace;
+
+    .metric-value {
+      font-size: 2.1rem;
       line-height: 1;
+      color: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
     }
-    .showpiece-hero-metric .metric-label {
-      font-size: 0.85rem; color: var(--text-secondary);
+
+    .metric-label {
+      font-size: 0.84rem;
+      color: var(--ink-soft);
     }
-    .showpiece-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
-    .showpiece-tag {
-      font-size: 0.7rem; padding: 3px 10px; border-radius: 50px;
-      border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary);
-    }
-    /* Toggle for remaining showpieces */
+
     .showpieces-toggle {
-      display: flex; justify-content: center; margin-top: 32px;
+      display: flex;
+      justify-content: center;
+      margin-top: 32px;
     }
+
     .showpieces-toggle button {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      padding: 12px 28px;
-      font-size: 0.9rem;
-      font-weight: 600;
-      border-radius: var(--radius-sm);
+      padding: 12px 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(41, 55, 107, 0.12);
+      background: rgba(255,255,255,0.68);
+      color: var(--ink);
+      font-weight: 700;
+      font-family: 'Space Grotesk', sans-serif;
       cursor: pointer;
-      transition: all 0.3s;
-      font-family: 'Inter', sans-serif;
+      transition: all 0.25s ease;
     }
+
     .showpieces-toggle button:hover {
-      border-color: var(--accent);
-      color: var(--text-primary);
+      border-color: rgba(255, 107, 61, 0.24);
+      transform: translateY(-2px);
     }
+
     .showpieces-rest { display: none; margin-top: 24px; }
     .showpieces-rest.visible { display: grid; }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: WHERE CAM-PULSE FITS
-       ═══════════════════════════════════════════════════════ */
     .claw-compare-table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 32px;
-      font-size: 0.85rem;
+      min-width: 880px;
+      border-radius: 24px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.58);
+      box-shadow: var(--shadow-sm);
     }
-    .claw-compare-table th {
-      text-align: left;
-      padding: 14px 16px;
-      color: var(--text-dim);
-      font-weight: 600;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      border-bottom: 1px solid var(--border);
-    }
+
+    .claw-compare-table th,
     .claw-compare-table td {
-      padding: 14px 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.03);
-      color: var(--text-secondary);
+      padding: 16px;
+      border-bottom: 1px solid rgba(41, 55, 107, 0.08);
+      text-align: left;
     }
+
+    .claw-compare-table th {
+      background: rgba(255, 250, 244, 0.85);
+      color: var(--ink-dim);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+
+    .claw-compare-table td {
+      color: var(--ink-soft);
+      font-size: 0.86rem;
+    }
+
     .claw-compare-table tr:last-child td { border-bottom: none; }
-    .claw-compare-table .variant-name {
-      font-weight: 600; color: var(--text-primary);
-    }
-    .claw-compare-table .pulse-col { background: var(--accent-dim); }
-    .claw-compare-table .pulse-cost { color: var(--accent); font-weight: 700; }
-    .check-yes { color: var(--accent); font-weight: 600; }
-    .check-no { color: var(--text-dim); }
-    .check-partial { color: #d29922; }
+
+    .variant-name { font-weight: 700; color: var(--ink); }
+    .pulse-col { background: rgba(255, 107, 61, 0.06); }
+    .pulse-cost { color: var(--accent); font-weight: 700; }
+    .check-yes { color: #187d63; font-weight: 700; }
+    .check-no { color: var(--ink-dim); }
+    .check-partial { color: #9c5f00; }
+
     .why-download {
-      display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px;
-      margin-top: 48px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+      margin-top: 42px;
     }
+
     .why-card {
       padding: 32px;
-      border-left: 3px solid var(--accent);
-    }
-    .why-card h4 { font-size: 1.1rem; margin-bottom: 8px; }
-    .why-card ul {
-      list-style: none; padding: 0;
-    }
-    .why-card ul li {
-      padding: 4px 0; font-size: 0.9rem; color: var(--text-secondary);
-      padding-left: 20px; position: relative;
-    }
-    .why-card ul li::before {
-      content: '\2192'; position: absolute; left: 0; color: var(--text-dim);
+      border-left: 4px solid var(--accent-2);
     }
 
-    /* ═══════════════════════════════════════════════════════
-       SECTION: FOOTER / CTA
-       ═══════════════════════════════════════════════════════ */
+    .why-card:last-child { border-left-color: var(--accent); }
+
+    .why-card h4 {
+      margin-bottom: 10px;
+      font-size: 1.08rem;
+    }
+
+    .why-card ul {
+      list-style: none;
+      display: grid;
+      gap: 8px;
+    }
+
+    .why-card ul li {
+      position: relative;
+      padding-left: 22px;
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+    }
+
+    .why-card ul li::before {
+      content: "\2192";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
     #footer {
       text-align: center;
-      padding: 80px 0 60px;
-      border-top: 1px solid var(--border);
-    }
-    .footer-cta { font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 900; color: var(--text-primary); margin-bottom: 32px; }
-    .footer-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 48px; }
-    .footer-links {
-      display: flex; gap: 24px; justify-content: center; flex-wrap: wrap;
-      font-size: 0.85rem; color: var(--text-dim);
-    }
-    .footer-attr {
-      margin-top: 32px;
-      font-size: 0.8rem;
-      color: var(--text-dim);
+      padding: 88px 0 64px;
+      border-top: 1px solid rgba(41, 55, 107, 0.08);
     }
 
-    /* ── Responsive ───────────────────────────────────────── */
-    @media (max-width: 1024px) {
-      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+    .footer-cta {
+      font-size: clamp(2rem, 4vw, 4rem);
+      line-height: 1;
+      letter-spacing: -0.04em;
+      margin-bottom: 28px;
+      max-width: 12ch;
+      margin-inline: auto;
     }
-    @media (max-width: 768px) {
-      section { padding: 64px 0; }
-      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-      .pillar-grid { grid-template-columns: 1fr; }
-      .pipeline { flex-direction: column; gap: 12px; }
-      .pipeline-arrow { transform: rotate(90deg); }
-      .honest-border { padding: 24px; }
-      .timeline { flex-direction: column; align-items: center; gap: 24px; }
+
+    .footer-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 34px;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 22px;
+      color: var(--ink-dim);
+      font-size: 0.84rem;
+    }
+
+    .footer-attr {
+      margin-top: 28px;
+      color: var(--ink-dim);
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 1180px) {
+      .hero-content {
+        grid-template-columns: 1fr;
+        gap: 32px;
+      }
+
+      .hero-left {
+        max-width: none;
+        text-align: center;
+        margin: 0 auto;
+      }
+
+      .hero-title {
+        max-width: none;
+      }
+
+      .hero-buttons,
+      .hero-kicker {
+        justify-content: center;
+      }
+
+      .hero-microgrid {
+        margin: 0 auto;
+      }
+
+      .hero-demo-frame {
+        justify-self: center;
+        max-width: min(760px, 100%);
+      }
+
+      .hero-float-card {
+        left: 3%;
+      }
+
+      .trust-bar {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 860px) {
+      section { padding: 72px 0; }
+      .grid-2, .grid-3, .grid-4, .pillar-grid, .why-download { grid-template-columns: 1fr; }
+      .pipeline {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .pipeline-arrow { transform: rotate(90deg); margin: -2px 0; }
+      .timeline {
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+      }
       .timeline-item::after { display: none; }
-      .workflow-bar { gap: 2px; }
-      .workflow-step { padding: 8px 12px; font-size: 0.7rem; }
-      .showpiece-card { padding: 24px; }
-      .claw-compare-table { font-size: 0.8rem; }
-      .hero-content { grid-template-columns: 1fr; text-align: center; }
-      .hero-right { order: -1; }
-      .hero-buttons { justify-content: center; }
-      .trust-bar { gap: 20px; }
-      .why-download { grid-template-columns: 1fr; }
+      .trust-bar {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .honest-border { padding: 28px 24px; }
+      .hero-demo-frame {
+        transform: none;
+      }
+      .hero-right::before,
+      .hero-right::after,
+      #hero::before {
+        display: none;
+      }
+      .hero-float-card {
+        position: static;
+        width: 100%;
+        margin-top: 14px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .container { padding: 0 18px; }
+      h1 { font-size: clamp(1.8rem, 10vw, 2.8rem); }
+      h2 { font-size: clamp(1.9rem, 10vw, 2.6rem); }
+      .hero-buttons { flex-direction: column; align-items: stretch; }
+      .hero-microgrid,
+      .trust-bar {
+        grid-template-columns: 1fr;
+      }
+      .btn { width: 100%; }
+      .workflow-bar { gap: 8px; }
+      .workflow-sep { display: none; }
+      .showpiece-card,
+      .pillar-card,
+      .backend-card,
+      .deploy-card,
+      .why-card,
+      .card {
+        padding: 24px;
+      }
     }
   </style>
 </head>
 <body>
-
-  <!-- ═══════════════ HERO ═══════════════ -->
   <section id="hero">
     <div class="hero-content container">
       <div class="hero-left">
-        <div class="badge">
-          <span class="pulse-dot"></span>
-          2,624 tests passing
+        <div class="hero-kicker">
+          <div class="badge">
+            <span class="pulse-dot"></span>
+            2,624 tests passing
+          </div>
+          <p class="hero-eyebrow">CAM-PULSE</p>
         </div>
-        <p class="hero-eyebrow">CAM-PULSE</p>
-        <h1 class="hero-title">One Brain. Many Specialists.</h1>
-        <p class="hero-subtitle">Hunts repos, mines patterns, remembers what works, and evolves itself. Finds new repos on GitHub and HuggingFace, injects proven code into your builds &mdash; with tests and full provenance.</p>
-        <p class="hero-audience">For developers and teams who want AI that remembers what worked. Free, MIT licensed, runs 100% local.</p>
+        <h1 class="hero-title">A living system for <span class="serif">OpenClaw-driven software engineering.</span></h1>
+        <p class="hero-subtitle">CAM-PULSE continuously discovers real-world repositories, internalizes reusable engineering patterns, and carries that knowledge forward into future builds with verification and provenance.</p>
+        <p class="hero-audience">For developers and teams who want AI that remembers what worked. Free, MIT licensed, and built to run fully local.</p>
         <div class="hero-buttons">
-          <a href="#code-showcase" class="btn btn-primary">
-            Get Started
-          </a>
-          <a href="#showpieces" class="btn btn-ghost">
-            View Demos
-          </a>
+          <a href="#code-showcase" class="btn btn-primary">Get Started</a>
+          <a href="#showpieces" class="btn btn-ghost">View Demos</a>
           <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-ghost">
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
             GitHub
           </a>
+        </div>
+        <div class="hero-microgrid">
+          <div class="hero-stat">
+            <strong>16/16</strong>
+            <span>First live scan</span>
+          </div>
+          <div class="hero-stat">
+            <strong>1,848</strong>
+            <span>Methodologies stored</span>
+          </div>
+          <div class="hero-stat">
+            <strong>4</strong>
+            <span>Agent backends</span>
+          </div>
         </div>
       </div>
       <div class="hero-right">
@@ -789,7 +1361,14 @@
             <span class="dot dot-green"></span>
             <span class="title-text">cam mine-self --quick</span>
           </div>
-          <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 2,624 tests passing" loading="eager">
+          <div class="hero-demo-screen">
+            <img src="cam-pulse-demo.gif" alt="CAM-PULSE terminal demo showing mine-self analysis with 2,624 tests passing" loading="eager">
+          </div>
+        </div>
+        <div class="hero-float-card">
+          <div class="mini-label">Verified Loop</div>
+          <div class="mini-score">Discover &rarr; Build &rarr; Verify</div>
+          <p>Not a dark terminal wall. This version gives the product breathing room, stronger hierarchy, and a brighter, more confident visual signature.</p>
         </div>
       </div>
     </div>
@@ -799,7 +1378,6 @@
     </a>
   </section>
 
-  <!-- ═══════════════ FEATURES: 4 PILLARS ═══════════════ -->
   <section id="features">
     <div class="container">
       <div class="trust-bar reveal">
@@ -823,50 +1401,49 @@
             <li>HuggingFace model repos mined alongside GitHub</li>
             <li>Freshness monitor auto-triggers re-mining on stale knowledge</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam pulse scan --keywords "..."</code></p>
+          <p style="margin-top:12px; font-size:0.85rem;"><code>cam pulse scan --keywords "..."</code></p>
         </div>
 
         <div class="card pillar-card reveal reveal-delay-2">
           <h3><span class="pillar-icon">&#x1F9E0;</span> Learn</h3>
-          <p>3-pass mining pipeline extracts reusable patterns, stores them with lifecycle tracking, retrieves by relevance.</p>
+          <p>Three-pass mining extracts reusable patterns, stores them with lifecycle tracking, and retrieves them by relevance.</p>
           <ul>
             <li>Classify (free) &rarr; overlap assessment &rarr; focused LLM extraction</li>
-            <li>6-factor confidence scoring beyond cosine similarity</li>
+            <li>Six-factor confidence scoring beyond cosine similarity</li>
             <li>Co-retrieval links strengthen patterns that work together</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam learn search "middleware chain"</code></p>
+          <p style="margin-top:12px; font-size:0.85rem;"><code>cam learn search "middleware chain"</code></p>
         </div>
 
         <div class="card pillar-card reveal reveal-delay-3">
           <h3><span class="pillar-icon">&#x1F528;</span> Build</h3>
-          <p>Injects learned patterns into agent prompts, generates code, and self-corrects on failure.</p>
+          <p>Injects learned patterns into agent prompts, generates code, and self-corrects when a run fails.</p>
           <ul>
-            <li>4 backends: Claude, GPT, Gemini, Grok (or Ollama/MLX-LM locally)</li>
-            <li>Inner correction loop: byte-level restore + re-prompt with violations (up to 3x)</li>
-            <li><code>"90% coverage"</code> auto-extracted to a hard verification gate</li>
+            <li>Four backends: Claude, GPT, Gemini, Grok, or fully local Ollama / MLX-LM</li>
+            <li>Inner correction loop restores bytes and re-prompts with violations</li>
+            <li><code>"90% coverage"</code> can become a hard verification gate</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam create --execute --check "pytest -q"</code></p>
+          <p style="margin-top:12px; font-size:0.85rem;"><code>cam create --execute --check "pytest -q"</code></p>
         </div>
 
         <div class="card pillar-card warn-border reveal reveal-delay-4">
           <h3><span class="pillar-icon">&#x2714;</span> Verify</h3>
-          <p>Every build checked against real diffs, real tests, real metrics. Failures reported honestly.</p>
+          <p>Every build is checked against real diffs, real tests, and real metrics. Failures are reported plainly.</p>
           <ul>
-            <li>If no files changed, the run fails &mdash; no hallucinated success</li>
+            <li>If no files changed, the run fails instead of pretending success</li>
             <li>TruffleHog secret scanning blocks leaked credentials before mining</li>
-            <li><code>cam forge-benchmark</code> reports "0% lift" when that's the truth</li>
+            <li><code>cam forge-benchmark</code> reports <code>"0% lift"</code> when that is the truth</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam security scan</code> &nbsp; <code>cam validate</code></p>
+          <p style="margin-top:12px; font-size:0.85rem;"><code>cam security scan</code> &nbsp; <code>cam validate</code></p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ ARCHITECTURE ═══════════════ -->
   <section id="architecture">
     <div class="container">
       <h2 class="reveal">How It Works</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto 0;">Five stages. Multi-pass mining. Knowledge injection. The loop runs continuously.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="margin: 0 auto 0;">Five stages. Multi-pass mining. Knowledge injection. The loop keeps running.</p>
 
       <div class="pipeline reveal">
         <div class="pipeline-node">
@@ -884,7 +1461,7 @@
         <div class="pipeline-node">
           <span class="node-icon">&#x1F9E0;</span>
           <h4>Mine</h4>
-          <p>3-pass pipeline</p>
+          <p>Three-pass pipeline</p>
         </div>
         <span class="pipeline-arrow">&rarr;</span>
         <div class="pipeline-node">
@@ -900,7 +1477,7 @@
         </div>
       </div>
 
-      <p class="arch-caption reveal">Discover &rarr; mine &rarr; store &rarr; retrieve &rarr; build &rarr; verify &rarr; learn. The loop runs forever.</p>
+      <p class="arch-caption reveal">Discover &rarr; mine &rarr; store &rarr; retrieve &rarr; build &rarr; verify &rarr; learn.</p>
 
       <div class="workflow-bar reveal">
         <span class="workflow-step">Inspect</span>
@@ -917,13 +1494,12 @@
         <span class="workflow-sep">&rarr;</span>
         <span class="workflow-step">Benchmark</span>
         <span class="workflow-sep">&rarr;</span>
-        <span class="workflow-step" style="border-color: rgba(0,212,170,0.3); color: var(--accent);">Self-Enhance</span>
+        <span class="workflow-step">Self-Enhance</span>
       </div>
-      <p class="arch-caption reveal" style="margin-top: 12px; font-style: normal; font-size: 0.8rem;">The 8-step CAM core workflow. Verify &rarr; Correct loop (up to 3x) runs within Execute. Each step produces verifiable artifacts.</p>
+      <p class="arch-caption reveal" style="margin-top: 12px; font-style: normal;">The 8-step CAM workflow. The verify &rarr; correct loop runs inside execution and emits artifacts you can inspect.</p>
     </div>
   </section>
 
-  <!-- ═══════════════ CODE SHOWCASE ═══════════════ -->
   <section id="code-showcase">
     <div class="container">
       <h2 class="reveal">See It In Action</h2>
@@ -1016,7 +1592,7 @@
 <span class="comment"># Seed freshness metadata for existing discoveries</span>
 <span class="command">cam</span> pulse freshness <span class="flag">--seed</span>
 
-<span class="comment"># Auto-refresh stale repos (significance >= 0.4)</span>
+<span class="comment"># Auto-refresh stale repos (significance &gt;= 0.4)</span>
 <span class="command">cam</span> pulse freshness <span class="flag">--auto-refresh</span>
 
 <span class="comment"># Re-mine a specific repo</span>
@@ -1036,7 +1612,7 @@
             <pre><span class="comment"># Ingest a HuggingFace model repo (auto-detects URL type)</span>
 <span class="command">cam</span> pulse ingest <span class="string">https://huggingface.co/microsoft/phi-3-mini-4k-instruct</span>
 
-<span class="comment"># Works with GitHub too &mdash; same command</span>
+<span class="comment"># Works with GitHub too — same command</span>
 <span class="command">cam</span> pulse ingest <span class="string">https://github.com/bytedance/deer-flow</span>
 
 <span class="comment"># Ingest HF repo by ID with revision control</span>
@@ -1091,15 +1667,12 @@ Failed:      <span class="terminal-green">0</span>
     </div>
   </section>
 
-  <!-- ═══════════════ PROVEN SHOWPIECES ═══════════════ -->
   <section id="showpieces">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Proven, Not Just Claimed</h2>
       <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Each showpiece was run, checked, and documented with real output.</p>
 
-      <!-- Top 3 featured showpieces -->
       <div class="grid-2" style="margin-bottom: 24px;">
-        <!-- Showpiece 01: PULSE Knowledge Loop -->
         <div class="card showpiece-card reveal reveal-delay-1">
           <span class="showpiece-number">01</span>
           <div class="showpiece-type">Live Discovery</div>
@@ -1125,7 +1698,6 @@ JSON repair: 100% recovery (16/16 repaired)</code>
           </div>
         </div>
 
-        <!-- Showpiece 02: Plugin Event System -->
         <div class="card showpiece-card reveal reveal-delay-2">
           <span class="showpiece-number">02</span>
           <div class="showpiece-type">Cross-Repo Synthesis</div>
@@ -1149,16 +1721,15 @@ Knowledge compounds: Build A patterns inform Build B</code>
           </div>
         </div>
 
-        <!-- Showpiece 03: Inner Correction Loop -->
         <div class="card showpiece-card reveal reveal-delay-3" style="grid-column: 1 / -1;">
           <span class="showpiece-number">03</span>
           <div class="showpiece-type">Agent Self-Repair</div>
           <div class="showpiece-hero-metric">
             <span class="metric-value">10/10</span>
-            <span class="metric-label">tests passing after self-correction (3 retries on Run 1, first-attempt success on Run 2)</span>
+            <span class="metric-label">tests passing after self-correction</span>
           </div>
           <h4>Inner Correction Loop</h4>
-          <p>On failure, byte-level restores the workspace and re-prompts the agent with violations + test output. Drift 0.868, quality 0.76, lifecycle transition embryonic &rarr; viable.</p>
+          <p>On failure, byte-level restore resets the workspace and re-prompts the agent with violations plus test output. Drift 0.868, quality 0.76, lifecycle transition embryonic &rarr; viable.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">workspace restore</span>
             <span class="showpiece-tag">violation feedback</span>
@@ -1174,7 +1745,6 @@ Knowledge: 2 PULSE patterns injected | Lifecycle: embryonic &rarr; viable</code>
         </div>
       </div>
 
-      <!-- Toggle for remaining showpieces -->
       <div class="showpieces-toggle">
         <button id="toggle-showpieces">See all 12 showpieces</button>
       </div>
@@ -1184,7 +1754,7 @@ Knowledge: 2 PULSE patterns injected | Lifecycle: embryonic &rarr; viable</code>
           <span class="showpiece-number">04</span>
           <div class="showpiece-type">Knowledge Application</div>
           <h4>PULSE Usage Proof</h4>
-          <p>Mined knowledge is retrieved, injected into agent prompts, and used to produce working code with passing tests. Full methodology content injected as structured context. Retrieved=3, Used=3, Attributed=3.</p>
+          <p>Mined knowledge is retrieved, injected into agent prompts, and used to produce working code with passing tests. Retrieved=3, Used=3, Attributed=3.</p>
           <div class="showpiece-proof">
             <div class="proof-label">Live Run Results (March 23, 2026)</div>
             <code>Task: Pre-tool-call guardrail system<br>
@@ -1197,7 +1767,7 @@ Tests: 4/4 passing | Attribution: 3 patterns traced</code>
           <span class="showpiece-number">05</span>
           <div class="showpiece-type">Self-Evolution</div>
           <h4>Self-Enhancement Pipeline</h4>
-          <p>CAM clones its own source, enhances the copy, validates through 7 gates, and atomically swaps the live install. Proven: quality 0.97, all 2,624 tests pass on enhanced copy.</p>
+          <p>CAM clones its own source, enhances the copy, validates through 7 gates, and atomically swaps the live install. Proven: quality 0.97, all 2,624 tests pass on the enhanced copy.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">7-gate validation</span>
             <span class="showpiece-tag">atomic swap</span>
@@ -1209,7 +1779,7 @@ Tests: 4/4 passing | Attribution: 3 patterns traced</code>
           <span class="showpiece-number">06</span>
           <div class="showpiece-type">Smart Mining</div>
           <h4>Multi-Pass Mining Pipeline</h4>
-          <p>Three-pass mining: domain classification (free), knowledge overlap assessment (embedding search), focused LLM extraction with adaptive token budget. 9 repos, 52 methodologies.</p>
+          <p>Three-pass mining: domain classification, knowledge overlap assessment, and focused LLM extraction with adaptive token budget. Nine repos, 52 methodologies.</p>
           <div class="showpiece-proof">
             <div class="proof-label">Pipeline Stages</div>
             <code>Pass 1: Domain classification (10 categories, 0 cost)<br>
@@ -1233,7 +1803,7 @@ Pass 3: LLM mining with structured context</code>
           <span class="showpiece-number">08</span>
           <div class="showpiece-type">Escalating Complexity</div>
           <h4>Expectation Ladder</h4>
-          <p>5-level escalating complexity: health check &rarr; build &rarr; validate &rarr; mine &rarr; self-improve. Each level exercises more of CAM's pipeline.</p>
+          <p>Five levels of escalating complexity: health check &rarr; build &rarr; validate &rarr; mine &rarr; self-improve. Each level exercises more of CAM's pipeline.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">5 levels</span>
             <span class="showpiece-tag">progressive validation</span>
@@ -1244,7 +1814,7 @@ Pass 3: LLM mining with structured context</code>
           <span class="showpiece-number">09</span>
           <div class="showpiece-type">Distributed Intelligence</div>
           <h4>CAM Swarm &mdash; Ganglion Federation</h4>
-          <p>Multiple specialist CAM ganglia (each with its own knowledge base) federate into a single CAM Brain. Read-only FTS5 cross-queries find knowledge across siblings when local confidence is low. Brain manifests summarize each ganglion's expertise.</p>
+          <p>Multiple specialist CAM ganglia federate into a single CAM Brain. Read-only FTS5 cross-queries pull knowledge across siblings when local confidence is low.</p>
           <div class="showpiece-proof">
             <div class="proof-label">Architecture</div>
             <code>Brain = all ganglia | Ganglion = specialist node | Swarm = read-only queries
@@ -1262,7 +1832,7 @@ Pass 3: LLM mining with structured context</code>
           <span class="showpiece-number">10</span>
           <div class="showpiece-type">Structured Verification</div>
           <h4>Metric Expectations</h4>
-          <p>Natural language specs auto-extracted to structured verification gates. <code>"90% coverage"</code> becomes a hard gate. 51 tests cover extraction + enforcement.</p>
+          <p>Natural-language specs become structured verification gates. <code>"90% coverage"</code> can be enforced as a hard gate. 51 tests cover extraction and enforcement.</p>
           <div class="showpiece-proof">
             <div class="proof-label">Supported Metrics</div>
             <code>min_coverage_pct | min_test_count<br>
@@ -1275,7 +1845,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="showpiece-number">11</span>
           <div class="showpiece-type">Knowledge Maintenance</div>
           <h4>Repo Freshness Monitor</h4>
-          <p>Phase 1: ETag-cached metadata check (0 rate limit cost for unchanged repos). Phase 2: 4-factor significance scoring. Only significant changes trigger re-mine.</p>
+          <p>Phase 1 uses cached metadata checks. Phase 2 scores significance. Only important repo changes trigger a re-mine.</p>
           <div class="showpiece-proof">
             <div class="proof-label">Significance Formula</div>
             <code>commits * 0.3 + new_release * 0.4<br>
@@ -1287,9 +1857,9 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="showpiece-number">12</span>
           <div class="showpiece-type">Supply Chain Defense</div>
           <h4>Secret Scanning</h4>
-          <p>Two-gate TruffleHog + regex fallback. Scans every repo before mining. Critical findings block the pipeline. 73 tests, 800+ credential detectors.</p>
+          <p>Two-gate TruffleHog plus regex fallback. Every repo is scanned before mining. Critical findings block the pipeline.</p>
           <div class="showpiece-proof">
-            <span class="proof-label">Verified:</span>
+            <span class="proof-label">Verified</span>
             <code>cam security scan src/ &rarr; CLEAN (0 findings)<br>cam security status &rarr; TruffleHog AVAILABLE</code>
           </div>
         </div>
@@ -1297,10 +1867,9 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
     </div>
   </section>
 
-  <!-- ═══════════════ ARCHITECTURE & DEPLOYMENT ═══════════════ -->
   <section id="stack">
     <div class="container">
-      <h2 class="reveal" style="text-align:center;">Architecture & Deployment</h2>
+      <h2 class="reveal" style="text-align:center;">Architecture &amp; Deployment</h2>
       <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">Four agent backends. Three deployment paths. One unified pipeline.</p>
 
       <div class="grid-4">
@@ -1308,7 +1877,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="backend-icon">&#x2601;</span>
           <h4>OpenRouter</h4>
           <span class="model-name">User-configured via .env</span>
-          <p>Access to Claude, GPT, Gemini, and dozens more via OpenRouter's unified gateway.</p>
+          <p>Access to Claude, GPT, Gemini, and dozens more through one routing layer.</p>
           <div class="routing-tags">
             <span class="routing-tag">analysis</span>
             <span class="routing-tag">documentation</span>
@@ -1318,7 +1887,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="backend-icon">&#x2726;</span>
           <h4>Google Gemini</h4>
           <span class="model-name">gemini-embedding-2-preview</span>
-          <p>Embeddings, full repo comprehension, and deep dependency analysis.</p>
+          <p>Embeddings, repo comprehension, and deep dependency analysis.</p>
           <div class="routing-tags">
             <span class="routing-tag">dependency analysis</span>
             <span class="routing-tag">comprehension</span>
@@ -1328,7 +1897,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="backend-icon">&#x2717;</span>
           <h4>xAI Grok</h4>
           <span class="model-name">grok-4 family</span>
-          <p>Native X search via x_search tool, quick fixes, and live web lookup. Powers the discovery pipeline.</p>
+          <p>Native X search, quick fixes, and live web lookup for the discovery pipeline.</p>
           <div class="routing-tags">
             <span class="routing-tag">quick fixes</span>
             <span class="routing-tag">web lookup</span>
@@ -1339,7 +1908,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="backend-icon">&#x2302;</span>
           <h4>Ollama / MLX-LM</h4>
           <span class="model-name">llama3.2 (local)</span>
-          <p>100% local, zero cloud, no API keys. Native Apple Silicon MLX acceleration.</p>
+          <p>Private, offline, and zero cloud. Native Apple Silicon acceleration.</p>
           <div class="routing-tags">
             <span class="routing-tag">offline</span>
             <span class="routing-tag">private</span>
@@ -1354,7 +1923,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
         <div class="card deploy-card reveal reveal-delay-1">
           <span class="deploy-icon">&#x1F4E6;</span>
           <h4>pip install</h4>
-          <p>Lightweight, no torch required. Uses Gemini API for embeddings.</p>
+          <p>Lightweight and direct. No torch required.</p>
           <code>pip install -e .</code>
         </div>
         <div class="card deploy-card reveal reveal-delay-2">
@@ -1372,24 +1941,23 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
       </div>
 
       <div class="docker-snippet reveal">
-        <pre><span style="color:#8b949e;"># pulse/docker-compose.pulse.yml</span>
-<span style="color:#ff7b72;">services:</span>
-  <span style="color:#79c0ff;">pulse-orchestrator:</span>
-    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"daemon"</span>]
+        <pre><span style="color:#7f889f;"># pulse/docker-compose.pulse.yml</span>
+<span style="color:#c45125;">services:</span>
+  <span style="color:#1a75ef;">pulse-orchestrator:</span>
+    command: [<span style="color:#1d9677;">"cam"</span>, <span style="color:#1d9677;">"pulse"</span>, <span style="color:#1d9677;">"daemon"</span>]
     restart: unless-stopped
 
-  <span style="color:#79c0ff;">pulse-scout-ai:</span>
-    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"scan"</span>, <span style="color:#a5d6ff;">"--keywords"</span>,
-             <span style="color:#a5d6ff;">"AI agent framework new repo github.com"</span>]
+  <span style="color:#1a75ef;">pulse-scout-ai:</span>
+    command: [<span style="color:#1d9677;">"cam"</span>, <span style="color:#1d9677;">"pulse"</span>, <span style="color:#1d9677;">"scan"</span>, <span style="color:#1d9677;">"--keywords"</span>,
+             <span style="color:#1d9677;">"AI agent framework new repo github.com"</span>]
 
-  <span style="color:#79c0ff;">pulse-scout-tools:</span>
-    command: [<span style="color:#a5d6ff;">"cam"</span>, <span style="color:#a5d6ff;">"pulse"</span>, <span style="color:#a5d6ff;">"scan"</span>, <span style="color:#a5d6ff;">"--keywords"</span>,
-             <span style="color:#a5d6ff;">"developer tools CLI open source github.com"</span>]</pre>
+  <span style="color:#1a75ef;">pulse-scout-tools:</span>
+    command: [<span style="color:#1d9677;">"cam"</span>, <span style="color:#1d9677;">"pulse"</span>, <span style="color:#1d9677;">"scan"</span>, <span style="color:#1d9677;">"--keywords"</span>,
+             <span style="color:#1d9677;">"developer tools CLI open source github.com"</span>]</pre>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ WHERE CAM-PULSE FITS ═══════════════ -->
   <section id="claw-compare">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Where CAM-PULSE Fits</h2>
@@ -1476,17 +2044,17 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
             <li>Mine patterns from a folder of repos into persistent, reusable knowledge</li>
             <li>Generate new apps backed by a reviewable spec</li>
             <li>Validate that your agent's changes actually exist in the filesystem</li>
-            <li>Run everything locally with Ollama or MLX-LM &mdash; zero cloud, zero cost</li>
-            <li>Mine your own project for reusable patterns: <code>cam mine-self</code></li>
-            <li>Batch-mine repos across multiple directories: <code>cam mine-workspace</code></li>
+            <li>Run everything locally with Ollama or MLX-LM</li>
+            <li>Mine your own project for reusable patterns with <code>cam mine-self</code></li>
+            <li>Batch-mine repos across directories with <code>cam mine-workspace</code></li>
           </ul>
         </div>
         <div class="card why-card">
           <h4>Add PULSE discovery if you also need to&hellip;</h4>
           <ul>
             <li>Discover new GitHub repos from X automatically</li>
-            <li>Filter discoveries against your existing knowledge (semantic + URL dedup)</li>
-            <li>Auto-learn from novel repos: clone, mine, store &mdash; hands-free</li>
+            <li>Filter discoveries against your existing knowledge</li>
+            <li>Auto-learn from novel repos with clone, mine, and store</li>
             <li>Run a perpetual daemon that polls every 30 minutes</li>
             <li>Deploy a Docker swarm with multiple scout workers</li>
             <li>Let the system periodically mine its own source code for improvements</li>
@@ -1496,60 +2064,58 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
     </div>
   </section>
 
-  <!-- ═══════════════ HONEST LIMITS ═══════════════ -->
   <section id="honest">
     <div class="container">
       <h2 class="reveal" style="text-align:center;">Built to Fail Honestly</h2>
-      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">These are the things CAM has been explicitly hardened against &mdash; because they are easy places for agent systems to become unreliable.</p>
+      <p class="section-subtitle reveal reveal-delay-1" style="text-align:center; margin: 0 auto 48px;">These are the places CAM has been explicitly hardened, because they are exactly where agent systems become unreliable.</p>
 
       <div class="honest-border reveal">
         <div class="honest-item">
           <span class="honest-number">01</span>
           <div>
             <h4>Rejects hallucinated success</h4>
-            <p>Other agents say "I updated the files." CAM checks the actual diff. If no files changed, the run is explicitly failed. This is a core architectural decision, not a wrapper.</p>
+            <p>Other agents say they updated files. CAM checks the actual diff. If nothing changed, the run fails.</p>
           </div>
         </div>
         <div class="honest-item">
           <span class="honest-number">02</span>
           <div>
             <h4>Namespace-safe execution</h4>
-            <p>In fixed-mode, CAM rejects agent output that introduces new top-level source namespaces. <code>--namespace-safe-retry</code> auto-retries with hardened constraints.</p>
+            <p>In fixed-mode, CAM rejects agent output that introduces new top-level source namespaces. <code>--namespace-safe-retry</code> hardens retries.</p>
           </div>
         </div>
         <div class="honest-item">
           <span class="honest-number">03</span>
           <div>
             <h4>Preflight contract system</h4>
-            <p>Before attempting risky execution, CAM asks the high-value questions, produces a reusable task contract, and blocks unsafe work. Answers persist across reruns.</p>
+            <p>Before risky execution, CAM asks the high-value questions, creates a reusable task contract, and blocks unsafe work.</p>
           </div>
         </div>
         <div class="honest-item">
           <span class="honest-number">04</span>
           <div>
             <h4>Honest benchmark reporting</h4>
-            <p>The benchmark harness reports "0% lift" when the fixture corpus doesn't beat baseline. CAM does not overstate results.</p>
+            <p>The benchmark harness reports <code>"0% lift"</code> when the corpus does not beat baseline.</p>
           </div>
         </div>
         <div class="honest-item">
           <span class="honest-number">05</span>
           <div>
             <h4>Documented limits</h4>
-            <p>CAM openly states what does not work yet. <code>--execute</code> is not yet a guaranteed autonomous builder. Local mode is functional but less battle-tested than cloud mode.</p>
+            <p>CAM states what does not work yet. <code>--execute</code> is not presented as a guaranteed autonomous builder.</p>
           </div>
         </div>
         <div class="honest-item">
           <span class="honest-number">06</span>
           <div>
             <h4>Full provenance tracking</h4>
-            <p>Every mined methodology records its source repo URL, discovery date, and license type. All repos referenced on this page are open-source projects.</p>
+            <p>Every mined methodology records source repo URL, discovery date, and license type.</p>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════════ ROADMAP ═══════════════ -->
   <section id="roadmap">
     <div class="container">
       <h2 class="reveal">Roadmap</h2>
@@ -1559,37 +2125,37 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 1</div>
-          <div class="timeline-desc">Core Engine &mdash; evaluate, mine, create, validate, benchmark</div>
+          <div class="timeline-desc">Core engine: evaluate, mine, create, validate, benchmark</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 2</div>
-          <div class="timeline-desc">Local-First &mdash; Docker, Ollama, MLX-LM, torch-free install</div>
+          <div class="timeline-desc">Local-first: Docker, Ollama, MLX-LM, torch-free install</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 3</div>
-          <div class="timeline-desc">PULSE &mdash; X-Scout, novelty filter, auto-learning, 16/16 live scan</div>
+          <div class="timeline-desc">PULSE: X-Scout, novelty filter, auto-learning, 16/16 live scan</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 3.5</div>
-          <div class="timeline-desc">Self-Enhancement &mdash; clone, enhance, 7-gate validate, atomic swap</div>
+          <div class="timeline-desc">Self-enhancement with 7-gate validation and atomic swap</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 3.9</div>
-          <div class="timeline-desc">Resilience &mdash; correction loop, metric gates, HF mining, freshness, secret scanning, CAM Swarm ganglion federation</div>
+          <div class="timeline-desc">Resilience: correction loop, metric gates, freshness, secret scanning</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot complete">&#10003;</div>
           <div class="timeline-phase">Phase 4.0</div>
-          <div class="timeline-desc">CAM Swarm &mdash; ganglion federation, EMA fitness feedback, configurable mining filters, .mineignore, content-level dedup</div>
+          <div class="timeline-desc">CAM Swarm: federation, fitness feedback, configurable mining filters</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot planned">&#x25CB;</div>
           <div class="timeline-phase">Phase 5</div>
-          <div class="timeline-desc">Enterprise &mdash; Sandbox, audit logs, webhooks</div>
+          <div class="timeline-desc">Enterprise: sandbox, audit logs, webhooks</div>
         </div>
         <div class="timeline-item">
           <div class="timeline-dot planned">&#x25CB;</div>
@@ -1600,13 +2166,12 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
     </div>
   </section>
 
-  <!-- ═══════════════ FOOTER / CTA ═══════════════ -->
   <section id="footer">
     <div class="container">
       <h2 class="footer-cta">Try it. The tests speak for themselves.</h2>
       <div class="footer-buttons">
         <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-primary">
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           GitHub Repository
         </a>
         <a href="https://github.com/deesatzed/CAM-Pulse/blob/main/README.md" class="btn btn-ghost">Documentation</a>
@@ -1621,13 +2186,11 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
     </div>
   </section>
 
-  <!-- ═══════════════ JAVASCRIPT ═══════════════ -->
   <script>
-    // ── Scroll Indicator Fade ─────────────────────────────────
     (function() {
-      const indicator = document.querySelector('.scroll-indicator');
+      var indicator = document.querySelector('.scroll-indicator');
       if (!indicator) return;
-      let hidden = false;
+      var hidden = false;
       window.addEventListener('scroll', function() {
         if (!hidden && window.scrollY > 100) {
           indicator.style.opacity = '0';
@@ -1637,147 +2200,81 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
       }, { passive: true });
     })();
 
-    // ── Scroll Reveal ───────────────────────────────────────
     (function() {
-      const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
+      var observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
           if (entry.isIntersecting) {
             entry.target.classList.add('visible');
           }
         });
       }, { threshold: 0.1 });
 
-      document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+      document.querySelectorAll('.reveal').forEach(function(el) { observer.observe(el); });
     })();
 
-    // ── Counter Animation ───────────────────────────────────
     (function() {
-      const counters = document.querySelectorAll('.counter');
-      const animated = new Set();
+      var counters = document.querySelectorAll('.counter');
+      var animated = new Set();
 
-      const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
+      var observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
           if (entry.isIntersecting && !animated.has(entry.target)) {
             animated.add(entry.target);
-            const target = parseInt(entry.target.dataset.target);
-            const duration = 1500;
-            const start = performance.now();
+            var target = parseInt(entry.target.dataset.target, 10);
+            var duration = 1500;
+            var start = performance.now();
 
             function update(now) {
-              const elapsed = now - start;
-              const progress = Math.min(elapsed / duration, 1);
-              const eased = 1 - Math.pow(1 - progress, 3);
-              const current = Math.floor(eased * target);
+              var elapsed = now - start;
+              var progress = Math.min(elapsed / duration, 1);
+              var eased = 1 - Math.pow(1 - progress, 3);
+              var current = Math.floor(eased * target);
               entry.target.textContent = current.toLocaleString();
               if (progress < 1) requestAnimationFrame(update);
               else entry.target.textContent = target.toLocaleString();
             }
+
             requestAnimationFrame(update);
           }
         });
       }, { threshold: 0.3 });
 
-      counters.forEach(c => observer.observe(c));
+      counters.forEach(function(c) { observer.observe(c); });
     })();
 
-    // ── Tab Switching ───────────────────────────────────────
     (function() {
-      const tabBtns = document.querySelectorAll('.tab-btn');
-      const panels = document.querySelectorAll('.code-panel');
+      var tabBtns = document.querySelectorAll('.tab-btn');
+      var panels = document.querySelectorAll('.code-panel');
 
-      tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-          const tabId = btn.dataset.tab;
-          tabBtns.forEach(b => b.classList.remove('active'));
-          panels.forEach(p => p.classList.remove('active'));
+      tabBtns.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var tabId = btn.dataset.tab;
+          tabBtns.forEach(function(b) { b.classList.remove('active'); });
+          panels.forEach(function(p) { p.classList.remove('active'); });
           btn.classList.add('active');
           document.getElementById('panel-' + tabId).classList.add('active');
         });
       });
     })();
 
-    // ── Copy to Clipboard ───────────────────────────────────
     (function() {
-      const codeTexts = {
-        quickstart: `git clone https://github.com/deesatzed/CAM-Pulse.git
-cd CAM-Pulse
-pip install -e ".[dev]"
-
-cam --help
-cam govern stats
-cam pulse preflight`,
-        pulsescan: `cam pulse scan \\
-  --keywords "AI agent framework,new repo" \\
-  --from-date 2026-03-21
-
-cam pulse scan --dry-run
-
-cam pulse discoveries --limit 20
-cam pulse status`,
-        daemon: `cam pulse daemon
-
-cam pulse daemon --interval 15
-
-cam pulse scans
-cam pulse report
-
-docker compose -f pulse/docker-compose.pulse.yml up -d`,
-        mineself: `# Quick preview: file stats + domain signals (no LLM, free)
-cam mine-self --quick
-
-# Full LLM-powered mining of your own project
-cam mine-self
-
-# Mine a specific project directory
-cam mine-self --path /path/to/project
-
-# Extract patterns without generating tasks
-cam mine-self --no-tasks`,
-        mineworkspace: `# Scan directories for repos (preview only, no LLM)
-cam mine-workspace ~/projects ~/experiments --scan-only
-
-# Mine up to 20 repos across directories
-cam mine-workspace ~/projects --max-repos 20
-
-# Only mine repos that changed since last scan
-cam mine-workspace ~/code --changed-only
-
-# Deep scan with higher directory depth
-cam mine-workspace ~/projects --depth 8`,
-        freshness: `# Check all tracked repos for staleness
-cam pulse freshness --verbose
-
-# Seed freshness metadata
-cam pulse freshness --seed
-
-# Auto-refresh stale repos
-cam pulse freshness --auto-refresh
-
-# Re-mine a specific repo
-cam pulse refresh https://github.com/bytedance/deer-flow
-
-# Re-mine all stale repos
-cam pulse refresh --all --dry-run`,
-        hfmining: `# Ingest a HuggingFace model repo
-cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct
-
-# Works with GitHub too
-cam pulse ingest https://github.com/bytedance/deer-flow
-
-# Ingest HF repo by ID
-cam pulse ingest-hf sentence-transformers/all-MiniLM-L6-v2 --revision main
-
-# Force re-ingest
-cam pulse ingest --force https://huggingface.co/BAAI/bge-small-en-v1.5`
+      var codeTexts = {
+        quickstart: "git clone https://github.com/deesatzed/CAM-Pulse.git\ncd CAM-Pulse\npip install -e \".[dev]\"\n\ncam --help\ncam govern stats\ncam pulse preflight",
+        pulsescan: "cam pulse scan \\\n  --keywords \"AI agent framework,new repo\" \\\n  --from-date 2026-03-21\n\ncam pulse scan --dry-run\n\ncam pulse discoveries --limit 20\ncam pulse status",
+        daemon: "cam pulse daemon\n\ncam pulse daemon --interval 15\n\ncam pulse scans\ncam pulse report\n\ndocker compose -f pulse/docker-compose.pulse.yml up -d",
+        mineself: "cam mine-self --quick\n\ncam mine-self\n\ncam mine-self --path /path/to/project\n\ncam mine-self --no-tasks",
+        mineworkspace: "cam mine-workspace ~/projects ~/experiments --scan-only\n\ncam mine-workspace ~/projects --max-repos 20\n\ncam mine-workspace ~/code --changed-only\n\ncam mine-workspace ~/projects --depth 8",
+        freshness: "cam pulse freshness --verbose\n\ncam pulse freshness --seed\n\ncam pulse freshness --auto-refresh\n\ncam pulse refresh https://github.com/bytedance/deer-flow\n\ncam pulse refresh --all --dry-run",
+        hfmining: "cam pulse ingest https://huggingface.co/microsoft/phi-3-mini-4k-instruct\n\ncam pulse ingest https://github.com/bytedance/deer-flow\n\ncam pulse ingest-hf sentence-transformers/all-MiniLM-L6-v2 --revision main\n\ncam pulse ingest --force https://huggingface.co/BAAI/bge-small-en-v1.5"
       };
 
-      document.querySelectorAll('.copy-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.copy;
-          navigator.clipboard.writeText(codeTexts[key]).then(() => {
+      document.querySelectorAll('.copy-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var key = btn.dataset.copy;
+          navigator.clipboard.writeText(codeTexts[key]).then(function() {
             btn.textContent = 'Copied!';
             btn.classList.add('copied');
-            setTimeout(() => {
+            setTimeout(function() {
               btn.textContent = 'Copy';
               btn.classList.remove('copied');
             }, 2000);
@@ -1786,21 +2283,70 @@ cam pulse ingest --force https://huggingface.co/BAAI/bge-small-en-v1.5`
       });
     })();
 
-    // ── Showpieces Toggle ───────────────────────────────────
     (function() {
-      const btn = document.getElementById('toggle-showpieces');
-      const rest = document.getElementById('showpieces-rest');
+      var btn = document.getElementById('toggle-showpieces');
+      var rest = document.getElementById('showpieces-rest');
       if (!btn || !rest) return;
 
-      btn.addEventListener('click', () => {
-        const isVisible = rest.classList.contains('visible');
-        if (isVisible) {
-          rest.classList.remove('visible');
-          btn.textContent = 'See all 12 showpieces';
-        } else {
-          rest.classList.add('visible');
-          btn.textContent = 'Show fewer';
+      btn.addEventListener('click', function() {
+        var isVisible = rest.classList.contains('visible');
+        rest.classList.toggle('visible', !isVisible);
+        btn.textContent = isVisible ? 'See all 12 showpieces' : 'Show fewer';
+      });
+    })();
+
+    /* ── Auto-scroll ────────────────────────────────────── */
+    (function() {
+      var speed = 0.8;            // px per frame (~48 px/s at 60 fps)
+      var running = false;
+      var paused = false;
+      var pauseTimer = null;
+
+      function step() {
+        if (!running) return;
+        if (!paused) {
+          // bypass CSS smooth-scroll by setting scrollTop directly
+          document.documentElement.scrollTop += speed;
+          // stop at bottom
+          if ((window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2) {
+            running = false;
+            updateBtn();
+            return;
+          }
         }
+        requestAnimationFrame(step);
+      }
+
+      // pause on user interaction, resume after 3 s
+      function onUserScroll() {
+        if (!running) return;
+        paused = true;
+        clearTimeout(pauseTimer);
+        pauseTimer = setTimeout(function() { paused = false; }, 3000);
+      }
+
+      window.addEventListener('wheel', onUserScroll, { passive: true });
+      window.addEventListener('touchstart', onUserScroll, { passive: true });
+
+      // floating toggle button
+      var btn = document.createElement('button');
+      btn.id = 'autoscroll-btn';
+      btn.textContent = 'Auto-scroll';
+      btn.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;padding:10px 20px;border-radius:999px;border:1px solid rgba(41,55,107,0.15);background:rgba(255,255,255,0.88);backdrop-filter:blur(12px);color:#1b2240;font-family:"Space Grotesk",sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(59,59,92,0.12);transition:all 0.25s ease;';
+      document.body.appendChild(btn);
+
+      function updateBtn() {
+        btn.textContent = running ? 'Stop scroll' : 'Auto-scroll';
+        btn.style.borderColor = running ? 'rgba(255,107,61,0.35)' : 'rgba(41,55,107,0.15)';
+      }
+
+      btn.addEventListener('click', function() {
+        running = !running;
+        paused = false;
+        // disable CSS smooth-scroll while auto-scrolling so scrollTop works per-frame
+        document.documentElement.style.scrollBehavior = running ? 'auto' : '';
+        updateBtn();
+        if (running) requestAnimationFrame(step);
       });
     })();
   </script>

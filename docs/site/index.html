@@ -2297,7 +2297,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
 
     /* ── Auto-scroll ────────────────────────────────────── */
     (function() {
-      var speed = 0.6;            // px per frame (~36 px/s at 60 fps)
+      var speed = 0.8;            // px per frame (~48 px/s at 60 fps)
       var running = false;
       var paused = false;
       var pauseTimer = null;
@@ -2305,7 +2305,8 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
       function step() {
         if (!running) return;
         if (!paused) {
-          window.scrollBy(0, speed);
+          // bypass CSS smooth-scroll by setting scrollTop directly
+          document.documentElement.scrollTop += speed;
           // stop at bottom
           if ((window.innerHeight + window.scrollY) >= document.body.scrollHeight - 2) {
             running = false;
@@ -2342,6 +2343,8 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
       btn.addEventListener('click', function() {
         running = !running;
         paused = false;
+        // disable CSS smooth-scroll while auto-scrolling so scrollTop works per-frame
+        document.documentElement.style.scrollBehavior = running ? 'auto' : '';
         updateBtn();
         if (running) requestAnimationFrame(step);
       });
