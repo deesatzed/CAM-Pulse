@@ -6484,9 +6484,12 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
             console.print(table)
 
             quota = cfg.governance.max_methodologies
-            usage_pct = (active_methodologies / quota * 100) if quota else 0
-            bar_style = "green" if usage_pct < 80 else ("yellow" if usage_pct < 100 else "red")
-            console.print(f"  Quota: {active_methodologies}/{quota} ({usage_pct:.1f}%) [{bar_style}]")
+            if quota > 0:
+                usage_pct = active_methodologies / quota * 100
+                bar_style = "green" if usage_pct < 80 else ("yellow" if usage_pct < 100 else "red")
+                console.print(f"  Quota: {active_methodologies}/{quota} ({usage_pct:.1f}%) [{bar_style}]")
+            else:
+                console.print(f"  Quota: {active_methodologies} (unlimited)")
             console.print(f"  DB size: {stats.db_size_bytes / 1024 / 1024:.2f} MB")
             console.print(f"  Episodes: {stats.total_episodes}")
 

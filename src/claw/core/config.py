@@ -159,7 +159,7 @@ class EvolutionConfig(BaseModel):
 
 class GovernanceConfig(BaseModel):
     """Memory governance configuration."""
-    max_methodologies: int = 2000
+    max_methodologies: int = 5000  # 0 = unlimited; set higher as your instance grows
     quota_warning_pct: float = 0.80
     gc_dead_on_sweep: bool = True
     dedup_similarity_threshold: float = 0.88

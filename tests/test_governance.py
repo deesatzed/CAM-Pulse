@@ -535,7 +535,7 @@ class TestStorageStats:
         stats = await governor.get_storage_stats()
         assert stats.total_methodologies == 0
         assert stats.quota_used_pct == 0.0
-        assert stats.quota_limit == 2000
+        assert stats.quota_limit == 5000
 
     async def test_storage_stats_with_data(self, governor, repository, embedding_engine):
         """Stats reflect actual data."""
@@ -548,8 +548,8 @@ class TestStorageStats:
         assert stats.by_state.get("viable", 0) == 1
         assert stats.by_state.get("thriving", 0) == 1
         assert stats.by_state.get("dead", 0) == 1
-        # Active = 2, quota = 2000 → 0.1%
-        assert stats.quota_used_pct == 0.1
+        # Active = 2, quota = 5000 → 0.0%
+        assert stats.quota_used_pct == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +638,7 @@ class TestGovernanceConfig:
     def test_config_defaults(self):
         """GovernanceConfig has sensible defaults."""
         config = GovernanceConfig()
-        assert config.max_methodologies == 2000
+        assert config.max_methodologies == 5000
         assert config.dedup_similarity_threshold == 0.88
         assert config.dedup_enabled is True
         assert config.gc_dead_on_sweep is True

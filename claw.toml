@@ -100,7 +100,7 @@ max_cost_per_repo_usd = 5.0
 max_cost_per_day_usd = 50.0
 
 [governance]
-max_methodologies = 2000
+max_methodologies = 5000  # 0 = unlimited; raise as needed (see docs/GOVERNANCE_TUNING.md)
 quota_warning_pct = 0.80
 gc_dead_on_sweep = true
 dedup_similarity_threshold = 0.88

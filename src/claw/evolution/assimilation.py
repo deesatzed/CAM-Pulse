@@ -608,7 +608,7 @@ class CapabilityComposer:
 
         # Check methodology count
         count = await self.repository.count_active_methodologies()
-        if count >= self.config.governance.max_methodologies:
+        if self.config.governance.max_methodologies > 0 and count >= self.config.governance.max_methodologies:
             logger.info("Composition blocked: at methodology quota (%d)", count)
             return None
 

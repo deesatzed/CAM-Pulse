@@ -159,9 +159,9 @@ class MemoryGovernor:
         active_count = await self.repository.count_active_methodologies()
         quota = self.config.max_methodologies
 
-        if active_count <= quota:
-            # Check warning threshold
-            if active_count >= quota * self.config.quota_warning_pct:
+        if quota <= 0 or active_count <= quota:
+            # Check warning threshold (only when quota is set)
+            if quota > 0 and active_count >= quota * self.config.quota_warning_pct:
                 logger.warning(
                     "Methodology quota warning: %d/%d (%.0f%%)",
                     active_count, quota, (active_count / quota) * 100,
