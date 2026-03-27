@@ -1835,7 +1835,7 @@ def _discover_repos(
             if not is_repo:
                 is_source_tree = _looks_like_source_tree(dir_path, code_exts, skip_dirs)
 
-            if is_repo or is_source_tree:
+            if (is_repo or is_source_tree) and dir_path != base:
                 try:
                     resolved = str(dir_path.resolve())
                 except OSError:
