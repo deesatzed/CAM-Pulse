@@ -43,8 +43,8 @@
       --bg-card-hover: #161b22;
       --border: rgba(255,255,255,0.06);
       --text-primary: #f0f6fc;
-      --text-secondary: #8b949e;
-      --text-dim: #484f58;
+      --text-secondary: #a0aab4;
+      --text-dim: #6e7a85;
       --container: 1140px;
       --radius: 12px;
       --radius-sm: 8px;
@@ -593,6 +593,7 @@
       font-family: 'JetBrains Mono', monospace;
     }
     .showpiece-card h4 { font-size: 1.15rem; margin-bottom: 6px; }
+    .showpiece-card p { color: var(--text-secondary); }
     .showpiece-card .showpiece-type {
       font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;
       color: var(--accent); font-weight: 600; margin-bottom: 12px;
@@ -630,7 +631,7 @@
     .showpiece-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
     .showpiece-tag {
       font-size: 0.7rem; padding: 3px 10px; border-radius: 50px;
-      border: 1px solid var(--border); color: var(--text-dim);
+      border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary);
     }
     /* Toggle for remaining showpieces */
     .showpieces-toggle {
