@@ -337,12 +337,13 @@ class SemanticMemory:
             if methodology is None:
                 return
 
-            # Recalculate fitness
+            # Recalculate fitness (pass latest_outcome for EMA update)
             max_retrieval = await self._get_max_retrieval_count()
             _, fitness_vector = compute_fitness(
                 methodology,
                 retrieval_relevance=retrieval_relevance,
                 max_retrieval_count=max_retrieval,
+                latest_outcome=success,
             )
             await self.repository.update_methodology_fitness(methodology_id, fitness_vector)
 

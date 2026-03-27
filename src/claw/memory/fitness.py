@@ -7,11 +7,17 @@ reproduce, low-fitness memories decline and die.
 
 Dimensions:
     1. Retrieval Relevance (0.20) -- how relevant this memory is at retrieval time
-    2. Outcome Efficacy (0.30) -- success/failure ratio (most important)
+    2. Outcome Efficacy (0.30) -- EMA-blended success ratio (most important)
     3. Specificity (0.15) -- richness of tags + files metadata
     4. Freshness (0.15) -- exponential decay from creation time
     5. Cross-Domain Transfer (0.10) -- global scope with proven success
     6. Retrieval Frequency (0.10) -- how often this memory is used
+
+Outcome Efficacy uses an Exponential Moving Average (EMA) blended with
+the static success ratio. The EMA gives more weight to recent outcomes,
+so a methodology that was failing but recently started succeeding sees
+its efficacy rise faster than the static ratio alone.  The EMA value
+persists in the fitness_vector as ``outcome_ema`` between calls.
 """
 
 from __future__ import annotations
@@ -36,12 +42,24 @@ W_FREQUENCY = 0.10
 # Freshness half-life in days
 FRESHNESS_HALF_LIFE_DAYS = 90.0
 
+# EMA smoothing factor for outcome efficacy.
+# Alpha=0.3 means 30% weight on the latest outcome, 70% on the running average.
+# Higher alpha = faster adaptation to recent performance changes.
+EMA_ALPHA = 0.3
+
+# Blend weights: how much of efficacy comes from EMA vs static ratio.
+# Once an EMA is established, efficacy = 60% EMA + 40% static ratio.
+# This prevents a single lucky/unlucky outcome from dominating.
+EMA_BLEND_WEIGHT = 0.6
+STATIC_BLEND_WEIGHT = 1.0 - EMA_BLEND_WEIGHT
+
 
 def compute_fitness(
     methodology: Methodology,
     retrieval_relevance: float = 0.5,
     max_retrieval_count: int = 1,
     now: Optional[datetime] = None,
+    latest_outcome: Optional[bool] = None,
 ) -> tuple[float, dict[str, float]]:
     """Compute the 6-dimensional fitness score for a methodology.
 
@@ -52,6 +70,9 @@ def compute_fitness(
         max_retrieval_count: The maximum retrieval_count across all active
             methodologies in the same scope. Used to normalize frequency.
         now: Current time for freshness calculation. Defaults to utcnow.
+        latest_outcome: The most recent outcome (True=success, False=failure).
+            When provided, updates the EMA.  When None (e.g. during bulk
+            recomputation), the stored EMA is preserved as-is.
 
     Returns:
         Tuple of (total_fitness_score, fitness_vector_dict).
@@ -64,12 +85,43 @@ def compute_fitness(
     # 1. Retrieval Relevance -- from the search engine
     d_relevance = max(0.0, min(1.0, retrieval_relevance))
 
-    # 2. Outcome Efficacy -- success ratio
+    # 2. Outcome Efficacy -- EMA-blended success ratio
+    #
+    # Static ratio: lifetime success_count / total_outcomes (all outcomes equal)
+    # EMA: exponential moving average giving 30% weight to latest outcome
+    # Final efficacy: 60% EMA + 40% static ratio (when EMA available)
     total_outcomes = methodology.success_count + methodology.failure_count
     if total_outcomes > 0:
-        d_efficacy = methodology.success_count / total_outcomes
+        static_efficacy = methodology.success_count / total_outcomes
     else:
-        d_efficacy = 0.5  # Unknown: assume neutral
+        static_efficacy = 0.5  # Unknown: assume neutral
+
+    # Read stored EMA from previous fitness vector (if any)
+    prev_ema: Optional[float] = None
+    fv = methodology.fitness_vector
+    if fv and "outcome_ema" in fv:
+        try:
+            prev_ema = float(fv["outcome_ema"])
+        except (TypeError, ValueError):
+            pass
+
+    # Update EMA with latest outcome
+    if latest_outcome is not None:
+        outcome_val = 1.0 if latest_outcome else 0.0
+        if prev_ema is not None:
+            outcome_ema = EMA_ALPHA * outcome_val + (1.0 - EMA_ALPHA) * prev_ema
+        else:
+            # Bootstrap: first outcome seeds the EMA from static ratio
+            # blended with the new outcome to avoid a cold-start jump
+            outcome_ema = EMA_ALPHA * outcome_val + (1.0 - EMA_ALPHA) * static_efficacy
+    else:
+        outcome_ema = prev_ema  # preserve stored value (may be None)
+
+    # Blend EMA with static ratio for final efficacy
+    if outcome_ema is not None:
+        d_efficacy = EMA_BLEND_WEIGHT * outcome_ema + STATIC_BLEND_WEIGHT * static_efficacy
+    else:
+        d_efficacy = static_efficacy  # no EMA yet, pure static
 
     # 3. Specificity -- metadata richness
     tag_score = min(1.0, len(methodology.tags) / 5.0)
@@ -111,6 +163,10 @@ def compute_fitness(
         "retrieval_frequency": round(d_frequency, 4),
         "total": round(total, 4),
     }
+
+    # Persist EMA state for next computation
+    if outcome_ema is not None:
+        vector["outcome_ema"] = round(outcome_ema, 4)
 
     return round(total, 4), vector
 
