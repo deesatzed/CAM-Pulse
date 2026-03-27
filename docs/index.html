@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CAM-PULSE — Discover, Learn, and Reuse Code Patterns</title>
-  <meta name="description" content="CAM-PULSE continuously discovers GitHub and HuggingFace repos, mines reusable implementation patterns, and applies them to your builds with tests and provenance. Free, open source, runs locally.">
-  <meta property="og:title" content="CAM-PULSE — Discover, Learn, and Reuse Code Patterns">
-  <meta property="og:description" content="Discover repos, mine reusable patterns, apply them to your builds with proof. 2,577 tests. 12 proven showpieces. Free, MIT licensed.">
+  <title>CAM-PULSE — Discover, Test, and Reuse Code Patterns from Real Repos</title>
+  <meta name="description" content="CAM-PULSE discovers GitHub and HuggingFace repos, mines reusable code patterns, and injects them into your builds with tests and provenance. 2,577 tests. Free, MIT licensed, runs locally.">
+  <meta property="og:title" content="CAM-PULSE — Discover, Test, and Reuse Code Patterns from Real Repos">
+  <meta property="og:description" content="Discovers repos, mines reusable patterns, applies them to your builds with proof. 2,577 tests. 12 proven showpieces. Free, MIT licensed.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
@@ -222,17 +222,25 @@
       0%, 100% { transform: rotate(45deg) translateY(0); opacity: 0.7; }
       50% { transform: rotate(45deg) translateY(6px); opacity: 1; }
     }
-    .hero-title { margin-bottom: 16px; letter-spacing: -1px; color: var(--accent); }
-    .hero-tagline {
-      font-size: clamp(1.1rem, 2.5vw, 1.4rem);
-      color: var(--text-secondary);
-      margin-bottom: 8px;
+    .hero-eyebrow {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
     }
+    .hero-title { margin-bottom: 16px; letter-spacing: -1px; }
     .hero-subtitle {
-      font-size: 0.95rem;
-      color: var(--text-dim);
-      margin-bottom: 36px;
+      font-size: 1rem;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
       line-height: 1.7;
+    }
+    .hero-audience {
+      font-size: 0.88rem;
+      color: var(--text-dim);
+      margin-bottom: 32px;
     }
     .hero-buttons { display: flex; gap: 16px; justify-content: flex-start; flex-wrap: wrap; }
 
@@ -606,6 +614,19 @@
       font-size: 0.8rem; color: var(--text-secondary);
       display: block; line-height: 1.6;
     }
+    /* Hero metric for featured showpieces */
+    .showpiece-hero-metric {
+      display: flex; align-items: baseline; gap: 10px;
+      margin-bottom: 12px;
+    }
+    .showpiece-hero-metric .metric-value {
+      font-size: 2.2rem; font-weight: 900; color: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1;
+    }
+    .showpiece-hero-metric .metric-label {
+      font-size: 0.85rem; color: var(--text-secondary);
+    }
     .showpiece-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
     .showpiece-tag {
       font-size: 0.7rem; padding: 3px 10px; border-radius: 50px;
@@ -742,16 +763,20 @@
           <span class="pulse-dot"></span>
           2,577 tests passing
         </div>
-        <h1 class="hero-title">CAM-PULSE</h1>
-        <p class="hero-tagline">Continuously discover, learn, and reuse code patterns from real repositories.</p>
-        <p class="hero-subtitle">CAM-PULSE finds new repos on GitHub and HuggingFace, mines reusable implementation patterns with LLM, stores them with full provenance, and injects them into your builds &mdash; verified with tests and attribution.</p>
+        <p class="hero-eyebrow">CAM-PULSE</p>
+        <h1 class="hero-title">Discover, test, and reuse code patterns from real repos</h1>
+        <p class="hero-subtitle">Finds new repos on GitHub and HuggingFace, mines reusable patterns, and injects them into your builds &mdash; with tests and provenance.</p>
+        <p class="hero-audience">For developers and teams who want AI that remembers what worked. Free, MIT licensed, runs 100% local.</p>
         <div class="hero-buttons">
-          <a href="#showpieces" class="btn btn-primary">
+          <a href="#code-showcase" class="btn btn-primary">
+            Get Started
+          </a>
+          <a href="#showpieces" class="btn btn-ghost">
             View Demos
           </a>
           <a href="https://github.com/deesatzed/CAM-Pulse" class="btn btn-ghost">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-            GitHub Repository
+            GitHub
           </a>
         </div>
       </div>
@@ -791,50 +816,46 @@
       <div class="pillar-grid">
         <div class="card pillar-card reveal reveal-delay-1">
           <h3><span class="pillar-icon">&#x1F50D;</span> Discover</h3>
-          <p>Automatically finds new GitHub and HuggingFace repos worth learning from &mdash; then keeps track of when they change.</p>
+          <p>Finds new GitHub and HuggingFace repos worth learning from, then tracks when they change.</p>
           <ul>
-            <li>X-Scout scans X/Twitter for repos developers are sharing (via Grok's native search)</li>
-            <li>HuggingFace model repos mined alongside GitHub &mdash; tiered by size to avoid downloading weights</li>
-            <li>Freshness monitor detects stale knowledge and auto-triggers re-mining</li>
-            <li>Semantic novelty filter skips repos CAM already knows about</li>
+            <li>X-Scout scans X/Twitter for repos developers are sharing</li>
+            <li>HuggingFace model repos mined alongside GitHub</li>
+            <li>Freshness monitor auto-triggers re-mining on stale knowledge</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam pulse scan --keywords "..."</code> &nbsp; <code>cam pulse freshness</code></p>
+          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam pulse scan --keywords "..."</code></p>
         </div>
 
         <div class="card pillar-card reveal reveal-delay-2">
           <h3><span class="pillar-icon">&#x1F9E0;</span> Learn</h3>
-          <p>Mines reusable patterns from repos using a 3-pass pipeline, stores them with lifecycle tracking, and retrieves them by relevance.</p>
+          <p>3-pass mining pipeline extracts reusable patterns, stores them with lifecycle tracking, retrieves by relevance.</p>
           <ul>
-            <li>3-pass mining: domain classification (free) &rarr; overlap assessment &rarr; focused LLM extraction</li>
-            <li>Patterns stored with source URL, license, 384-dim embeddings, and lifecycle state</li>
-            <li>6-factor confidence scoring blends cosine similarity, BM25, fitness, freshness, cross-domain synergy, and source diversity</li>
-            <li>Co-retrieval links strengthen patterns that work well together</li>
+            <li>Classify (free) &rarr; overlap assessment &rarr; focused LLM extraction</li>
+            <li>6-factor confidence scoring beyond cosine similarity</li>
+            <li>Co-retrieval links strengthen patterns that work together</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam mine-self --quick</code> &nbsp; <code>cam learn search "..."</code></p>
+          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam learn search "middleware chain"</code></p>
         </div>
 
         <div class="card pillar-card reveal reveal-delay-3">
           <h3><span class="pillar-icon">&#x1F528;</span> Build</h3>
-          <p>Injects learned patterns into agent prompts, generates code, and self-corrects when builds fail verification.</p>
+          <p>Injects learned patterns into agent prompts, generates code, and self-corrects on failure.</p>
           <ul>
-            <li>Knowledge injected as structured context with full attribution chain</li>
-            <li>4 agent backends: Claude, GPT, Gemini, Grok via OpenRouter (or Ollama/MLX-LM locally)</li>
-            <li>Inner correction loop: on failure, workspace is byte-level restored and agent re-prompted with violations + test output (up to 3 retries)</li>
-            <li>Natural language specs auto-extracted to structured metric gates (<code>"90% coverage"</code> becomes a hard verification gate)</li>
+            <li>4 backends: Claude, GPT, Gemini, Grok (or Ollama/MLX-LM locally)</li>
+            <li>Inner correction loop: byte-level restore + re-prompt with violations (up to 3x)</li>
+            <li><code>"90% coverage"</code> auto-extracted to a hard verification gate</li>
           </ul>
           <p style="margin-top:12px; font-size: 0.85rem;"><code>cam create --execute --check "pytest -q"</code></p>
         </div>
 
         <div class="card pillar-card warn-border reveal reveal-delay-4">
           <h3><span class="pillar-icon">&#x2714;</span> Verify</h3>
-          <p>Every build is checked against real diffs, real tests, and real metrics. Failures are reported honestly.</p>
+          <p>Every build checked against real diffs, real tests, real metrics. Failures reported honestly.</p>
           <ul>
-            <li>Workspace diff verification &mdash; if no files changed, the run fails</li>
-            <li>Secret scanning (TruffleHog + regex fallback) blocks repos with leaked credentials before mining</li>
-            <li>7-gate self-enhancement validation: syntax, config, imports, DB schema, CLI, pytest, diff</li>
+            <li>If no files changed, the run fails &mdash; no hallucinated success</li>
+            <li>TruffleHog secret scanning blocks leaked credentials before mining</li>
             <li><code>cam forge-benchmark</code> reports "0% lift" when that's the truth</li>
           </ul>
-          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam validate --spec-file ...</code> &nbsp; <code>cam security scan</code></p>
+          <p style="margin-top:12px; font-size: 0.85rem;"><code>cam security scan</code> &nbsp; <code>cam validate</code></p>
         </div>
       </div>
     </div>
@@ -1081,8 +1102,12 @@ Failed:      <span class="terminal-green">0</span>
         <div class="card showpiece-card reveal reveal-delay-1">
           <span class="showpiece-number">01</span>
           <div class="showpiece-type">Live Discovery</div>
+          <div class="showpiece-hero-metric">
+            <span class="metric-value">16/16</span>
+            <span class="metric-label">repos discovered, mined, and stored in one command</span>
+          </div>
           <h4>PULSE Knowledge Loop</h4>
-          <p>Autonomous end-to-end pipeline: discovers 18 repos from live X feeds, novelty filter scores each one, 16 novel repos are cloned, mined by LLM, and stored as 86 new methodologies &mdash; all in one command.</p>
+          <p>Discovers 18 repos from live X feeds, filters for novelty, clones and mines 16 novel repos into 86 new methodologies.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">cam pulse scan</span>
             <span class="showpiece-tag">16/16 assimilated</span>
@@ -1103,8 +1128,12 @@ JSON repair: 100% recovery (16/16 repaired)</code>
         <div class="card showpiece-card reveal reveal-delay-2">
           <span class="showpiece-number">02</span>
           <div class="showpiece-type">Cross-Repo Synthesis</div>
+          <div class="showpiece-hero-metric">
+            <span class="metric-value">3&rarr;1</span>
+            <span class="metric-label">repos synthesized into one working module, 5/5 tests</span>
+          </div>
           <h4>Plugin Event System</h4>
-          <p>CAM retrieves patterns from 3 mined repos and builds a cohesive plugin event system with typed event bus, middleware chain, plugin loader, and loop detection. 258 lines, 5/5 tests.</p>
+          <p>Retrieves patterns from 3 mined repos and builds a cohesive event system: bus, middleware, plugin loader, loop detection. 258 lines.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">3 repos &rarr; 1 module</span>
             <span class="showpiece-tag">5/5 tests</span>
@@ -1123,8 +1152,12 @@ Knowledge compounds: Build A patterns inform Build B</code>
         <div class="card showpiece-card reveal reveal-delay-3" style="grid-column: 1 / -1;">
           <span class="showpiece-number">03</span>
           <div class="showpiece-type">Agent Self-Repair</div>
+          <div class="showpiece-hero-metric">
+            <span class="metric-value">10/10</span>
+            <span class="metric-label">tests passing after self-correction (3 retries on Run 1, first-attempt success on Run 2)</span>
+          </div>
           <h4>Inner Correction Loop</h4>
-          <p>When builds fail verification, CAM byte-level restores the workspace and re-prompts the agent with exact violations and test output. Run 1 triggered 3 correction retries. Run 2 succeeded first attempt: 10/10 tests, drift 0.868, quality 0.76, lifecycle transition embryonic &rarr; viable.</p>
+          <p>On failure, byte-level restores the workspace and re-prompts the agent with violations + test output. Drift 0.868, quality 0.76, lifecycle transition embryonic &rarr; viable.</p>
           <div class="showpiece-tags">
             <span class="showpiece-tag">workspace restore</span>
             <span class="showpiece-tag">violation feedback</span>
