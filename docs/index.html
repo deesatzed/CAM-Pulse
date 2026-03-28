@@ -1344,7 +1344,7 @@
             <span>First live scan</span>
           </div>
           <div class="hero-stat">
-            <strong>2,923</strong>
+            <strong>1,877</strong>
             <span>Methodologies stored</span>
           </div>
           <div class="hero-stat">
@@ -1383,9 +1383,9 @@
       <div class="trust-bar reveal">
         <div class="trust-item"><div class="value"><span class="counter" data-target="2624">0</span></div><div class="label">Tests Passing</div></div>
         <div class="trust-item"><div class="value">4</div><div class="label">Agent Backends</div></div>
-        <div class="trust-item"><div class="value"><span class="counter" data-target="2923">0</span></div><div class="label">Methodologies</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="1877">0</span></div><div class="label">Methodologies</div></div>
         <div class="trust-item"><div class="value"><span class="counter" data-target="336">0</span></div><div class="label">Source Repos</div></div>
-        <div class="trust-item"><div class="value">13</div><div class="label">Showpieces</div></div>
+        <div class="trust-item"><div class="value">14</div><div class="label">Showpieces</div></div>
         <div class="trust-item"><div class="value">$0</div><div class="label">MIT Licensed</div></div>
       </div>
 
@@ -1746,7 +1746,7 @@ Knowledge: 2 PULSE patterns injected | Lifecycle: embryonic &rarr; viable</code>
       </div>
 
       <div class="showpieces-toggle">
-        <button id="toggle-showpieces">See all 13 showpieces</button>
+        <button id="toggle-showpieces">See all 14 showpieces</button>
       </div>
 
       <div class="grid-2 showpieces-rest" id="showpieces-rest">
@@ -1868,11 +1868,11 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <span class="showpiece-number">13</span>
           <div class="showpiece-type">Autonomous Evolution</div>
           <h4>Self-Enhancement &mdash; CAM Improves Its Own Code</h4>
-          <p>After mining new knowledge, CAM clones itself, runs its own build pipeline against the copy using newly learned patterns, validates through 7 gates (syntax, config, imports, DB schema, CLI smoke, full pytest, diff summary), and swaps only if ALL gates pass. Protected files (verifier, factory, engine, schema, config) require human review even if gates pass. Compiler-bootstrap pattern: the system that validates code is itself validated by the same pipeline.</p>
+          <p>After mining new knowledge, CAM clones itself, runs its own build pipeline against the copy using newly learned patterns, validates through 7 gates (syntax, config, imports, DB schema, CLI smoke, full pytest, diff summary), and swaps only if ALL gates pass. Protected files (verifier, factory, engine, schema, config) require human review even if gates pass. Latest run: knowledge application demo produced a working async microservice with 3 PULSE patterns injected per attempt, drift 0.894, 12 files created. Self-enhancement: all 7 gates passed, 2,624 tests in 203.4s, atomic swap completed.</p>
           <div class="showpiece-proof">
-            <div class="proof-label">Validation Pipeline</div>
-            <code>7 gates | 2,624 tests must pass | 5 protected files<br>
-compiler-bootstrap pattern | zero-tolerance validation<br>
+            <div class="proof-label">Latest Validation Run (March 2026)</div>
+            <code>7 gates PASSED | 2,624 tests | 203.4s | 5 protected files<br>
+Knowledge demo: 3 PULSE patterns injected | drift 0.894 | 12 files<br>
 clone &rarr; enhance &rarr; validate &rarr; swap &rarr; post-swap &rarr; rollback-ready</code>
           </div>
           <div class="showpiece-tags">
@@ -1881,6 +1881,31 @@ clone &rarr; enhance &rarr; validate &rarr; swap &rarr; post-swap &rarr; rollbac
             <span class="showpiece-tag">compiler-bootstrap</span>
             <span class="showpiece-tag">protected files</span>
             <span class="showpiece-tag">atomic swap</span>
+            <span class="showpiece-tag">2,624 tests</span>
+          </div>
+        </div>
+
+        <div class="card showpiece-card" style="grid-column: 1 / -1;">
+          <span class="showpiece-number">14</span>
+          <div class="showpiece-type">Live Knowledge Application</div>
+          <h4>End-to-End Knowledge Injection &mdash; From Mined Patterns to Architecture-Informed Code</h4>
+          <p>CAM retrieves 3 PULSE patterns from 1,877 stored methodologies and injects them into the agent prompt alongside 12 evaluation hints. The agent produces architecture-informed code: endpoint separation, idempotent request tracking, and async SQLite persistence. The verifier checks drift alignment (0.894) and executes tests. On success, the EMA fitness feedback loop records the outcome, strengthening the patterns that contributed. Patterns traced back to mined source repos: Aegis_Atlas, CLI-Anything, and ClawTeam.</p>
+          <div class="showpiece-proof">
+            <div class="proof-label">Live Run Results (March 2026)</div>
+            <code>Retrieved: 3 PULSE patterns from 1,877 methodologies<br>
+Prompt: 12 evaluation hints + 3 injected patterns<br>
+Output: async microservice | 12 files | endpoint separation<br>
+Verification: drift 0.894 | tests passing | idempotent tracking<br>
+Fitness: EMA feedback recorded | lifecycle transition confirmed<br>
+Attribution: Aegis_Atlas, CLI-Anything, ClawTeam</code>
+          </div>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">knowledge injection</span>
+            <span class="showpiece-tag">3 patterns retrieved</span>
+            <span class="showpiece-tag">1,877 methodologies</span>
+            <span class="showpiece-tag">drift 0.894</span>
+            <span class="showpiece-tag">EMA fitness</span>
+            <span class="showpiece-tag">full attribution</span>
           </div>
         </div>
       </div>
@@ -2010,7 +2035,7 @@ clone &rarr; enhance &rarr; validate &rarr; swap &rarr; post-swap &rarr; rollbac
               <td><span class="check-partial">Workspace only</span></td>
               <td><span class="check-partial">Session only</span></td>
               <td><span class="check-no">&mdash;</span></td>
-              <td><span class="check-yes">Yes &mdash; 2,923 methodologies + lifecycle</span></td>
+              <td><span class="check-yes">Yes &mdash; 1,877 methodologies + lifecycle</span></td>
             </tr>
             <tr>
               <td class="variant-name">Discovers new patterns autonomously</td>
@@ -2316,7 +2341,7 @@ clone &rarr; enhance &rarr; validate &rarr; swap &rarr; post-swap &rarr; rollbac
       btn.addEventListener('click', function() {
         var isVisible = rest.classList.contains('visible');
         rest.classList.toggle('visible', !isVisible);
-        btn.textContent = isVisible ? 'See all 13 showpieces' : 'Show fewer';
+        btn.textContent = isVisible ? 'See all 14 showpieces' : 'Show fewer';
       });
     })();
 
