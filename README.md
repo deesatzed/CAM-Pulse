@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,577 tests** | **1,848 learned methodologies** | **273 source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
+**2,624 tests** | **2,923 learned methodologies** | **336 source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -30,7 +30,7 @@ Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys 
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 1,848 methodologies + lifecycle | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 2,923 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -51,7 +51,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 2,577 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 2,624 tests passing. Zero skips with API keys configured.
 
 ### Other Install Options
 
@@ -113,6 +113,99 @@ tests/test_events.py::test_cli_help_version_and_invalid_args        PASSED
 ```
 
 Every module traces back to a specific mined methodology. This isn't code generation — it's **knowledge application with provenance**.
+
+---
+
+## CAM Brain: Federated Knowledge at Scale
+
+CAM doesn't keep everything in one database. It operates as a **federated brain** — multiple specialist knowledge nodes (ganglia) that share knowledge through read-only cross-queries.
+
+```
+CAM Brain (2,923 methodologies)
+├── Primary Ganglion — 1,877 methodologies from 273 GitHub/HuggingFace repos
+└── Drive-Ops Ganglion — 1,046 methodologies from 63 local repos on a 1.5TB drive
+    └── Connected via CAM Swarm (read-only FTS5 cross-queries)
+```
+
+**Proven result**: Scanned a 1.5TB development drive, discovered 389 code repositories, deduplicated 82 copies down to 307 unique projects, and mined all of them in a 16-batch automated marathon (3.5 hours). The primary ganglion can now query drive-ops for local project patterns when its own knowledge is insufficient.
+
+### How It Works
+
+1. **Scan** — Walk the filesystem, find anything that looks like a code project
+2. **Dedup** — Content-hash (SHA-256 of first 4KB per file) catches copies with different names
+3. **Mine** — LLM extracts reusable patterns: retry logic, API design, testing strategies, architecture decisions
+4. **Embed** — 384-dimensional vectors enable semantic search ("find patterns about error handling" works even if no methodology literally says "error handling")
+5. **Federate** — Each ganglion publishes a brain manifest summarizing its expertise. During builds, if local confidence is low, the swarm automatically queries sibling ganglia
+
+### Create Your Own Specialist Ganglion
+
+```bash
+# Create a new ganglion for your domain
+export CLAW_DB_PATH=data/instances/my-specialist.db
+cam govern stats  # Initializes empty ganglion
+
+# Feed it
+cam pulse ingest https://github.com/some/repo https://github.com/another/repo
+
+# Generate its brain manifest
+cam kb instances manifest
+
+# Register it in the swarm
+unset CLAW_DB_PATH
+cam kb instances add my-specialist data/instances/my-specialist.db \
+  --description "Your domain description here"
+
+# Test cross-ganglion query
+cam kb instances query "your search terms"
+```
+
+See [CAM_STANDALONE_INSTANCE_GUIDE.md](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) for the full walkthrough.
+
+---
+
+## Self-Enhancement: CAM Improves Its Own Code
+
+After mining new knowledge, CAM can assess whether it should **rebuild itself** using the patterns it just learned. This follows the compiler-bootstrap pattern: build the new version with the old version, validate it, then swap.
+
+### Trigger Conditions
+
+CAM monitors two thresholds (either one fires the pipeline):
+
+| Condition | Threshold | After Drive-Ops Mining |
+|-----------|-----------|----------------------|
+| New methodologies since last enhance | ≥ 10 | 1,046 |
+| Average novelty score | ≥ 0.75 | 0.45 (not met, but count alone triggers) |
+
+### The 7-Gate Validation Pipeline
+
+Before any self-modification takes effect, the enhanced copy must pass **all 7 gates**:
+
+| Gate | Check | Tolerance |
+|------|-------|-----------|
+| 1. Syntax | Every `.py` file parses | Zero errors |
+| 2. Config | `claw.toml` loads cleanly | No regressions |
+| 3. Imports | All `claw.*` modules import | Zero failures |
+| 4. DB Schema | Can open and query live database | Full compatibility |
+| 5. CLI Smoke | Core commands execute | Zero crashes |
+| 6. Full Pytest | Complete test suite | **All 2,624 tests pass** |
+| 7. Diff Summary | Human-readable change report | Informational |
+
+**One failure at any gate = no swap.** The live installation is never touched until all gates pass.
+
+### Protected Files
+
+Changes to these critical files require human review even if all gates pass:
+
+- `verifier.py` — the quality judge
+- `factory.py` — the build pipeline constructor  
+- `engine.py` — the database layer
+- `schema.sql` — the database structure
+- `config.py` — the configuration model
+
+```bash
+cam self-enhance status   # Check if trigger conditions are met
+cam self-enhance start    # Run the full pipeline (clone → enhance → validate → swap)
+```
 
 ---
 
@@ -291,7 +384,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  1,848 methodologies with
+                    |  SQLite + Vectors  |  2,923 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -350,11 +443,11 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  THE CODE (public, on GitHub)                                    │
-│  44K lines of Python, 2,577 tests, CLI, prompts, schema         │
+│  44K lines of Python, 2,624 tests, CLI, prompts, schema         │
 │  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
-│  data/claw.db — 1,848 methodologies, agent scores,               │
+│  data/claw.db — 2,923 methodologies, agent scores,               │
 │  task history, 384-dim embeddings, lifecycle states               │
 │  = unique to YOUR ganglion — YOUR learned experience             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -374,7 +467,7 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 
 | Metric | This Ganglion | Fresh Clone |
 |--------|:------------:|:-----------:|
-| Learned methodologies | 1,848 | 0 |
+| Learned methodologies | 2,923 | 0 |
 | Source repos mined | 273 | 0 |
 | Tasks executed | 1,668 | 0 |
 | Lifecycle promotions (embryonic → viable) | 18 | 0 |
@@ -799,8 +892,9 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 3.5**: Self-Enhancement — Clone → enhance → 7-gate validate → atomic swap | **Complete** |
 | **Phase 3.75**: Resilience — Inner correction loop, metric expectations, HF-mount, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations | **Complete** |
 | **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), CAM Swarm ganglion federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
-| **Phase 4**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
-| **Phase 5**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
+| **Phase 4**: Drive-Ops — 1.5TB ganglion mining marathon, content-hash dedup, brain federation proven at scale | **Complete** |
+| **Phase 5**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
+| **Phase 6**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 
 ---
 
@@ -822,10 +916,69 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 
 ---
 
+## When to Push a New Version
+
+CAM uses the same validation-first philosophy for its own releases. Before pushing to GitHub:
+
+### Release Checklist
+
+```
+1. TESTS         — All 2,624+ tests pass (pytest tests/ -q)
+                   Zero failures. Zero new skips without documented reason.
+
+2. SELF-ENHANCE  — If self-enhance was run, all 7 gates passed
+                   Gate 6 (full pytest) is the hard gate. No exceptions.
+
+3. SMOKE TEST    — Core commands work on a fresh terminal:
+                   cam --help
+                   cam govern stats
+                   cam kb search "any query"
+                   cam kb instances list
+
+4. PROTECTED     — No uncommitted changes to protected files without review:
+                   src/claw/verifier.py
+                   src/claw/core/factory.py
+                   src/claw/db/engine.py
+                   src/claw/db/schema.sql
+                   src/claw/core/config.py
+
+5. SECRETS       — No API keys, tokens, or credentials in staged files:
+                   cam security scan src/ tests/
+
+6. DOCS SYNC     — README stats match reality (test count, methodology count)
+                   Landing page (docs/index.html) reflects current state
+
+7. CHANGELOG     — Commit messages describe what changed and why
+```
+
+### When NOT to Push
+
+- Tests failing or skipping unexpectedly
+- Self-enhance produced changes you haven't reviewed
+- API keys are committed anywhere (even in test fixtures)
+- The landing page claims capabilities that aren't proven
+- Database schema changed without a migration
+
+### Version Progression
+
+CAM doesn't use semantic versioning yet — it uses **phase-based milestones**. Each phase is a natural push point:
+
+| Signal | Action |
+|--------|--------|
+| New phase completed (e.g., Drive-Ops mining) | Push with phase summary commit |
+| Self-enhance passed all 7 gates | Push — CAM improved itself with proof |
+| Bug fix with regression test | Push immediately |
+| Documentation-only update | Push — keeps landing page current |
+| Mining marathon completed | Push if it changed code (dedup fixes, federation bugs) |
+
+The simplest rule: **if the test suite passes and the changes are reviewed, push.**
+
+---
+
 ## Development
 
 ```bash
-# Run tests (2,577 passing, 0 skipped with API keys)
+# Run tests (2,624 passing, 0 skipped with API keys)
 pytest tests/ -q
 
 # CLI help

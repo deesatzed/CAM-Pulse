@@ -1344,7 +1344,7 @@
             <span>First live scan</span>
           </div>
           <div class="hero-stat">
-            <strong>1,848</strong>
+            <strong>2,923</strong>
             <span>Methodologies stored</span>
           </div>
           <div class="hero-stat">
@@ -1367,7 +1367,7 @@
         </div>
         <div class="hero-float-card">
           <div class="mini-label">Verified Loop</div>
-          <div class="mini-score">Discover &rarr; Build &rarr; Verify</div>
+          <div class="mini-score">Discover &rarr; Mine &rarr; Store &rarr; Retrieve &rarr; Build &rarr; Verify &rarr; Learn &rarr; Self-Enhance</div>
           <p>Not a dark terminal wall. This version gives the product breathing room, stronger hierarchy, and a brighter, more confident visual signature.</p>
         </div>
       </div>
@@ -1383,9 +1383,9 @@
       <div class="trust-bar reveal">
         <div class="trust-item"><div class="value"><span class="counter" data-target="2624">0</span></div><div class="label">Tests Passing</div></div>
         <div class="trust-item"><div class="value">4</div><div class="label">Agent Backends</div></div>
-        <div class="trust-item"><div class="value"><span class="counter" data-target="1848">0</span></div><div class="label">Methodologies</div></div>
-        <div class="trust-item"><div class="value">16/16</div><div class="label">First Scan</div></div>
-        <div class="trust-item"><div class="value">12</div><div class="label">Showpieces</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="2923">0</span></div><div class="label">Methodologies</div></div>
+        <div class="trust-item"><div class="value"><span class="counter" data-target="336">0</span></div><div class="label">Source Repos</div></div>
+        <div class="trust-item"><div class="value">13</div><div class="label">Showpieces</div></div>
         <div class="trust-item"><div class="value">$0</div><div class="label">MIT Licensed</div></div>
       </div>
 
@@ -1746,7 +1746,7 @@ Knowledge: 2 PULSE patterns injected | Lifecycle: embryonic &rarr; viable</code>
       </div>
 
       <div class="showpieces-toggle">
-        <button id="toggle-showpieces">See all 12 showpieces</button>
+        <button id="toggle-showpieces">See all 13 showpieces</button>
       </div>
 
       <div class="grid-2 showpieces-rest" id="showpieces-rest">
@@ -1813,17 +1813,17 @@ Pass 3: LLM mining with structured context</code>
         <div class="card showpiece-card">
           <span class="showpiece-number">09</span>
           <div class="showpiece-type">Distributed Intelligence</div>
-          <h4>CAM Swarm &mdash; Ganglion Federation</h4>
-          <p>Multiple specialist CAM ganglia federate into a single CAM Brain. Read-only FTS5 cross-queries pull knowledge across siblings when local confidence is low.</p>
+          <h4>CAM Swarm &mdash; Ganglion Federation + Drive-Ops</h4>
+          <p>Multiple specialist CAM ganglia federate into a single CAM Brain. The Drive-Ops ganglion mined 1.5TB of local repos in 16 batches, producing 1,046 methodologies from 63 unique repos with 82 duplicates caught by content-hash dedup. Read-only FTS5 cross-queries pull knowledge across siblings when local confidence is low.</p>
           <div class="showpiece-proof">
-            <div class="proof-label">Architecture</div>
-            <code>Brain = all ganglia | Ganglion = specialist node | Swarm = read-only queries
-34 federation tests | manifest generation | relevance scoring | auto-routing</code>
+            <div class="proof-label">Drive-Ops Results</div>
+            <code>1,046 methodologies | 63 repos | 1.5TB drive scanned | 82 duplicates caught<br>
+16 batches | 3.5 hours | cross-query proven | brain manifests live</code>
           </div>
           <div class="showpiece-tags">
             <span class="showpiece-tag">federation</span>
-            <span class="showpiece-tag">brain manifests</span>
-            <span class="showpiece-tag">34 tests</span>
+            <span class="showpiece-tag">drive-ops ganglion</span>
+            <span class="showpiece-tag">content dedup</span>
             <span class="showpiece-tag">FTS5 cross-query</span>
           </div>
         </div>
@@ -1861,6 +1861,26 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <div class="showpiece-proof">
             <span class="proof-label">Verified</span>
             <code>cam security scan src/ &rarr; CLEAN (0 findings)<br>cam security status &rarr; TruffleHog AVAILABLE</code>
+          </div>
+        </div>
+
+        <div class="card showpiece-card" style="grid-column: 1 / -1;">
+          <span class="showpiece-number">13</span>
+          <div class="showpiece-type">Autonomous Evolution</div>
+          <h4>Self-Enhancement &mdash; CAM Improves Its Own Code</h4>
+          <p>After mining new knowledge, CAM clones itself, runs its own build pipeline against the copy using newly learned patterns, validates through 7 gates (syntax, config, imports, DB schema, CLI smoke, full pytest, diff summary), and swaps only if ALL gates pass. Protected files (verifier, factory, engine, schema, config) require human review even if gates pass. Compiler-bootstrap pattern: the system that validates code is itself validated by the same pipeline.</p>
+          <div class="showpiece-proof">
+            <div class="proof-label">Validation Pipeline</div>
+            <code>7 gates | 2,624 tests must pass | 5 protected files<br>
+compiler-bootstrap pattern | zero-tolerance validation<br>
+clone &rarr; enhance &rarr; validate &rarr; swap &rarr; post-swap &rarr; rollback-ready</code>
+          </div>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag">self-enhance</span>
+            <span class="showpiece-tag">7-gate validation</span>
+            <span class="showpiece-tag">compiler-bootstrap</span>
+            <span class="showpiece-tag">protected files</span>
+            <span class="showpiece-tag">atomic swap</span>
           </div>
         </div>
       </div>
@@ -1990,7 +2010,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
               <td><span class="check-partial">Workspace only</span></td>
               <td><span class="check-partial">Session only</span></td>
               <td><span class="check-no">&mdash;</span></td>
-              <td><span class="check-yes">Yes &mdash; 1,848 methodologies + lifecycle</span></td>
+              <td><span class="check-yes">Yes &mdash; 2,923 methodologies + lifecycle</span></td>
             </tr>
             <tr>
               <td class="variant-name">Discovers new patterns autonomously</td>
@@ -2153,6 +2173,11 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
           <div class="timeline-desc">CAM Swarm: federation, fitness feedback, configurable mining filters</div>
         </div>
         <div class="timeline-item">
+          <div class="timeline-dot complete">&#10003;</div>
+          <div class="timeline-phase">Phase 4.5</div>
+          <div class="timeline-desc">Drive-Ops: 1.5TB ganglion mining, content dedup, brain federation proven at scale</div>
+        </div>
+        <div class="timeline-item">
           <div class="timeline-dot planned">&#x25CB;</div>
           <div class="timeline-phase">Phase 5</div>
           <div class="timeline-desc">Enterprise: sandbox, audit logs, webhooks</div>
@@ -2291,7 +2316,7 @@ Operators: gte, gt, lte, lt, eq | Hard/soft gates</code>
       btn.addEventListener('click', function() {
         var isVisible = rest.classList.contains('visible');
         rest.classList.toggle('visible', !isVisible);
-        btn.textContent = isVisible ? 'See all 12 showpieces' : 'Show fewer';
+        btn.textContent = isVisible ? 'See all 13 showpieces' : 'Show fewer';
       });
     })();
 
