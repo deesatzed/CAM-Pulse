@@ -377,7 +377,7 @@ federation_max_results = 3                   # Max results per sibling ganglion 
 #
 [[instances.siblings]]
 name = "drive-ops"
-db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/data/instances/drive-ops.db"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/data/instances/drive-ops/claw.db"
 description = "Drive scanning, repo discovery, dedup, archival, code organization across /Volumes/WS4TB"
 #
 # [[instances.siblings]]
@@ -417,3 +417,8 @@ description = "Drive scanning, repo discovery, dedup, archival, code organizatio
 # local_base_url = "http://localhost:8080/v1"
 # max_concurrent = 1
 # timeout = 300
+
+[[instances.siblings]]
+name = "agentic-memory"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/data/instances/agentic-memory/claw.db"
+description = "Specialist ganglion for agentic memory, RAG, knowledge retrieval, and multi-agent patterns"

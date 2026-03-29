@@ -9882,7 +9882,8 @@ def ab_test_start() -> None:
         await engine.apply_migrations()
         await engine.initialize_schema()
 
-        evolver = PromptEvolver(engine)
+        from claw.db.repository import Repository as _Repo
+        evolver = PromptEvolver(_Repo(engine))
         result = await evolver.schedule_ab_test(
             prompt_name="knowledge_ablation",
             control_content="ablated",
@@ -9914,7 +9915,8 @@ def ab_test_status() -> None:
         await engine.apply_migrations()
         await engine.initialize_schema()
 
-        evolver = PromptEvolver(engine)
+        from claw.db.repository import Repository as _Repo
+        evolver = PromptEvolver(_Repo(engine))
         result = await evolver.evaluate_test(
             prompt_name="knowledge_ablation", agent_id=None
         )

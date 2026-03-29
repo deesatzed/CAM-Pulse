@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS pulse_discoveries (
     discovered_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     novelty_score REAL,
     status TEXT NOT NULL DEFAULT 'discovered'
-        CHECK (status IN ('discovered','cloning','mounting','mining','assimilated','failed','skipped','queued_enhance','refreshing')),
+        CHECK (status IN ('discovered','cloning','scanning','mounting','mining','assimilated','failed','skipped','queued_enhance','refreshing')),
     scan_id TEXT,
     keywords_matched TEXT NOT NULL DEFAULT '[]',
     mine_result TEXT,
