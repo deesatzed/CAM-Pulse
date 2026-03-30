@@ -212,7 +212,7 @@ Proven through test suite (tests in `test_freshness.py`):
 
 - **Phase 1**: ETag-cached metadata check. Unchanged repos cost 0 API rate limit points (HTTP 304).
 - **Phase 2**: Significance scoring from 4 signals — commit count (30%), new releases (40%), README changes (20%), size delta (10%).
-- **Threshold**: Only repos with significance ≥ 0.4 trigger re-mine. Old methodologies transition to `declining`.
+- **Threshold**: Only repos with significance >= 0.4 trigger re-mine. Old methodologies transition to `declining`.
 - **`seed_existing_repos()`**: Bootstraps freshness metadata for existing discoveries.
 
 Key files: `pulse/freshness.py:FreshnessMonitor`, `pulse/freshness.py:_phase1_metadata_check()`, `pulse/freshness.py:_phase2_significance()`
@@ -238,9 +238,28 @@ Why it matters:
 - The two-gate architecture ensures secrets are caught early (Gate 1 blocks) and filtered late (Gate 2 excludes files from serialization).
 - TruffleHog detects 800+ credential types with high precision; the regex fallback ensures coverage even without the binary.
 
+## 14. Bayesian Kelly Criterion — Adaptive Agent Routing
+
+Verified: Kelly routing selects agents based on Bayesian posteriors from real win/loss data.
+
+**Proven with real data** — 3 rounds, 5 task types, 4 agents:
+- Architecture: claude 37.6% | gemini 26.1% | grok 26.1% | codex 10.2%
+- Analysis: claude 61.5% | codex 17.7% | gemini 17.7% | grok 3.1%
+- Bug_fix: grok 35.7% | claude 21.4% | codex 21.4% | gemini 21.4%
+- Testing: codex 54.3% | claude 15.2% | gemini 15.2% | grok 15.2%
+
+Key files: `src/claw/evolution/kelly.py:BayesianKellySizer`, `src/claw/dispatcher.py:_kelly_route()`
+
+Why it matters:
+- Agents improve task success rates because the system routes to proven performers per task type
+- Kappa-shrinkage (kappa=10) prevents overconfidence with small samples — new agents still get exploration floor (2%)
+- Uncertainty discount (up to 30%) on fitness means methodologies from unreliable agents rank lower in retrieval
+- Adaptive A/B margins prevent premature winner declarations from thin data
+- 39 tests cover fraction computation, posterior estimation, routing weights, dispatcher integration
+
 ## Current Verified Test Suite
 
-Command run on March 26, 2026:
+Command run on March 30, 2026:
 
 ```bash
 pytest tests/ -q
@@ -249,7 +268,7 @@ pytest tests/ -q
 Observed result:
 
 ```text
-2577 passed, 0 skipped
+2663 passed, 0 skipped
 ```
 
 Full suite coverage (70 test files, 35,911 LOC tests):

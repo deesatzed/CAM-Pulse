@@ -137,20 +137,32 @@ class Dispatcher:
         """
         task_type = task.task_type or ""
 
-        # 1. Respect recommended_agent if set and available (always highest priority)
-        if task.recommended_agent and task.recommended_agent in self.agents:
+        # 1. User-explicit agent override (--agent flag) takes absolute priority.
+        #    Distinguished from planner-assigned recommended_agent by checking
+        #    whether Kelly has data — if Kelly can route, it overrides the
+        #    planner's static assignment but NOT a user's explicit choice.
+        user_explicit = task.recommended_agent and task.recommended_agent in self.agents
+
+        # 2. Kelly-weighted routing (if enabled and has performance data)
+        kelly_agent = await self._kelly_route(task_type)
+        if kelly_agent:
+            if user_explicit and task.recommended_agent != kelly_agent:
+                logger.info(
+                    "Kelly routing overrides recommended_agent='%s' with '%s' "
+                    "for task_type='%s'",
+                    task.recommended_agent, kelly_agent, task_type,
+                )
+            return kelly_agent
+
+        # 3. Fall back to recommended_agent (from planner static table)
+        if user_explicit:
             logger.info(
                 "Using recommended_agent='%s' for task_type='%s'",
                 task.recommended_agent, task_type,
             )
             return task.recommended_agent
 
-        # 2. Kelly-weighted routing (if enabled and repository available)
-        kelly_agent = await self._kelly_route(task_type)
-        if kelly_agent:
-            return kelly_agent
-
-        # 3. Classic routing: exploration + learned scores + static table
+        # 4. Classic routing: exploration + learned scores + static table
         if self._should_explore():
             chosen = self._pick_random_agent()
             logger.info(
@@ -159,7 +171,7 @@ class Dispatcher:
             )
             return chosen
 
-        # 4. Try learned scores from repository
+        # 5. Try learned scores from repository
         learned_agent = await self._lookup_learned_scores(task_type)
         if learned_agent:
             logger.info(
@@ -168,7 +180,7 @@ class Dispatcher:
             )
             return learned_agent
 
-        # 5. Static routing table
+        # 6. Static routing table
         static_agent = self._lookup_static(task_type)
         if static_agent:
             logger.info(
@@ -177,7 +189,7 @@ class Dispatcher:
             )
             return static_agent
 
-        # 6. Absolute fallback
+        # 7. Absolute fallback
         fallback = self._resolve_fallback(task_type)
         logger.info(
             "Fallback routing: task_type='%s' -> agent '%s'",

@@ -8,6 +8,34 @@ All notable changes to CAM-PULSE are documented here.
 
 ---
 
+## [0.7.0] - 2026-03-30
+
+### Added — Phase 5.1: Bayesian Kelly Criterion
+- **Bayesian Kelly agent routing** (`src/claw/evolution/kelly.py`): Sukhov (2026) position-sizing formula `f* = (p̄ - (1-p̄)/b) × n_eff / (n_eff + κ)` for intelligent agent selection
+- `BayesianKellySizer` with `compute_fraction()`, `compute_routing_weights()`, `sample_agent()`, `adaptive_margin()`, `get_posterior_std()`
+- **Kelly config** (`[kelly]` in claw.toml): kappa=10.0, f_max=0.40, min_exploration_floor=0.02, disabled by default
+- **Dispatcher integration**: Kelly overrides planner-assigned recommended_agent when performance data exists. Priority: Kelly → recommended → exploration → learned → static → fallback
+- **Fitness uncertainty discount**: `kelly_posterior_std` on `compute_fitness()` reduces efficacy up to 30% for unreliable agents
+- **Adaptive A/B margins**: `_BASE_WIN_MARGIN * n_eff / (n_eff + kappa)` replaces fixed 0.05 threshold — demands bigger effects from thin data
+- **Proven routing with real data**: 3 rounds × 5 task types × 4 agents. Architecture: claude 37.6%, gemini 26.1%, grok 26.1%, codex 10.2%
+- 39 tests in `test_kelly.py`; updated `test_phase4.py` for adaptive margin
+
+### Added — Phase 5.1: Knowledge Mining Expansion
+- Mined repo330 projects: Bayesian-Kelly (8), Crucix (8), Atomic-Chat (14), Cookbook (13), OpenMAIC (12)
+- Mined gits2rev.md repos: claude-mem (11), LightRAG (13), Superpowers (11), Everything-Claude-Code (14)
+- General ganglion: 1,877 → 2,027 methodologies (+150)
+
+### Changed
+- Test count: 2,624 → 2,663 passing (+39 from Kelly tests)
+- Dispatcher routing priority: Kelly now overrides planner-assigned recommended_agent when it has data
+- `_WIN_MARGIN` renamed to `_BASE_WIN_MARGIN` in prompt_evolver.py (from 0.05 to 0.15 base)
+
+### Fixed
+- pulse_discoveries CHECK constraint missing 'scanning', 'mounting', 'refreshing' statuses in main claw.db
+- pulse_scan_log UNIQUE constraint race condition from concurrent PULSE ingests
+
+---
+
 ## [0.6.0] - 2026-03-28
 
 ### Added — Phase 4.5: Drive-Ops + Knowledge Application

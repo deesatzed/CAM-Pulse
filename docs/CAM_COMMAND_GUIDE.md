@@ -1572,3 +1572,21 @@ cam benchmark --knowledge-pack data/cam_knowledge_pack.jsonl
 - `pulse report`: daily assimilation report
 - `security scan`: scan a directory for hardcoded secrets and credentials
 - `security status`: show TruffleHog availability and scanner configuration
+- `ab-test start`: schedule an A/B knowledge ablation test with adaptive margins
+- `ab-test status`: check progress, sample counts, and Bayesian winner probability
+- `ab-test stop`: remove the ablation test and show final results
+
+### Kelly Routing (Infrastructure — no dedicated CLI command)
+
+Bayesian Kelly routing is enabled via `[kelly] enabled = true` in `claw.toml`. When active, it automatically overrides static agent assignment during `cam create --execute` and task execution. Kelly computes routing weights from the `agent_scores` table in the database.
+
+```bash
+# Check agent performance data (Kelly input):
+sqlite3 data/claw.db "SELECT agent_id, task_type, successes, failures, avg_quality_score FROM agent_scores ORDER BY task_type"
+
+# Enable Kelly:
+# Edit claw.toml → [kelly] → enabled = true
+
+# Kelly routing appears in execution logs:
+# "Kelly routing: task_type='architecture' -> agent 'claude' (weights: ...)"
+```

@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,624 tests** | **2,923 learned methodologies** | **336 source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
+**2,663 tests** | **3,196 learned methodologies** | **345+ source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -30,7 +30,7 @@ Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys 
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 2,923 methodologies + lifecycle | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 3,196 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -51,7 +51,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 2,624 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 2,663 tests passing. Zero skips with API keys configured.
 
 ### Other Install Options
 
@@ -121,8 +121,8 @@ Every module traces back to a specific mined methodology. This isn't code genera
 CAM doesn't keep everything in one database. It operates as a **federated brain** — multiple specialist knowledge nodes (ganglia) that share knowledge through read-only cross-queries.
 
 ```
-CAM Brain (2,923 methodologies)
-├── Primary Ganglion — 1,877 methodologies from 273 GitHub/HuggingFace repos
+CAM Brain (3,196 methodologies)
+├── Primary Ganglion — 2,027 methodologies from 345+ GitHub/HuggingFace repos
 └── Drive-Ops Ganglion — 1,046 methodologies from 63 local repos on a 1.5TB drive
     └── Connected via CAM Swarm (read-only FTS5 cross-queries)
 ```
@@ -187,7 +187,7 @@ Before any self-modification takes effect, the enhanced copy must pass **all 7 g
 | 3. Imports | All `claw.*` modules import | Zero failures |
 | 4. DB Schema | Can open and query live database | Full compatibility |
 | 5. CLI Smoke | Core commands execute | Zero crashes |
-| 6. Full Pytest | Complete test suite | **All 2,624 tests pass** |
+| 6. Full Pytest | Complete test suite | **All 2,663 tests pass** |
 | 7. Diff Summary | Human-readable change report | Informational |
 
 **One failure at any gate = no swap.** The live installation is never touched until all gates pass.
@@ -197,7 +197,7 @@ Before any self-modification takes effect, the enhanced copy must pass **all 7 g
 Changes to these critical files require human review even if all gates pass:
 
 - `verifier.py` — the quality judge
-- `factory.py` — the build pipeline constructor  
+- `factory.py` — the build pipeline constructor
 - `engine.py` — the database layer
 - `schema.sql` — the database structure
 - `config.py` — the configuration model
@@ -272,17 +272,17 @@ Immediately after the knowledge application run, CAM assessed its trigger condit
 | 3 | Import (all `claw.*` modules) | 82/82 imported |
 | 4 | DB schema (open + query live DB) | 35 tables, 40,703 rows |
 | 5 | CLI smoke test | Core commands executed |
-| 6 | Full pytest | 2,624 passed, 6 skipped, 0 failed |
+| 6 | Full pytest | 2,663 passed, 6 skipped, 0 failed |
 | 7 | Diff summary | Clean |
 
-After the atomic swap completed, a live install verification confirmed 2,624 tests passing on the new codebase.
+After the atomic swap completed, a live install verification confirmed 2,663 tests passing on the new codebase.
 
 ### The Full Loop
 
 This is what makes CAM different from code generators that start from zero every time:
 
 ```
-Mine 1,877 patterns from 336 repos
+Mine 2,027 patterns from 345+ repos
   --> Retrieve and inject relevant patterns into agent prompts
     --> Produce code informed by those patterns
       --> Verify quality and drift alignment
@@ -471,7 +471,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  2,923 methodologies with
+                    |  SQLite + Vectors  |  3,196 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -530,11 +530,11 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  THE CODE (public, on GitHub)                                    │
-│  44K lines of Python, 2,624 tests, CLI, prompts, schema         │
+│  44K lines of Python, 2,663 tests, CLI, prompts, schema         │
 │  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
-│  data/claw.db — 2,923 methodologies, agent scores,               │
+│  data/claw.db — 3,196 methodologies, agent scores,               │
 │  task history, 384-dim embeddings, lifecycle states               │
 │  = unique to YOUR ganglion — YOUR learned experience             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -554,8 +554,8 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 
 | Metric | This Ganglion | Fresh Clone |
 |--------|:------------:|:-----------:|
-| Learned methodologies | 2,923 | 0 |
-| Source repos mined | 273 | 0 |
+| Learned methodologies | 3,196 | 0 |
+| Source repos mined | 345+ | 0 |
 | Tasks executed | 1,668 | 0 |
 | Lifecycle promotions (embryonic → viable) | 18 | 0 |
 | Languages covered | 11 | 0 |
@@ -580,7 +580,7 @@ The **CAM Brain** is the full federated system. Each specialized instance is a *
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
 │  │ Primary  │  │ Drive-Ops│  │ Quantum  │ ...  │
 │  │ Ganglion │  │ Ganglion │  │ Ganglion │      │
-│  │ 1877 mth │  │  42 mth  │  │  18 mth  │      │
+│  │ 2022 mth │  │  42 mth  │  │  18 mth  │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 │       └───── CAM Swarm (FTS5) ─────┘            │
 │            read-only · no copying                │
@@ -834,6 +834,42 @@ The **7 validation gates** (in order):
 ### Fitness History Tracking
 Every fitness recomputation is logged with its full 6-dimensional vector and trigger event (`outcome_success`, `outcome_failure`, `lifecycle_transition`). This enables analysis of how specific methodologies evolved over time — which ones improved with use and which declined.
 
+### Bayesian Kelly Criterion — Adaptive Agent Routing
+
+CAM implements the Bayesian Kelly Criterion (Sukhov, 2026) for intelligent agent routing. Instead of random exploration or static round-robin, Kelly sizing computes optimal "position sizes" (task allocation fractions) from each agent's win/loss posterior:
+
+```
+f* = (p̄ - (1-p̄)/b) × n_eff / (n_eff + κ)
+```
+
+**How it works:**
+- Each agent's success/failure history builds a Beta(α,β) posterior
+- Kelly computes the optimal fraction of tasks each agent should handle
+- **Kappa shrinkage** (κ=10) prevents overconfidence with small samples
+- **Exploration floor** (2%) ensures new agents always get some tasks
+- **Uncertainty discount**: unreliable agents' methodology fitness scores are reduced up to 30%
+- **Adaptive A/B margins**: `base_margin × n_eff / (n_eff + κ)` — demands bigger effects from small samples
+
+**Routing priority chain:** Kelly (when data exists) → recommended_agent → exploration → learned history → static fallback
+
+**Proven with real data** (3 rounds, 5 task types, 4 agents):
+```
+architecture:  claude 37.6% | gemini 26.1% | grok 26.1% | codex 10.2%
+analysis:      claude 61.5% | codex 17.7%  | gemini 17.7% | grok 3.1%
+bug_fix:       grok 35.7%   | claude 21.4% | codex 21.4% | gemini 21.4%
+testing:       codex 54.3%  | claude 15.2% | gemini 15.2% | grok 15.2%
+```
+
+```toml
+[kelly]
+enabled = true
+kappa = 10.0        # shrinkage — higher = more conservative
+f_max = 0.40        # max fraction any single agent gets
+min_exploration_floor = 0.02  # 2% floor for all agents
+```
+
+39 tests in `test_kelly.py` covering fraction computation, posterior estimation, routing weights, dispatcher integration, adaptive margins, and fitness discounting.
+
 ### License-Aware Mining
 Before mining a repository, CAM detects its license from LICENSE/COPYING files and classifies it as `permissive`, `copyleft`, `unknown`, or `none`. The license type is stored in both `pulse_discoveries` and methodology `capability_data`, so downstream consumers can filter by license compatibility.
 
@@ -869,7 +905,7 @@ cam security status
 
 ---
 
-## 12 Proven Showpieces
+## 15 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
@@ -887,6 +923,9 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 | 10 | **Metric Expectations** | Natural language → structured gates. "90% coverage" auto-extracted and enforced. 51 tests. |
 | 11 | **Repo Freshness Monitor** | ETag caching + significance scoring. Phase 1 costs 0 rate limit for unchanged repos. |
 | 12 | **Pre-Assimilation Secret Scanner** | Two-gate TruffleHog + regex fallback blocks secrets before they reach the LLM. 73 tests. |
+| 13 | **Bayesian Kelly Agent Routing** | Sukhov (2026) position-sizing for intelligent agent selection with kappa-shrinkage |
+| 14 | **Adaptive A/B Test Margins** | Sample-size-aware win thresholds — no premature conclusions from thin data |
+| 15 | **Uncertainty-Aware Fitness** | Agent reliability discounts methodology rankings — trustworthy sources rank higher |
 
 Run any showpiece:
 ```bash
@@ -1010,7 +1049,7 @@ CAM uses the same validation-first philosophy for its own releases. Before pushi
 ### Release Checklist
 
 ```
-1. TESTS         — All 2,624+ tests pass (pytest tests/ -q)
+1. TESTS         — All 2,663+ tests pass (pytest tests/ -q)
                    Zero failures. Zero new skips without documented reason.
 
 2. SELF-ENHANCE  — If self-enhance was run, all 7 gates passed
@@ -1065,7 +1104,7 @@ The simplest rule: **if the test suite passes and the changes are reviewed, push
 ## Development
 
 ```bash
-# Run tests (2,624 passing, 0 skipped with API keys)
+# Run tests (2,663 passing, 0 skipped with API keys)
 pytest tests/ -q
 
 # CLI help

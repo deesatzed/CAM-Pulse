@@ -207,7 +207,7 @@ Use this when:
 ```
 
 Use this when:
-- you want a non-CAM app to consume CAM’s learned knowledge
+- you want a non-CAM app to consume CAM's learned knowledge
 - you want a clean bridge instead of importing CAM internals
 
 ## 11. Inspect What CAM Already Knows
@@ -313,6 +313,26 @@ Use this when:
 - you want to check TruffleHog availability before running PULSE ingestion
 
 Note: PULSE ingestion (`cam pulse ingest`) runs this scan automatically as Gate 1 — repos with CRITICAL findings are blocked from assimilation. This command lets you run the scan manually outside of PULSE.
+
+## 14. Bayesian Kelly Agent Routing
+
+```bash
+# Enable Kelly routing (edit claw.toml)
+# [kelly]
+# enabled = true
+# kappa = 10.0     # shrinkage — higher = more conservative
+# f_max = 0.40     # max fraction per agent
+# min_exploration_floor = 0.02
+
+# Kelly routes automatically during cam create --execute
+# Check agent performance data that Kelly uses:
+sqlite3 data/claw.db "SELECT agent_id, task_type, successes, failures, avg_quality_score FROM agent_scores ORDER BY task_type, agent_id"
+
+# Verify Kelly is active in logs:
+# Look for "Kelly routing: task_type='...' -> agent '...'" in output
+```
+
+**Use this when:** You have multiple agents configured and want routing to favor agents with proven track records per task type. Kelly needs existing performance data — first runs fall through to classic routing.
 
 ## Rules Of Thumb
 

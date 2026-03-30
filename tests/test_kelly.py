@@ -290,8 +290,8 @@ class TestDispatcherKelly:
         assert agent in ("claude", "codex", "grok")
 
     @pytest.mark.asyncio
-    async def test_recommended_agent_overrides_kelly(self):
-        """recommended_agent takes priority even with Kelly enabled."""
+    async def test_kelly_overrides_recommended_agent(self):
+        """Kelly routing overrides planner-assigned recommended_agent when it has data."""
         sizer = BayesianKellySizer()
         repo = AsyncMock()
         repo.get_agent_scores = AsyncMock(return_value=[
@@ -299,6 +299,19 @@ class TestDispatcherKelly:
              "failures": 0, "avg_quality_score": 1.0, "avg_cost_usd": 0.01,
              "total_attempts": 100},
         ])
+        dispatcher = self._make_dispatcher(kelly_sizer=sizer, repository=repo)
+        task = self._make_task(task_type="testing", recommended_agent="grok")
+
+        agent = await dispatcher.route_task(task)
+        # Kelly has strong data for claude on "testing" — should override grok
+        assert agent == "claude"
+
+    @pytest.mark.asyncio
+    async def test_recommended_agent_used_when_kelly_has_no_data(self):
+        """recommended_agent is used when Kelly has no performance data."""
+        sizer = BayesianKellySizer()
+        repo = AsyncMock()
+        repo.get_agent_scores = AsyncMock(return_value=[])
         dispatcher = self._make_dispatcher(kelly_sizer=sizer, repository=repo)
         task = self._make_task(task_type="testing", recommended_agent="grok")
 
