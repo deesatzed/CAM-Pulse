@@ -25,6 +25,7 @@ from claw.core.models import HypothesisOutcome, Methodology, Task, TaskStatus
 from claw.db.repository import Repository
 from claw.llm.client import LLMClient, LLMMessage
 from claw.memory.semantic import SemanticMemory
+from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.self_consumer")
 
@@ -115,6 +116,8 @@ class SelfConsumer:
             report.patterns_found, report.patterns_stored,
             report.patterns_blocked_dedup, report.patterns_blocked_generation,
         )
+        if report.patterns_stored > 0:
+            maybe_mark_cag_stale(self.config)
         return report
 
     async def consume_recent_work(

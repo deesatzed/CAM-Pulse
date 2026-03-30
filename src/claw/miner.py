@@ -27,6 +27,7 @@ from claw.core.models import ActionTemplate, Methodology, Project, Task, TaskSta
 from claw.db.repository import Repository
 from claw.llm.client import LLMClient, LLMMessage, LLMResponse
 from claw.memory.semantic import SemanticMemory
+from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.miner")
 
@@ -1093,6 +1094,8 @@ class RepoMiner:
             report.tasks_generated = len(tasks)
 
         report.total_duration_seconds = time.monotonic() - start
+        if report.total_findings > 0:
+            maybe_mark_cag_stale(self.config)
         return report
 
     async def mine_repo(

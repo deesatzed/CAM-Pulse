@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from claw.community.validator import ValidationResult, validate_record
+from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.community.importer")
 
@@ -22,6 +23,7 @@ async def import_records(
     engine: Any,
     max_records: int = 200,
     auto_approve: bool = False,
+    config: Optional[object] = None,
 ) -> dict[str, Any]:
     """Validate and quarantine community records.
 
@@ -72,6 +74,8 @@ async def import_records(
             summary["imported"] += 1
             summary["details"].append({"id": record_id, "action": "quarantined"})
 
+    if summary["imported"] > 0:
+        maybe_mark_cag_stale(config)
     return summary
 
 

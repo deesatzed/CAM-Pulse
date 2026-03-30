@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from claw.core.config import GovernanceConfig
 from claw.db.repository import Repository
+from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.memory.governance")
 
@@ -61,11 +62,13 @@ class MemoryGovernor:
         self,
         repository: Repository,
         config: Optional[GovernanceConfig] = None,
+        claw_config: Optional[object] = None,
     ):
         self.repository = repository
         self.config = config or GovernanceConfig()
         self._cycle_count: int = 0
         self._duplicates_blocked: int = 0
+        self.claw_config = claw_config
 
     async def run_full_sweep(self) -> GovernanceReport:
         """Execute all governance operations in sequence.
@@ -82,7 +85,7 @@ class MemoryGovernor:
 
         # 1. Lifecycle sweep
         from claw.memory.lifecycle import run_periodic_sweep
-        transitions = await run_periodic_sweep(self.repository)
+        transitions = await run_periodic_sweep(self.repository, config=self.claw_config)
         report.lifecycle_transitions = transitions
 
         # 2. Garbage collect dead
@@ -120,6 +123,9 @@ class MemoryGovernor:
             report.lifecycle_transitions or "none",
             report.sweep_duration_seconds,
         )
+        mutations = report.dead_collected + report.quota_culled + sum(report.lifecycle_transitions.values())
+        if mutations > 0:
+            maybe_mark_cag_stale(self.claw_config)
         return report
 
     async def garbage_collect_dead(self) -> int:

@@ -188,6 +188,7 @@ class ClawFactory:
         governance = MemoryGovernor(
             repository=repository,
             config=config.governance,
+            claw_config=config,
         )
 
         # Semantic Memory

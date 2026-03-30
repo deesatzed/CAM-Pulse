@@ -27,6 +27,7 @@ from typing import Optional
 from claw.core.models import LifecycleState, Methodology
 from claw.db.repository import Repository
 from claw.memory.fitness import get_fitness_score
+from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.memory.lifecycle")
 
@@ -234,6 +235,7 @@ def _should_block_rehabilitation(
 async def run_periodic_sweep(
     repository: Repository,
     now: Optional[datetime] = None,
+    config: Optional[object] = None,
 ) -> dict[str, int]:
     """Run lifecycle evaluation on all active methodologies.
 
@@ -269,6 +271,7 @@ async def run_periodic_sweep(
 
     if transitions:
         logger.info("Periodic sweep transitions: %s", transitions)
+        maybe_mark_cag_stale(config)
     return transitions
 
 

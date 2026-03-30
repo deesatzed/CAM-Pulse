@@ -16,6 +16,7 @@ Advanced groups:
   doctor <subcommand>    — preflight and environment diagnostics
   kb <subcommand>        — low-level knowledge browser
   self-enhance <sub>     — self-enhancement pipeline (clone, validate, swap)
+  cag <subcommand>       — CAG cache-augmented generation (vectorless retrieval)
 """
 
 from __future__ import annotations
@@ -90,6 +91,12 @@ ab_test_app = typer.Typer(
 security_app = typer.Typer(
     name="security",
     help="Security tools — secret scanning, policy checks",
+    no_args_is_help=True,
+)
+
+cag_app = typer.Typer(
+    name="cag",
+    help="CAG — Cache-Augmented Generation (vectorless retrieval via KV cache)",
     no_args_is_help=True,
 )
 
@@ -6459,7 +6466,7 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
     await engine.initialize_schema()
     repository = Repository(engine)
 
-    governor = MemoryGovernor(repository=repository, config=cfg.governance)
+    governor = MemoryGovernor(repository=repository, config=cfg.governance, claw_config=cfg)
 
     try:
         if action == "stats":
@@ -7984,6 +7991,7 @@ app.add_typer(pulse_app, name="pulse")
 app.add_typer(self_enhance_app, name="self-enhance")
 app.add_typer(ab_test_app, name="ab-test")
 app.add_typer(security_app, name="security")
+app.add_typer(cag_app, name="cag")
 
 
 # ---------------------------------------------------------------------------
@@ -10457,6 +10465,82 @@ def remove(
         toml_lib.dump(data, f)
 
     console.print(f"[green]Ganglion '{name}' removed from the CAM Swarm[/green]")
+
+
+
+# ---------------------------------------------------------------------------
+# CAG — Cache-Augmented Generation commands
+# ---------------------------------------------------------------------------
+
+
+@cag_app.command()
+def rebuild(
+    ganglion: str = typer.Option("general", "--ganglion", "-g", help="Ganglion name to rebuild cache for"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Rebuild the CAG methodology cache for a ganglion."""
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+        from claw.db.engine import DatabaseEngine
+        from claw.db.repository import Repository
+        from claw.memory.cag_retriever import CAGRetriever
+
+        cfg = load_config(Path(config) if config else None)
+
+        if not cfg.cag.enabled:
+            console.print("[yellow]CAG is disabled in claw.toml. Set [cag] enabled = true to use.[/yellow]")
+            return
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        repo = Repository(engine)
+
+        try:
+            retriever = CAGRetriever(cfg.cag, repo)
+            console.print(f"Building CAG cache for ganglion [bold]{ganglion}[/bold]...")
+            meta = await retriever.build_cache(ganglion=ganglion)
+            console.print(f"  Methodologies: {meta['methodology_count']}")
+            console.print(f"  Corpus tokens (approx): {meta['corpus_tokens_approx']:,}")
+            console.print(f"  Built at: {meta['built_at']}")
+            console.print(f"  Cache dir: {cfg.cag.cache_dir}/{ganglion}/")
+            console.print("[green]CAG cache rebuilt successfully.[/green]")
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
+
+
+@cag_app.command()
+def status(
+    ganglion: str = typer.Option("general", "--ganglion", "-g", help="Ganglion name"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show CAG cache status for a ganglion."""
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+        from claw.memory.cag_retriever import CAGRetriever
+
+        cfg = load_config(Path(config) if config else None)
+
+        if not cfg.cag.enabled:
+            console.print("[yellow]CAG is disabled in claw.toml.[/yellow]")
+            return
+
+        retriever = CAGRetriever(cfg.cag)
+        loaded = await retriever.load_cache(ganglion=ganglion)
+        info = retriever.get_status(ganglion=ganglion)
+
+        console.print(f"\nCAG Cache Status: [bold]{ganglion}[/bold]")
+        console.print(f"  Loaded:           {'yes' if info.get('loaded') else 'no'}")
+        console.print(f"  Stale:            {'yes' if info.get('stale') else 'no'}")
+        console.print(f"  Methodology count: {info.get('methodology_count', 0)}")
+        console.print(f"  Corpus tokens:    {info.get('corpus_tokens_approx', 0):,}")
+        console.print(f"  Built at:         {info.get('built_at', 'never')}")
+        console.print(f"  Cache dir:        {cfg.cag.cache_dir}/{ganglion}/")
+
+    asyncio.run(_run())
 
 
 def app_main() -> None:
