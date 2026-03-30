@@ -137,6 +137,7 @@ class ClawFactory:
                 payoff_default=config.kelly.payoff_default,
                 prior_alpha=config.kelly.prior_alpha,
                 prior_beta=config.kelly.prior_beta,
+                local_quality_multiplier=config.kelly.local_quality_multiplier,
             )
             logger.info("Kelly sizer enabled: kappa=%.1f, f_max=%.2f", config.kelly.kappa, config.kelly.f_max)
         dispatcher = Dispatcher(
@@ -357,6 +358,16 @@ def _create_agent(
             max_budget_usd=agent_cfg.max_budget_usd,
             workspace_dir=workspace_dir,
             max_tokens=agent_cfg.max_tokens,
+        )
+
+    if name == "local":
+        from claw.agents.local_agent import LocalAgent
+        return LocalAgent(
+            model=agent_cfg.model,
+            local_base_url=agent_cfg.local_base_url or "http://localhost:11434/v1",
+            timeout=agent_cfg.timeout,
+            max_tokens=agent_cfg.max_tokens,
+            workspace_dir=workspace_dir,
         )
 
     logger.warning("Unknown agent name: '%s'", name)

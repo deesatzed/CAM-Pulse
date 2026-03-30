@@ -8,6 +8,7 @@ Covers:
 5. execute_local() success, connect error, and edge-case paths
 6. Torch-free embeddings fallback (sentence-transformers not installed)
 7. MLX embedding path routing
+8. Factory creates LocalAgent for name='local'
 
 Justification for unittest.mock usage:
 We are testing OUR code's control flow, parsing, and error handling in
@@ -443,3 +444,38 @@ class TestLocalConfigField:
         from claw.core.config import AgentConfig
         cfg = AgentConfig()
         assert cfg.local_base_url is None
+
+
+# ===========================================================================
+# Factory: LocalAgent creation
+# ===========================================================================
+
+class TestLocalAgentFactory:
+    """Verify factory creates LocalAgent for name='local'."""
+
+    def test_factory_creates_local_agent(self):
+        from claw.core.config import AgentConfig
+        from claw.core.factory import _create_agent
+        from claw.agents.local_agent import LocalAgent
+
+        cfg = AgentConfig(
+            enabled=True,
+            mode="local",
+            model="test-model",
+            local_base_url="http://localhost:1337/v1",
+        )
+        agent = _create_agent("local", cfg, workspace_dir="/tmp/test")
+        assert isinstance(agent, LocalAgent)
+        assert agent.model == "test-model"
+        assert agent.local_base_url == "http://localhost:1337/v1"
+        assert agent.workspace_dir == "/tmp/test"
+
+    def test_factory_local_default_base_url(self):
+        from claw.core.config import AgentConfig
+        from claw.core.factory import _create_agent
+        from claw.agents.local_agent import LocalAgent
+
+        cfg = AgentConfig(enabled=True, mode="local", model="m")
+        agent = _create_agent("local", cfg)
+        assert isinstance(agent, LocalAgent)
+        assert agent.local_base_url == "http://localhost:11434/v1"

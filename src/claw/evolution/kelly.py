@@ -64,6 +64,11 @@ class BayesianKellySizer:
         Beta prior alpha (1.0 = uniform / uninformative).
     prior_beta : float
         Beta prior beta (1.0 = uniform / uninformative).
+    local_quality_multiplier : float
+        Payoff multiplier for zero-cost (local/free) agents.  When
+        avg_cost_usd is near zero but quality is known, payoff is
+        computed as avg_quality_score * local_quality_multiplier
+        instead of falling through to payoff_default.
     """
 
     def __init__(
@@ -74,6 +79,7 @@ class BayesianKellySizer:
         payoff_default: float = 2.0,
         prior_alpha: float = 1.0,
         prior_beta: float = 1.0,
+        local_quality_multiplier: float = 2.0,
     ) -> None:
         self.kappa = kappa
         self.f_max = f_max
@@ -81,6 +87,7 @@ class BayesianKellySizer:
         self.payoff_default = payoff_default
         self.prior_alpha = prior_alpha
         self.prior_beta = prior_beta
+        self.local_quality_multiplier = local_quality_multiplier
 
     def compute_fraction(
         self,
@@ -112,10 +119,16 @@ class BayesianKellySizer:
 
         p_bar = alpha / n_eff
 
-        # Payoff ratio: quality per unit cost.  When cost is negligible
-        # (common with cheap API models), use the default payoff.
+        # Payoff ratio: quality per unit cost.
+        # Three branches handle different cost regimes:
+        #   1. Paid agents: quality / cost (standard ratio)
+        #   2. Free/local agents with quality data: quality * multiplier
+        #   3. No data at all: fall back to payoff_default
         if avg_cost_usd > 0.001 and avg_quality_score > 0.0:
             b = avg_quality_score / avg_cost_usd
+        elif avg_cost_usd <= 0.001 and avg_quality_score > 0.0:
+            # Local/free agents: compete on quality alone, not cost ratio
+            b = avg_quality_score * self.local_quality_multiplier
         else:
             b = self.payoff_default
 

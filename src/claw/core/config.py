@@ -115,11 +115,13 @@ class TokenTrackingConfig(BaseModel):
 
 
 class LocalLLMConfig(BaseModel):
-    """Configuration for local LLM providers (Ollama, MLX-LM)."""
-    provider: str = "ollama"  # ollama, mlx-lm
+    """Configuration for local LLM providers (Ollama, MLX-LM, Atomic-Chat, llama.cpp)."""
+    provider: str = "ollama"  # ollama | mlx-server | atomic-chat | llama-cpp
     base_url: str = "http://localhost:11434/v1"
     model: str = ""
     timeout: int = 300
+    ctx_size: int = 32768  # 64GB default; set 131072 for 128GB
+    kv_cache_type: str = "f16"  # f16 | q4_0 | turbo3
 
 
 class AgentConfig(BaseModel):
@@ -160,6 +162,7 @@ class KellyConfig(BaseModel):
     payoff_default: float = 2.0  # Default payoff ratio when no cost data available
     prior_alpha: float = 1.0     # Beta prior alpha (uniform default)
     prior_beta: float = 1.0      # Beta prior beta (uniform default)
+    local_quality_multiplier: float = 2.0  # Payoff multiplier for $0-cost local agents
 
 
 class EvolutionConfig(BaseModel):
@@ -275,6 +278,16 @@ class DeepConfConfig(BaseModel):
     provenance_weight: float = 0.10
     verification_weight: float = 0.15
     min_critical_threshold: float = 0.15
+
+
+class CAGConfig(BaseModel):
+    """Cache-Augmented Generation configuration."""
+    enabled: bool = False
+    cache_dir: str = "data/cag_caches"
+    auto_rebuild_on_stale: bool = False
+    max_methodologies_per_cache: int = 2000
+    serialization_format: str = "structured_text"
+    max_solution_chars: int = 2000
 
 
 class PulseConfig(BaseModel):
@@ -408,6 +421,7 @@ class ClawConfig(BaseModel):
     assimilation: AssimilationConfig = Field(default_factory=AssimilationConfig)
     pulse: PulseConfig = Field(default_factory=PulseConfig)
     deep_conf: DeepConfConfig = Field(default_factory=DeepConfConfig)
+    cag: CAGConfig = Field(default_factory=CAGConfig)
     self_enhance: SelfEnhanceConfig = Field(default_factory=SelfEnhanceConfig)
     community: CommunityConfig = Field(default_factory=CommunityConfig)
     instances: InstanceRegistryConfig = Field(default_factory=InstanceRegistryConfig)
@@ -487,14 +501,14 @@ def load_config(config_path: Optional[Path] = None) -> ClawConfig:
     with open(config_path) as f:
         raw = toml.load(f)
 
-    # Convert agents section: TOML nested tables → dict[str, AgentConfig]
+    # Convert agents section: TOML nested tables -> dict[str, AgentConfig]
     agents_raw = raw.pop("agents", {})
     agents = {}
     for agent_name, agent_data in agents_raw.items():
         if isinstance(agent_data, dict):
             agents[agent_name] = AgentConfig(**agent_data)
 
-    # Convert instances.siblings: list of TOML tables → list[InstanceConfig]
+    # Convert instances.siblings: list of TOML tables -> list[InstanceConfig]
     instances_raw = raw.get("instances", {})
     if isinstance(instances_raw, dict) and "siblings" in instances_raw:
         siblings_raw = instances_raw.get("siblings", [])

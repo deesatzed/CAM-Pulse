@@ -5,6 +5,7 @@ Covers:
 - Dispatcher integration (Kelly routing, fallback, disabled)
 - PromptEvolver adaptive margin (kappa-shrinkage)
 - Fitness uncertainty discount (kelly_posterior_std)
+- Local/free agent quality-only payoff (zero-cost branch)
 - Config parsing
 """
 
@@ -29,14 +30,33 @@ class TestKellyFractionComputation:
     """Test Sukhov (2026) eq. 13 implementation."""
 
     def test_uniform_prior_positive_payoff(self):
-        """Beta(1,1) with b > 1 yields a positive fraction."""
+        """Beta(1,1) with b > 1 yields a positive fraction.
+
+        Uses explicit cost so the quality/cost ratio path is exercised.
+        b = 0.5 / 0.25 = 2.0 -> f_base = 0.5 - 0.5/2.0 = 0.25
+        phi = 2/(2+10) = 0.167, f = 0.25 * 0.167 = 0.042
+        """
         sizer = BayesianKellySizer(kappa=10.0)
-        result = sizer.compute_fraction(successes=0, failures=0)
-        # p_bar = 1/(1+1) = 0.5, f_base = 0.5 - 0.5/2.0 = 0.25
-        # phi = 2/(2+10) = 0.167, f = 0.25 * 0.167 = 0.042
+        result = sizer.compute_fraction(
+            successes=0, failures=0,
+            avg_quality_score=0.5, avg_cost_usd=0.25,
+        )
         assert result.fraction > 0
         assert result.p_bar == pytest.approx(0.5, abs=0.01)
         assert result.n_eff == pytest.approx(2.0, abs=0.01)
+
+    def test_uniform_prior_zero_cost_gives_zero_fraction(self):
+        """Beta(1,1) with zero cost and quality=0.5 -> b=1.0 -> f_base=0.
+
+        With local_quality_multiplier=2.0 and quality=0.5: b = 0.5 * 2.0 = 1.0.
+        f_base = 0.5 - 0.5/1.0 = 0.0 -> fraction = 0.0.
+        This is correct: no edge when payoff ratio is exactly 1:1.
+        """
+        sizer = BayesianKellySizer(kappa=10.0)
+        result = sizer.compute_fraction(successes=0, failures=0)
+        assert result.fraction == 0.0
+        assert result.payoff_ratio == pytest.approx(1.0, abs=0.01)
+        assert result.p_bar == pytest.approx(0.5, abs=0.01)
 
     def test_strong_positive_record(self):
         """Agent with 30 successes and 5 failures gets high fraction."""
@@ -59,7 +79,7 @@ class TestKellyFractionComputation:
         sizer_high = BayesianKellySizer(kappa=1000.0)
         normal = sizer_normal.compute_fraction(successes=30, failures=5)
         high = sizer_high.compute_fraction(successes=30, failures=5)
-        # phi = 37/(37+1000) = 0.036 → heavy shrinkage vs normal
+        # phi = 37/(37+1000) = 0.036 -> heavy shrinkage vs normal
         assert high.fraction < normal.fraction * 0.3
         assert high.fraction < 0.05
 
@@ -73,7 +93,7 @@ class TestKellyFractionComputation:
         """No successes and no failures — minimal fraction from prior."""
         sizer = BayesianKellySizer(kappa=10.0)
         result = sizer.compute_fraction(successes=0, failures=0)
-        # Small but positive due to uniform prior and positive payoff
+        # With zero cost defaults: b = 0.5 * 2.0 = 1.0 -> f_base = 0.0
         assert 0.0 <= result.fraction <= 0.15
 
     def test_payoff_ratio_from_quality_and_cost(self):
@@ -85,14 +105,15 @@ class TestKellyFractionComputation:
         )
         assert result.payoff_ratio == pytest.approx(2.0, abs=0.01)
 
-    def test_payoff_default_when_no_cost(self):
-        """When cost is negligible, use payoff_default."""
-        sizer = BayesianKellySizer(payoff_default=3.0)
+    def test_payoff_quality_branch_when_no_cost(self):
+        """When cost is zero but quality > 0, use quality * local_quality_multiplier."""
+        sizer = BayesianKellySizer(payoff_default=3.0, local_quality_multiplier=2.0)
         result = sizer.compute_fraction(
             successes=10, failures=5,
             avg_quality_score=0.8, avg_cost_usd=0.0,
         )
-        assert result.payoff_ratio == 3.0
+        # New behavior: b = 0.8 * 2.0 = 1.6 (quality-only branch)
+        assert result.payoff_ratio == pytest.approx(1.6, abs=0.01)
 
     def test_raw_fraction_vs_clamped(self):
         """Raw fraction can exceed f_max, but fraction is clamped."""
@@ -106,13 +127,13 @@ class TestPosteriorStd:
     """Test Beta posterior standard deviation."""
 
     def test_uniform_prior(self):
-        """Beta(1,1) has known std = 1/(2*sqrt(3)) ≈ 0.2887."""
+        """Beta(1,1) has known std = 1/(2*sqrt(3)) ~ 0.2887."""
         sizer = BayesianKellySizer()
         std = sizer.get_posterior_std(successes=0, failures=0)
         assert std == pytest.approx(0.2887, abs=0.001)
 
     def test_strong_evidence_reduces_std(self):
-        """Beta(100,100) has std ≈ 0.0353."""
+        """Beta(100,100) has std ~ 0.0353."""
         sizer = BayesianKellySizer()
         std = sizer.get_posterior_std(successes=99, failures=99)
         # alpha=100, beta=100
@@ -338,14 +359,14 @@ class TestAdaptiveMargin:
     """Test Kelly kappa-shrinkage for A/B test win margins."""
 
     def test_adaptive_margin_low_samples(self):
-        """20 samples + kappa=10 → margin should be ~0.10."""
+        """20 samples + kappa=10 -> margin should be ~0.10."""
         sizer = BayesianKellySizer(kappa=10.0)
         m = sizer.adaptive_margin(total_samples=20, base_margin=0.15)
         # 20/(20+10) * 0.15 = 0.667 * 0.15 = 0.10
         assert m == pytest.approx(0.10, abs=0.01)
 
     def test_adaptive_margin_high_samples(self):
-        """200 samples + kappa=10 → margin approaches 0.15."""
+        """200 samples + kappa=10 -> margin approaches 0.15."""
         sizer = BayesianKellySizer(kappa=10.0)
         m = sizer.adaptive_margin(total_samples=200, base_margin=0.15)
         # 200/210 * 0.15 = 0.952 * 0.15 = 0.143
@@ -472,3 +493,103 @@ class TestKellyConfig:
             cfg = load_config(toml_path)
             assert hasattr(cfg, "kelly")
             assert cfg.kelly.kappa == 10.0
+
+    def test_local_quality_multiplier_config_default(self):
+        """KellyConfig has local_quality_multiplier defaulting to 2.0."""
+        from claw.core.config import KellyConfig
+        cfg = KellyConfig()
+        assert cfg.local_quality_multiplier == 2.0
+
+    def test_local_quality_multiplier_config_custom(self):
+        """KellyConfig accepts custom local_quality_multiplier."""
+        from claw.core.config import KellyConfig
+        cfg = KellyConfig(local_quality_multiplier=3.5)
+        assert cfg.local_quality_multiplier == 3.5
+
+
+# ---------------------------------------------------------------------------
+# G. Local/free agent quality-only payoff tests
+# ---------------------------------------------------------------------------
+
+class TestKellyLocalAgentPayoff:
+    """Kelly handles $0-cost local agents without degenerate payoff ratios.
+
+    When avg_cost_usd == 0.0 (local/free agents), the old code fell through
+    to payoff_default regardless of quality.  A high-quality free agent and
+    a low-quality free agent got identical payoff ratios.
+
+    The fix adds a quality-only branch:
+        b = avg_quality_score * local_quality_multiplier
+    so that free agents compete on quality alone.
+    """
+
+    def test_zero_cost_uses_quality_payoff(self):
+        """When avg_cost_usd == 0, payoff is based on quality alone."""
+        sizer = BayesianKellySizer(kappa=10.0, local_quality_multiplier=2.0)
+        result = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.7, avg_cost_usd=0.0,
+        )
+        # b should be 0.7 * 2.0 = 1.4, NOT infinity or payoff_default
+        assert result.payoff_ratio == pytest.approx(1.4, abs=0.01)
+        assert result.fraction > 0
+        assert result.fraction <= 0.40  # under f_max
+
+    def test_zero_cost_zero_quality_uses_default(self):
+        """When both cost and quality are 0, use payoff_default."""
+        sizer = BayesianKellySizer(kappa=10.0)
+        result = sizer.compute_fraction(
+            successes=0, failures=0,
+            avg_quality_score=0.0, avg_cost_usd=0.0,
+        )
+        assert result.payoff_ratio == pytest.approx(2.0, abs=0.01)
+
+    def test_nonzero_cost_unchanged(self):
+        """Existing behavior: nonzero cost uses quality/cost ratio."""
+        sizer = BayesianKellySizer(kappa=10.0)
+        result = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.7, avg_cost_usd=0.01,
+        )
+        expected_b = 0.7 / 0.01  # = 70.0
+        assert result.payoff_ratio == pytest.approx(expected_b, abs=0.1)
+
+    def test_local_quality_multiplier_default(self):
+        """Default local_quality_multiplier is 2.0."""
+        sizer = BayesianKellySizer()
+        assert sizer.local_quality_multiplier == 2.0
+
+    def test_high_quality_free_agent_beats_low_quality(self):
+        """A high-quality free agent gets a higher payoff than a low-quality one."""
+        sizer = BayesianKellySizer(kappa=10.0, local_quality_multiplier=2.0)
+        high_q = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.9, avg_cost_usd=0.0,
+        )
+        low_q = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.3, avg_cost_usd=0.0,
+        )
+        # b_high = 0.9 * 2.0 = 1.8, b_low = 0.3 * 2.0 = 0.6
+        assert high_q.payoff_ratio > low_q.payoff_ratio
+        assert high_q.fraction > low_q.fraction
+
+    def test_custom_local_quality_multiplier(self):
+        """Custom multiplier changes the quality-only payoff."""
+        sizer = BayesianKellySizer(kappa=10.0, local_quality_multiplier=5.0)
+        result = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.7, avg_cost_usd=0.0,
+        )
+        # b = 0.7 * 5.0 = 3.5
+        assert result.payoff_ratio == pytest.approx(3.5, abs=0.01)
+
+    def test_very_small_cost_treated_as_zero(self):
+        """Cost below 0.001 threshold is treated as zero-cost."""
+        sizer = BayesianKellySizer(kappa=10.0, local_quality_multiplier=2.0)
+        result = sizer.compute_fraction(
+            successes=20, failures=5,
+            avg_quality_score=0.7, avg_cost_usd=0.0005,
+        )
+        # 0.0005 <= 0.001, so hits quality-only branch: b = 0.7 * 2.0 = 1.4
+        assert result.payoff_ratio == pytest.approx(1.4, abs=0.01)

@@ -112,3 +112,30 @@ class TestGeminiEmbeddingPath:
             assert False, "expected ConfigError for model mismatch"
         except ConfigError:
             pass
+
+
+class TestMLXEmbeddingRouting:
+    """Verify MLX model selection routes to _embed_with_mlx."""
+
+    def test_mlx_community_prefix_detected(self):
+        cfg = EmbeddingsConfig(model="mlx-community/bge-small-en-v1.5", dimension=384)
+        engine = EmbeddingEngine(cfg)
+        assert engine._uses_mlx is True
+        assert engine._uses_gemini_api is False
+
+    def test_mlx_embeddings_prefix_detected(self):
+        cfg = EmbeddingsConfig(model="mlx-embeddings:bge-small-en-v1.5", dimension=384)
+        engine = EmbeddingEngine(cfg)
+        assert engine._uses_mlx is True
+
+    def test_gemini_prefix_not_mlx(self):
+        cfg = EmbeddingsConfig(model="gemini-embedding-2-preview", dimension=384)
+        engine = EmbeddingEngine(cfg)
+        assert engine._uses_mlx is False
+        assert engine._uses_gemini_api is True
+
+    def test_dimension_384_compatible(self):
+        """MLX model with 384 dims is compatible with existing vec0 table."""
+        cfg = EmbeddingsConfig(model="mlx-community/bge-small-en-v1.5", dimension=384)
+        engine = EmbeddingEngine(cfg)
+        assert engine.dimension == 384

@@ -53,6 +53,11 @@ STATIC_ROUTING: dict[str, str] = {
     "web_lookup": "grok",
     "fast_iteration": "grok",
     "bug_fix": "grok",
+    # Local — high-volume, low-judgment tasks suitable for local inference
+    "mining_extraction": "local",
+    "bulk_classification": "local",
+    "pattern_extraction": "local",
+    "code_summarization": "local",
 }
 
 # Default agent when nothing else matches

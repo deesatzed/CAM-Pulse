@@ -52,6 +52,7 @@ AGENTS_FULL = {
     "codex": "agent_codex",
     "gemini": "agent_gemini",
     "grok": "agent_grok",
+    "local": "agent_local",
 }
 
 AGENTS_CLAUDE_CODEX = {
@@ -145,7 +146,7 @@ class TestDispatcherExploration:
             agent = await dispatcher.route_task(task)
             results.append(agent)
 
-        # With 10% exploration and 4 agents, we should see at least one non-claude
+        # With 10% exploration and 5 agents, we should see at least one non-claude
         non_claude = [a for a in results if a != "claude"]
         assert len(non_claude) > 0, "Exploration never triggered in 100 routings"
 
@@ -179,7 +180,7 @@ class TestDispatcherExploration:
             agent = await dispatcher.route_task(task)
             results.add(agent)
 
-        # With 100 tries and 4 agents, all should appear
+        # With 100 tries and 5 agents, all should appear
         assert len(results) >= 2, "Expected multiple distinct agents with full exploration"
 
 
@@ -237,6 +238,29 @@ class TestDispatcherRoutingInfo:
         info = dispatcher.get_routing_info("unknown_type_xyz")
         assert info["static_route"] is None
         assert info["static_available"] is False
+
+
+# ============================================================================
+# Local Agent Routing Tests
+# ============================================================================
+
+
+class TestLocalAgentRouting:
+    """Verify local agent gets routed for appropriate task types."""
+
+    def test_mining_extraction_routes_to_local(self):
+        assert STATIC_ROUTING["mining_extraction"] == "local"
+
+    def test_bulk_classification_routes_to_local(self):
+        assert STATIC_ROUTING["bulk_classification"] == "local"
+
+    def test_quick_fix_still_routes_to_grok(self):
+        """quick_fix remains with grok — local does not steal existing priors."""
+        assert STATIC_ROUTING["quick_fix"] == "grok"
+
+    def test_analysis_still_routes_to_claude(self):
+        """Cloud judgment tasks unchanged."""
+        assert STATIC_ROUTING["analysis"] == "claude"
 
 
 # ============================================================================

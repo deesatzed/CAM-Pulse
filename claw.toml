@@ -96,6 +96,7 @@ min_exploration_floor = 0.02
 payoff_default = 2.0
 prior_alpha = 1.0
 prior_beta = 1.0
+local_quality_multiplier = 2.0
 
 [evolution]
 ab_test_sample_size = 20
@@ -194,6 +195,27 @@ model = "x-ai/grok-4.20-beta"
 max_concurrent = 2
 timeout = 300
 max_budget_usd = 1.0
+
+# ---------------------------------------------------------------------------
+# Local LLM Agent — local inference via Atomic-Chat, mlx-server, or Ollama
+# ---------------------------------------------------------------------------
+# Dedicated agent slot for local inference on Apple Silicon (MLX) or CPU.
+# Uses OpenAI-compatible /v1/chat/completions endpoint.
+# To activate: set enabled = true, configure model and local_base_url.
+#
+# Atomic-Chat: http://localhost:1337/v1
+# MLX-LM:     http://localhost:8080/v1
+# Ollama:     http://localhost:11434/v1
+
+[agents.local]
+enabled = false
+mode = "local"
+model = ""
+local_base_url = "http://localhost:1337/v1"
+max_concurrent = 1
+timeout = 300
+max_budget_usd = 0.0
+max_tokens = 16384
 
 # ---------------------------------------------------------------------------
 # CAM-PULSE: Perpetual Unified Learning Swarm Engine
@@ -297,6 +319,22 @@ novelty_weight = 0.10
 provenance_weight = 0.10
 verification_weight = 0.15
 min_critical_threshold = 0.15    # Suppress results where critical factors below this
+
+# ---------------------------------------------------------------------------
+# CAG — Cache-Augmented Generation (vectorless retrieval via KV cache)
+# ---------------------------------------------------------------------------
+# Precomputes methodology corpus into TurboQuant-compressed KV cache.
+# When enabled, the CAG retriever loads cached context for instant,
+# perfectly-grounded retrieval — no vector search, no embedding noise.
+# Requires a local backend with /slots/ API (Phase 2).
+
+[cag]
+enabled = false
+cache_dir = "data/cag_caches"
+auto_rebuild_on_stale = false
+max_methodologies_per_cache = 2000
+serialization_format = "structured_text"
+max_solution_chars = 2000
 
 # ---------------------------------------------------------------------------
 # Self-Enhancement Pipeline
