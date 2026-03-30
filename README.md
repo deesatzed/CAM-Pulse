@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,663 tests** | **3,196 learned methodologies** | **345+ source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
+**2,663 tests** | **3,201 learned methodologies** | **345+ source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -30,7 +30,7 @@ Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys 
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 3,196 methodologies + lifecycle | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 3,201 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
@@ -121,7 +121,7 @@ Every module traces back to a specific mined methodology. This isn't code genera
 CAM doesn't keep everything in one database. It operates as a **federated brain** — multiple specialist knowledge nodes (ganglia) that share knowledge through read-only cross-queries.
 
 ```
-CAM Brain (3,196 methodologies)
+CAM Brain (3,201 methodologies)
 ├── Primary Ganglion — 2,027 methodologies from 345+ GitHub/HuggingFace repos
 └── Drive-Ops Ganglion — 1,046 methodologies from 63 local repos on a 1.5TB drive
     └── Connected via CAM Swarm (read-only FTS5 cross-queries)
@@ -471,7 +471,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  3,196 methodologies with
+                    |  SQLite + Vectors  |  3,201 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -534,7 +534,7 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 │  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
-│  data/claw.db — 3,196 methodologies, agent scores,               │
+│  data/claw.db — 3,201 methodologies, agent scores,               │
 │  task history, 384-dim embeddings, lifecycle states               │
 │  = unique to YOUR ganglion — YOUR learned experience             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -554,7 +554,7 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 
 | Metric | This Ganglion | Fresh Clone |
 |--------|:------------:|:-----------:|
-| Learned methodologies | 3,196 | 0 |
+| Learned methodologies | 3,201 | 0 |
 | Source repos mined | 345+ | 0 |
 | Tasks executed | 1,668 | 0 |
 | Lifecycle promotions (embryonic → viable) | 18 | 0 |
