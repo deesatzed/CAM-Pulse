@@ -60,6 +60,7 @@ def compute_fitness(
     max_retrieval_count: int = 1,
     now: Optional[datetime] = None,
     latest_outcome: Optional[bool] = None,
+    kelly_posterior_std: Optional[float] = None,
 ) -> tuple[float, dict[str, float]]:
     """Compute the 6-dimensional fitness score for a methodology.
 
@@ -73,6 +74,10 @@ def compute_fitness(
         latest_outcome: The most recent outcome (True=success, False=failure).
             When provided, updates the EMA.  When None (e.g. during bulk
             recomputation), the stored EMA is preserved as-is.
+        kelly_posterior_std: Optional posterior std from Bayesian Kelly sizer.
+            When provided, applies an uncertainty discount to efficacy:
+            agents with high posterior variance (unreliable) reduce the
+            efficacy credit of their methodologies.  Capped at 30%.
 
     Returns:
         Tuple of (total_fitness_score, fitness_vector_dict).
@@ -123,6 +128,11 @@ def compute_fitness(
     else:
         d_efficacy = static_efficacy  # no EMA yet, pure static
 
+    # Kelly uncertainty discount: high posterior_std reduces efficacy credit
+    if kelly_posterior_std is not None and kelly_posterior_std > 0:
+        discount = min(kelly_posterior_std, 0.30)  # cap at 30%
+        d_efficacy = d_efficacy * (1.0 - discount)
+
     # 3. Specificity -- metadata richness
     tag_score = min(1.0, len(methodology.tags) / 5.0)
     files_score = min(1.0, len(methodology.files_affected) / 10.0)
@@ -167,6 +177,10 @@ def compute_fitness(
     # Persist EMA state for next computation
     if outcome_ema is not None:
         vector["outcome_ema"] = round(outcome_ema, 4)
+
+    # Persist Kelly uncertainty for observability
+    if kelly_posterior_std is not None:
+        vector["kelly_posterior_std"] = round(kelly_posterior_std, 4)
 
     return round(total, 4), vector
 

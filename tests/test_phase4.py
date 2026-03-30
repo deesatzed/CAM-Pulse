@@ -28,7 +28,7 @@ from claw.evolution.prompt_evolver import (
     _bayesian_score,
     _PRIOR_ALPHA,
     _PRIOR_BETA,
-    _WIN_MARGIN,
+    _BASE_WIN_MARGIN,
 )
 from claw.mcp_server import ClawMCPServer
 
@@ -270,7 +270,7 @@ class TestPromptEvolverABTesting:
         result = await evolver.evaluate_test("ab_test")
         assert result["ready"] is True
         assert result["winner"] == "variant"
-        assert result["margin"] > _WIN_MARGIN
+        assert result["margin"] > result["effective_margin"]
 
     # -- test_evaluate_test_control_wins ---------------------------------
 
@@ -291,7 +291,7 @@ class TestPromptEvolverABTesting:
         result = await evolver.evaluate_test("ab_test")
         assert result["ready"] is True
         assert result["winner"] == "control"
-        assert result["margin"] < -_WIN_MARGIN
+        assert result["margin"] < -result["effective_margin"]
 
     # -- test_evaluate_test_inconclusive ---------------------------------
 
@@ -308,7 +308,7 @@ class TestPromptEvolverABTesting:
         result = await evolver.evaluate_test("ab_test")
         assert result["ready"] is True
         assert result["winner"] is None
-        assert abs(result["margin"]) <= _WIN_MARGIN
+        assert abs(result["margin"]) <= result["effective_margin"]
 
     # -- test_evaluate_test_missing_variant ------------------------------
 

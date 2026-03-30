@@ -88,10 +88,20 @@ full_repo_comprehension = "gemini"
 quick_fixes = "grok"
 web_lookup = "grok"
 
+[kelly]
+enabled = false
+kappa = 10.0
+f_max = 0.40
+min_exploration_floor = 0.02
+payoff_default = 2.0
+prior_alpha = 1.0
+prior_beta = 1.0
+
 [evolution]
 ab_test_sample_size = 20
 mutation_rate = 0.1
 promotion_threshold = 0.6
+ab_test_kappa = 10.0
 
 [fleet]
 max_concurrent_repos = 4

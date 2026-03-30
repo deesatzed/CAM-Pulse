@@ -151,10 +151,22 @@ class RoutingConfig(BaseModel):
     })
 
 
+class KellyConfig(BaseModel):
+    """Bayesian Kelly Criterion position-sizing for agent routing."""
+    enabled: bool = False
+    kappa: float = 10.0          # Robustness shrinkage (higher = more conservative)
+    f_max: float = 0.40          # Hard cap on any single agent's fraction
+    min_exploration_floor: float = 0.02  # Minimum sampling probability per agent
+    payoff_default: float = 2.0  # Default payoff ratio when no cost data available
+    prior_alpha: float = 1.0     # Beta prior alpha (uniform default)
+    prior_beta: float = 1.0      # Beta prior beta (uniform default)
+
+
 class EvolutionConfig(BaseModel):
     ab_test_sample_size: int = 20
     mutation_rate: float = 0.1
     promotion_threshold: float = 0.6
+    ab_test_kappa: float = 10.0  # Kelly kappa-shrinkage for adaptive A/B margin
 
 
 class MiningConfig(BaseModel):
@@ -388,6 +400,7 @@ class ClawConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     token_tracking: TokenTrackingConfig = Field(default_factory=TokenTrackingConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    kelly: KellyConfig = Field(default_factory=KellyConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
     fleet: FleetConfig = Field(default_factory=FleetConfig)
     mining: MiningConfig = Field(default_factory=MiningConfig)

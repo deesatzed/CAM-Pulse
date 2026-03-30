@@ -82,6 +82,7 @@ class Dispatcher:
         agents: dict[str, Any],
         exploration_rate: float = 0.10,
         repository: Optional[Any] = None,
+        kelly_sizer: Optional[Any] = None,
     ):
         """Initialize the Dispatcher.
 
@@ -93,6 +94,9 @@ class Dispatcher:
             repository: Optional Repository instance for reading learned
                         agent_scores from the database. If None, only static
                         routing and exploration are used.
+            kelly_sizer: Optional BayesianKellySizer for adaptive Kelly-weighted
+                        routing.  When provided, replaces the static exploration
+                        rate with per-agent Bayesian Kelly fractions.
         """
         if not agents:
             raise RoutingError("(any)", reason="No agents provided to Dispatcher")
@@ -104,14 +108,16 @@ class Dispatcher:
         self.agents = agents
         self.exploration_rate = exploration_rate
         self.repository = repository
+        self.kelly_sizer = kelly_sizer
         self._available_agent_ids: list[str] = sorted(agents.keys())
 
         logger.info(
             "Dispatcher initialized: agents=%s, exploration_rate=%.2f, "
-            "repository=%s",
+            "repository=%s, kelly=%s",
             self._available_agent_ids,
             exploration_rate,
             "connected" if repository else "none",
+            "enabled" if kelly_sizer else "disabled",
         )
 
     async def route_task(self, task: Task, task_context: Optional[TaskContext] = None) -> str:
@@ -131,7 +137,20 @@ class Dispatcher:
         """
         task_type = task.task_type or ""
 
-        # Exploration: with configured probability, pick a random agent
+        # 1. Respect recommended_agent if set and available (always highest priority)
+        if task.recommended_agent and task.recommended_agent in self.agents:
+            logger.info(
+                "Using recommended_agent='%s' for task_type='%s'",
+                task.recommended_agent, task_type,
+            )
+            return task.recommended_agent
+
+        # 2. Kelly-weighted routing (if enabled and repository available)
+        kelly_agent = await self._kelly_route(task_type)
+        if kelly_agent:
+            return kelly_agent
+
+        # 3. Classic routing: exploration + learned scores + static table
         if self._should_explore():
             chosen = self._pick_random_agent()
             logger.info(
@@ -140,15 +159,7 @@ class Dispatcher:
             )
             return chosen
 
-        # 1. Respect recommended_agent if set and available
-        if task.recommended_agent and task.recommended_agent in self.agents:
-            logger.info(
-                "Using recommended_agent='%s' for task_type='%s'",
-                task.recommended_agent, task_type,
-            )
-            return task.recommended_agent
-
-        # 2. Try learned scores from repository
+        # 4. Try learned scores from repository
         learned_agent = await self._lookup_learned_scores(task_type)
         if learned_agent:
             logger.info(
@@ -157,7 +168,7 @@ class Dispatcher:
             )
             return learned_agent
 
-        # 3. Static routing table
+        # 5. Static routing table
         static_agent = self._lookup_static(task_type)
         if static_agent:
             logger.info(
@@ -166,7 +177,7 @@ class Dispatcher:
             )
             return static_agent
 
-        # 4. Absolute fallback
+        # 6. Absolute fallback
         fallback = self._resolve_fallback(task_type)
         logger.info(
             "Fallback routing: task_type='%s' -> agent '%s'",
@@ -181,6 +192,53 @@ class Dispatcher:
     def _pick_random_agent(self) -> str:
         """Pick a uniformly random available agent."""
         return random.choice(self._available_agent_ids)
+
+    async def _kelly_route(self, task_type: str) -> Optional[str]:
+        """Route using Bayesian Kelly fractions when kelly_sizer is active.
+
+        Returns the selected agent_id, or None to fall through to classic routing.
+        Falls through when:
+        - kelly_sizer is not configured
+        - repository is not available
+        - no agent_scores data exists for this task_type
+        """
+        if not self.kelly_sizer or not self.repository or not task_type:
+            return None
+
+        try:
+            all_scores = await self.repository.get_agent_scores()
+        except Exception as e:
+            logger.warning("Kelly routing: failed to read agent_scores: %s", e)
+            return None
+
+        # Filter to scores for this task_type
+        task_scores = [
+            s for s in all_scores
+            if s.get("task_type") == task_type
+            and s.get("agent_id") in self.agents
+        ]
+
+        # Check if any agent has actual data — if not, fall through to classic
+        has_data = any(
+            (s.get("successes", 0) + s.get("failures", 0)) > 0
+            for s in task_scores
+        )
+        if not has_data:
+            return None
+
+        weights = self.kelly_sizer.compute_routing_weights(
+            task_scores, self._available_agent_ids,
+        )
+        chosen = self.kelly_sizer.sample_agent(weights)
+
+        logger.info(
+            "Kelly routing: task_type='%s' -> agent '%s' "
+            "(weights: %s)",
+            task_type,
+            chosen,
+            {a: f"{w:.3f}" for a, w in sorted(weights.items())},
+        )
+        return chosen
 
     async def _lookup_learned_scores(self, task_type: str) -> Optional[str]:
         """Query agent_scores for the highest-scoring agent for a task type.
@@ -284,6 +342,7 @@ class Dispatcher:
             "exploration_rate": self.exploration_rate,
             "available_agents": list(self._available_agent_ids),
             "repository_connected": self.repository is not None,
+            "kelly_enabled": self.kelly_sizer is not None,
         }
 
 

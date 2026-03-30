@@ -37,9 +37,11 @@ MIN_SAMPLES = 20
 _PRIOR_ALPHA = 1.0
 _PRIOR_BETA = 1.0
 
-# Threshold: the winning variant's Bayesian score must exceed the
-# loser's by at least this margin to be declared the winner.
-_WIN_MARGIN = 0.05
+# Base threshold for A/B test winner declaration.  The effective margin
+# adapts via Kelly kappa-shrinkage: with few samples the margin is high
+# (conservative), approaching _BASE_WIN_MARGIN as evidence accumulates.
+# With kappa=0, the full base margin is used immediately (backward compat).
+_BASE_WIN_MARGIN = 0.15
 
 # Supported mutation types for ``mutate_prompt()``.
 MUTATION_TYPES = (
@@ -67,10 +69,12 @@ class PromptEvolver:
         repository: Repository,
         semantic_memory: Optional["SemanticMemory"] = None,
         error_kb: Optional["ErrorKB"] = None,
+        ab_test_kappa: float = 10.0,
     ) -> None:
         self.repository = repository
         self.semantic_memory = semantic_memory
         self.error_kb = error_kb
+        self.ab_test_kappa = ab_test_kappa
 
     # ------------------------------------------------------------------
     # 1. mutate_prompt — deterministic string-level mutations
@@ -398,7 +402,7 @@ class PromptEvolver:
         Requirements before a winner can be declared:
         - Both control and variant must have >= ``MIN_SAMPLES`` samples.
         - The winner's Bayesian score must exceed the loser's by at
-          least ``_WIN_MARGIN``.
+          least the adaptive margin (Kelly kappa-shrinkage of ``_BASE_WIN_MARGIN``).
 
         The Bayesian score is the posterior mean of
         ``Beta(prior_alpha + successes, prior_beta + failures)``.
@@ -456,11 +460,20 @@ class PromptEvolver:
 
         margin = var_score - ctrl_score
 
+        # Adaptive margin via Kelly kappa-shrinkage: with few samples
+        # the effective threshold is high (conservative), approaching
+        # _BASE_WIN_MARGIN as evidence accumulates.
+        total_n_eff = control["sample_count"] + variant["sample_count"]
+        if self.ab_test_kappa > 0:
+            effective_margin = _BASE_WIN_MARGIN * total_n_eff / (total_n_eff + self.ab_test_kappa)
+        else:
+            effective_margin = _BASE_WIN_MARGIN
+
         winner: Optional[str] = None
         if ready:
-            if margin > _WIN_MARGIN:
+            if margin > effective_margin:
                 winner = "variant"
-            elif margin < -_WIN_MARGIN:
+            elif margin < -effective_margin:
                 winner = "control"
             # else: inconclusive — margin is within noise band.
 
@@ -482,6 +495,7 @@ class PromptEvolver:
             "control": control,
             "variant": variant,
             "margin": margin,
+            "effective_margin": effective_margin,
         }
 
     async def _fetch_variant_stats(

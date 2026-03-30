@@ -125,12 +125,25 @@ class ClawFactory:
             if agent:
                 agents[agent_name] = agent
 
-        # Dispatcher
+        # Dispatcher (with optional Kelly sizer)
         from claw.dispatcher import Dispatcher
+        kelly_sizer = None
+        if config.kelly.enabled:
+            from claw.evolution.kelly import BayesianKellySizer
+            kelly_sizer = BayesianKellySizer(
+                kappa=config.kelly.kappa,
+                f_max=config.kelly.f_max,
+                min_exploration_floor=config.kelly.min_exploration_floor,
+                payoff_default=config.kelly.payoff_default,
+                prior_alpha=config.kelly.prior_alpha,
+                prior_beta=config.kelly.prior_beta,
+            )
+            logger.info("Kelly sizer enabled: kappa=%.1f, f_max=%.2f", config.kelly.kappa, config.kelly.f_max)
         dispatcher = Dispatcher(
             agents=agents,
             exploration_rate=config.orchestrator.exploration_rate,
             repository=repository,
+            kelly_sizer=kelly_sizer,
         )
 
         # Verifier
@@ -201,6 +214,7 @@ class ClawFactory:
             repository=repository,
             semantic_memory=semantic_memory,
             error_kb=error_kb,
+            ab_test_kappa=config.evolution.ab_test_kappa,
         )
 
         # Pattern Learner
