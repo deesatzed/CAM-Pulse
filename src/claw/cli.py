@@ -7809,6 +7809,84 @@ def doctor_audit(
     )
 
 
+@doctor_app.command(name="routing")
+def doctor_routing(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show Kelly routing weights for all agents per task type."""
+    _setup_logging(False)
+    asyncio.run(_doctor_routing_async(config_path=config))
+
+
+async def _doctor_routing_async(config_path: Optional[str]) -> None:
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.db.repository import Repository
+    from claw.evolution.kelly import BayesianKellySizer
+
+    cfg = load_config(Path(config_path) if config_path else None)
+
+    if not cfg.kelly.enabled:
+        console.print("[yellow]Kelly routing is disabled in claw.toml.[/yellow]")
+        console.print("Enable with: [bold]kelly.enabled = true[/bold]")
+        return
+
+    engine = DatabaseEngine(cfg.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+    repository = Repository(engine)
+
+    try:
+        rows = await repository.get_agent_scores()
+        if not rows:
+            console.print("[dim]No agent_scores data yet. Run some tasks first.[/dim]")
+            return
+
+        sizer = BayesianKellySizer(
+            kappa=cfg.kelly.kappa,
+            f_max=cfg.kelly.f_max,
+            prior_alpha=cfg.kelly.prior_alpha,
+            prior_beta=cfg.kelly.prior_beta,
+        )
+
+        table = Table(title="Kelly Routing Weights")
+        table.add_column("task_type", style="cyan")
+        table.add_column("agent", style="bold")
+        table.add_column("samples", justify="right")
+        table.add_column("win_rate", justify="right")
+        table.add_column("kelly_fraction", justify="right", style="green")
+        table.add_column("posterior_std", justify="right", style="dim")
+
+        for row in sorted(rows, key=lambda r: (r.get("task_type", ""), r.get("agent_id", ""))):
+            successes = row.get("successes", 0)
+            failures = row.get("failures", 0)
+            total = row.get("total_attempts", successes + failures)
+            avg_quality = row.get("avg_quality_score", 0.5)
+            avg_cost = row.get("avg_cost_usd", 0.0)
+
+            result = sizer.compute_fraction(
+                successes=successes,
+                failures=failures,
+                avg_quality_score=avg_quality,
+                avg_cost_usd=avg_cost,
+            )
+
+            table.add_row(
+                row.get("task_type", "?"),
+                row.get("agent_id", "?"),
+                str(total),
+                f"{result.p_bar:.3f}",
+                f"{result.fraction:.4f}",
+                f"{result.posterior_std:.4f}",
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]kappa={cfg.kelly.kappa}  f_max={cfg.kelly.f_max}  prior=Beta({cfg.kelly.prior_alpha}, {cfg.kelly.prior_beta})[/dim]")
+    finally:
+        await engine.close()
+
+
 @app.command(name="prism-demo", hidden=True)
 def prism_demo(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show detailed diagnostics"),
