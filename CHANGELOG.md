@@ -8,6 +8,28 @@ All notable changes to CAM-PULSE are documented here.
 
 ---
 
+## [0.8.1] - 2026-03-31
+
+### Added — TurboQuant Integration and Self-Improvement Loop
+- **TurboQuant KV cache support** (`src/claw/memory/kv_cache_manager.py`): turbo3 (4.9x) and turbo4 (6.0x) compression tiers alongside existing f16/q8_0/q4_0
+- **`cam cag convert` CLI command** (`src/claw/cli.py`): convert external RAG sources (Chroma, LanceDB, FAISS, directories) into CAG caches
+- **A/B test results**: Ollama MLX 44.3 tok/s vs TurboQuant turbo3 19.2 tok/s — speed gap is inference engine, not compression (<7% overhead); turbo3 saves 80% KV memory (350 MiB vs 1,792 MiB at 32K context)
+- **Self-improvement loop closed**: mined TurboQuant A/B results back into CAM — corpus grew 927K → 958K tokens (+3.4%), TurboQuant references 24 → 62 (+158%)
+
+### Added — User-Facing Documentation
+- **[Getting Started](docs/GETTING_STARTED.md)**: First 30 minutes tutorial — install, mine, search, enhance
+- **[CAG Guide](docs/CAG_GUIDE.md)**: Cache-Augmented Generation — architecture, compression stack, serialization, staleness, troubleshooting
+- **[KV Cache Guide](docs/KV_CACHE_GUIDE.md)**: KV cache compression tiers, prefix caching, A/B test results, memory planning tables
+- **[Local LLM Setup](docs/LOCAL_LLM_SETUP.md)**: Ollama + TurboQuant setup, model recommendations, full config reference
+- **[Advanced Features](docs/ADVANCED_FEATURES.md)**: Kelly routing, deepConf scoring, prompt evolution, error KB, budget enforcement, pattern learning, stigmergic links
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)**: 20+ common errors with causes and fixes — installation, API keys, mining, CAG, local LLM, governance, budget, tests, database
+
+### Changed
+- **README.md**: Documentation section restructured into 3 subsections (Getting Started, Feature Guides, Proof and Examples) with all new docs linked
+- Known incompatibility: TheTom fork (build 8670) does NOT support qwen3.5 (qwen35 arch) — use qwen2.5 (qwen2 arch)
+
+---
+
 ## [0.8.0] - 2026-03-31
 
 ### Added — Phase 4.5: Seed Knowledge + Yield-Priority Mining
