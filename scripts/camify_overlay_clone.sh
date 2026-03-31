@@ -179,6 +179,20 @@ fi
 
 git clone "$REPO_SOURCE" "$TARGET_PATH"
 
+# Symlink .env from the original CAM source so API keys are available in the clone.
+# Resolves: CAM_SOURCE may be a git URL, so find .env relative to the script's repo root.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -f "$SCRIPT_REPO_ROOT/.env" ]]; then
+  ln -sf "$SCRIPT_REPO_ROOT/.env" "$CAM_PATH/.env"
+  echo "  .env symlinked from $SCRIPT_REPO_ROOT/.env"
+elif [[ -f "$HOME/.env" ]]; then
+  ln -sf "$HOME/.env" "$CAM_PATH/.env"
+  echo "  .env symlinked from $HOME/.env"
+else
+  echo "  WARNING: No .env found — API keys will be missing. Copy or symlink one into $CAM_PATH/.env"
+fi
+
 mkdir -p \
   "$OVERLAY_PATH/profiles/${REPO_SLUG}" \
   "$OVERLAY_PATH/prompts" \
