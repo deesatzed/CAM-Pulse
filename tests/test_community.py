@@ -144,6 +144,12 @@ class FakeEngine:
                 trigger_event TEXT NOT NULL DEFAULT 'recompute',
                 created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
             );
+            CREATE VIRTUAL TABLE IF NOT EXISTS methodology_fts USING fts5(
+                methodology_id UNINDEXED,
+                problem_description,
+                methodology_notes,
+                tags
+            );
         """)
         await self._conn.commit()
 

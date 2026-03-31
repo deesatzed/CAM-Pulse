@@ -78,10 +78,27 @@ class ClawFactory:
         await engine.connect()
         await engine.apply_migrations()
         await engine.initialize_schema()
-        repository = Repository(engine)
 
         # Embeddings
         embeddings = EmbeddingEngine(config.embeddings)
+
+        # Seed knowledge — auto-import on first run (after schema + embeddings)
+        try:
+            from claw.community.seeder import run_seed
+            seed_summary = await run_seed(
+                engine=engine,
+                embedding_engine=embeddings,
+                config=config,
+            )
+            if seed_summary.get("imported", 0) > 0:
+                logger.info(
+                    "Seed knowledge loaded: %d methodologies imported",
+                    seed_summary["imported"],
+                )
+        except Exception as e:
+            logger.warning("Seed knowledge loading failed (non-fatal): %s", e)
+
+        repository = Repository(engine)
 
         # PRISM multi-scale embeddings
         from claw.embeddings.prism import PrismEngine

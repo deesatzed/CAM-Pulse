@@ -71,6 +71,21 @@ def evaluate_transition(
     if current == LifecycleState.DEAD.value:
         return None
 
+    # Seed protection: origin:seed methodologies never decay below viable
+    if "origin:seed" in (methodology.tags or []):
+        if current in (LifecycleState.DECLINING.value, LifecycleState.DORMANT.value):
+            return LifecycleState.VIABLE.value  # Rehabilitate back to viable
+        # Allow embryonic → viable and viable → thriving (positive transitions)
+        # Block viable → declining and thriving → declining (negative transitions)
+        if current in (LifecycleState.VIABLE.value, LifecycleState.THRIVING.value):
+            if fitness >= THRIVING_FITNESS_THRESHOLD and methodology.success_count >= THRIVING_SUCCESS_MINIMUM:
+                return LifecycleState.THRIVING.value if current == LifecycleState.VIABLE.value else None
+            return None  # Block decay
+        # embryonic → viable allowed
+        if current == LifecycleState.EMBRYONIC.value and methodology.success_count >= 1:
+            return LifecycleState.VIABLE.value
+        return None
+
     # Novelty protection: novel capabilities are shielded from decay transitions
     # for a configurable period (default 90 days) to give them time to prove value
     novel_protected = _is_novelty_protected(

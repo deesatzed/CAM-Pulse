@@ -60,6 +60,9 @@ package-dir = {"claw" = "src/claw"}
 where = ["src"]
 include = ["claw*"]
 
+[tool.setuptools.package-data]
+claw = ["data/seed/*.jsonl"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

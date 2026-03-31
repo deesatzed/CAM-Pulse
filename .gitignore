@@ -26,6 +26,9 @@ htmlcov/
 
 # Runtime data
 data/
+# But allow seed knowledge packs shipped with the package
+!src/claw/data/
+!src/claw/data/**
 *.db
 
 # Claude Code user-specific memory
@@ -46,8 +49,9 @@ Thumbs.db
 
 # Token cost logs
 *.jsonl
-# But allow test fixture JSONL files
+# But allow test fixture JSONL files and seed knowledge packs
 !tests/fixtures/**/*.jsonl
+!src/claw/data/seed/*.jsonl
 
 # Local working notes and agent instruction files
 CLAUDE.md

@@ -24,6 +24,7 @@ async def import_records(
     max_records: int = 200,
     auto_approve: bool = False,
     config: Optional[object] = None,
+    embedding_engine: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Validate and quarantine community records.
 
@@ -65,7 +66,7 @@ async def import_records(
 
         if auto_approve:
             # Write directly to methodologies
-            await _approve_record(result, engine)
+            await _approve_record(result, engine, embedding_engine=embedding_engine)
             summary["imported"] += 1
             summary["details"].append({"id": record_id, "action": "auto_approved"})
         else:
@@ -105,7 +106,7 @@ async def list_quarantined(engine: Any) -> list[dict[str, Any]]:
     return results
 
 
-async def approve_all(engine: Any) -> int:
+async def approve_all(engine: Any, embedding_engine: Optional[Any] = None) -> int:
     """Approve all quarantined records into the live KB. Returns count."""
     await _ensure_tables(engine)
     rows = await engine.fetch_all(
@@ -117,7 +118,7 @@ async def approve_all(engine: Any) -> int:
             record = json.loads(row["sanitized_record"])
             result = ValidationResult(record_id=row["id"])
             result.sanitized_record = record
-            await _approve_record(result, engine)
+            await _approve_record(result, engine, embedding_engine=embedding_engine)
             await engine.execute(
                 "UPDATE community_imports SET status = 'approved', approved_at = ? WHERE id = ?",
                 [datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), row["id"]],
@@ -128,7 +129,7 @@ async def approve_all(engine: Any) -> int:
     return count
 
 
-async def approve_one(engine: Any, quarantine_id: str) -> bool:
+async def approve_one(engine: Any, quarantine_id: str, embedding_engine: Optional[Any] = None) -> bool:
     """Approve a single quarantined record."""
     await _ensure_tables(engine)
     rows = await engine.fetch_all(
@@ -141,7 +142,7 @@ async def approve_one(engine: Any, quarantine_id: str) -> bool:
     record = json.loads(rows[0]["sanitized_record"])
     result = ValidationResult(record_id=quarantine_id)
     result.sanitized_record = record
-    await _approve_record(result, engine)
+    await _approve_record(result, engine, embedding_engine=embedding_engine)
     await engine.execute(
         "UPDATE community_imports SET status = 'approved', approved_at = ? WHERE id = ?",
         [datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), quarantine_id],
@@ -222,8 +223,16 @@ async def _quarantine_record(result: ValidationResult, engine: Any) -> None:
     )
 
 
-async def _approve_record(result: ValidationResult, engine: Any) -> None:
-    """Insert an approved record into the live methodologies table."""
+async def _approve_record(
+    result: ValidationResult,
+    engine: Any,
+    embedding_engine: Optional[Any] = None,
+) -> None:
+    """Insert an approved record into the live methodologies table.
+
+    Also writes FTS5 index and embedding (if engine provided) to ensure
+    the record is discoverable by both text and semantic search.
+    """
     record = result.sanitized_record or {}
     overrides = record.get("_import_overrides", {})
     meta = record.get("metadata", {})
@@ -277,6 +286,25 @@ async def _approve_record(result: ValidationResult, engine: Any) -> None:
             meta.get("potential_score"),
         ],
     )
+
+    # FTS5 index — required for text search discovery
+    await engine.execute(
+        "INSERT INTO methodology_fts (methodology_id, problem_description, methodology_notes, tags) VALUES (?, ?, ?, ?)",
+        [new_id, problem, notes, json.dumps(tags)],
+    )
+
+    # Embedding — required for semantic (vector) search discovery
+    if embedding_engine is not None:
+        try:
+            import struct
+            vec = embedding_engine.encode(problem)
+            vec_bytes = struct.pack(f"<{len(vec)}f", *vec)
+            await engine.execute(
+                "INSERT INTO methodology_embeddings (methodology_id, embedding) VALUES (?, ?)",
+                [new_id, vec_bytes],
+            )
+        except Exception as e:
+            logger.warning("Embedding generation failed for approved record %s: %s", new_id, e)
 
 
 async def _log_audit(

@@ -8223,6 +8223,85 @@ async def _kb_engine():
     return engine, repository
 
 
+@kb_app.command(name="seed")
+def kb_seed(
+    force: bool = typer.Option(False, "--force", help="Re-seed even if seed records already exist"),
+    repair_embeddings: bool = typer.Option(False, "--repair-embeddings", help="Generate missing embeddings for existing methodologies"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Load built-in seed knowledge into the methodology store.
+
+    Runs automatically on first startup. Use --force to re-seed after
+    accidental deletion. Use --repair-embeddings to generate missing
+    vectors for methodologies that were saved without embeddings.
+    """
+    _setup_logging(verbose)
+
+    async def _run() -> None:
+        from claw.community.seeder import discover_seed_packs, repair_missing_embeddings, run_seed
+        from claw.core.config import load_config
+        from claw.db.embeddings import EmbeddingEngine
+
+        cfg = load_config(Path(config) if config else None)
+        engine, _repo = await _kb_engine()
+
+        # Show available packs
+        packs = discover_seed_packs()
+        if not packs:
+            console.print("[red]No seed packs found in package.[/red]")
+            return
+
+        console.print(f"\n[bold]CAM Seed Knowledge Loader[/bold]\n")
+        for p in packs:
+            line_count = sum(1 for line in p.read_text().strip().splitlines() if line.strip())
+            console.print(f"  Pack: {p.name} ({line_count} records)")
+
+        # Try to create embedding engine
+        embedding_engine = None
+        try:
+            embedding_engine = EmbeddingEngine(cfg.embeddings)
+            console.print(f"  Embedding model: {cfg.embeddings.model}")
+        except Exception as e:
+            console.print(f"  [yellow]Embeddings unavailable ({e}) — seeding without vectors[/yellow]")
+
+        summary = await run_seed(
+            engine=engine,
+            embedding_engine=embedding_engine,
+            force=force,
+            config=cfg,
+        )
+
+        if summary.get("reason") == "already_seeded" and not force:
+            console.print("\n[green]Seed knowledge already present.[/green] Use --force to re-seed.")
+        elif summary["imported"] > 0:
+            console.print(f"\n  Imported: {summary['imported']}")
+            console.print(f"  Skipped (dedup): {summary['skipped']}")
+            if summary["rejected"]:
+                console.print(f"  Rejected: {summary['rejected']}")
+            console.print(f"\n[green]Seed knowledge loaded successfully.[/green]")
+        elif summary["skipped"] > 0:
+            console.print(f"\n[green]All seed records already present (idempotent).[/green]")
+        else:
+            console.print(f"\n[yellow]No records to seed (reason: {summary.get('reason', '?')}).[/yellow]")
+
+        # Repair missing embeddings if requested
+        if repair_embeddings:
+            if embedding_engine is None:
+                console.print("[red]Cannot repair embeddings without GOOGLE_API_KEY.[/red]")
+            else:
+                console.print("\n[cyan]Repairing missing embeddings...[/cyan]")
+                repaired = await repair_missing_embeddings(engine, embedding_engine)
+                console.print(f"  Repaired: {repaired} methodologies")
+
+        try:
+            await engine.close()
+        except Exception:
+            pass
+
+    asyncio.run(_run())
+
+
 @kb_app.command()
 def insights(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
