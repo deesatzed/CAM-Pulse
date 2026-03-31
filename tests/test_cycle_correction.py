@@ -257,6 +257,73 @@ class TestWorkspaceSnapshotRestore:
         _restore_workspace(str(workspace), snap)
         assert (workspace / "a.py").read_text() == "original\n"
 
+    def test_snapshot_excludes_node_modules(self, tmp_path):
+        """node_modules must be excluded so auto-installed deps survive restore."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        nm = workspace / "node_modules" / ".bin"
+        nm.mkdir(parents=True)
+        (nm / "ng").write_text("#!/bin/sh\necho ng", encoding="utf-8")
+        (workspace / "app.js").write_text("code\n", encoding="utf-8")
+
+        snap = _snapshot_workspace_content(str(workspace))
+        assert "app.js" in snap
+        assert "node_modules/.bin/ng" not in snap
+
+    def test_restore_preserves_node_modules(self, tmp_path):
+        """Restore should NOT delete node_modules even though it wasn't in snapshot."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "app.js").write_text("code\n", encoding="utf-8")
+
+        snap = _snapshot_workspace_content(str(workspace))
+
+        # Simulate auto-install creating node_modules after snapshot
+        nm = workspace / "node_modules" / ".bin"
+        nm.mkdir(parents=True)
+        (nm / "ng").write_text("#!/bin/sh\necho ng", encoding="utf-8")
+
+        # Agent also added a file
+        (workspace / "new.js").write_text("agent code\n", encoding="utf-8")
+
+        _restore_workspace(str(workspace), snap)
+
+        # Agent's file should be removed
+        assert not (workspace / "new.js").exists()
+        # But node_modules should survive
+        assert (nm / "ng").exists()
+
+    def test_snapshot_excludes_venv(self, tmp_path):
+        """venv/.venv must be excluded from snapshot/restore."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        venv = workspace / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("#!/bin/sh", encoding="utf-8")
+        (workspace / "main.py").write_text("print('hi')\n", encoding="utf-8")
+
+        snap = _snapshot_workspace_content(str(workspace))
+        assert "main.py" in snap
+        assert ".venv/bin/python" not in snap
+
+    def test_restore_preserves_venv(self, tmp_path):
+        """Restore should NOT delete .venv even though it wasn't in snapshot."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "main.py").write_text("code\n", encoding="utf-8")
+
+        snap = _snapshot_workspace_content(str(workspace))
+
+        # Simulate pip install creating venv after snapshot
+        venv = workspace / "venv" / "lib"
+        venv.mkdir(parents=True)
+        (venv / "site.py").write_text("site", encoding="utf-8")
+
+        _restore_workspace(str(workspace), snap)
+
+        # venv should survive
+        assert (venv / "site.py").exists()
+
 
 class TestActWithCorrection:
     """Integration tests for the inner correction loop in MicroClaw."""
