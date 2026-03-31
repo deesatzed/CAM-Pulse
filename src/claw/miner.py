@@ -996,6 +996,7 @@ class RepoMiner:
         dedup_iterations: bool = True,
         skip_known: bool = True,
         force_rescan: bool = False,
+        yield_sort: bool = True,
     ) -> MiningReport:
         """Discover repos in a directory and mine each.
 
@@ -1045,6 +1046,20 @@ class RepoMiner:
                 mining_plan.append((candidate, reason))
             else:
                 skipped_candidates.append((candidate, reason))
+
+        # Sort by expected yield before selecting top-N
+        if yield_sort and mining_plan:
+            mining_plan.sort(
+                key=lambda item: _score_yield_priority(item[0], self.scan_ledger),
+                reverse=True,
+            )
+            for cand, _r in mining_plan[:min(5, len(mining_plan))]:
+                s = _score_yield_priority(cand, self.scan_ledger)
+                age = (time.time() - cand.last_commit_ts) / 86400 if cand.last_commit_ts > 0 else -1
+                logger.info(
+                    "Yield-priority: %s score=%.1f (files=%d, kind=%s, age=%.0fd)",
+                    cand.name, s, cand.file_count, cand.source_kind, age,
+                )
 
         selected_candidates = mining_plan[:max_repos]
         logger.info(
@@ -2033,6 +2048,78 @@ def _dedup_iterations(
 
     content_deduped.sort(key=lambda c: (c.canonical_name, c.name))
     return content_deduped, skipped
+
+
+def _score_yield_priority(
+    candidate: RepoCandidate,
+    ledger: "RepoScanLedger",
+    *,
+    now: float | None = None,
+) -> float:
+    """Score a repo candidate by expected mining yield.
+
+    Higher score = mine first.  Max theoretical score = 100.
+
+    Factors (data-driven from 90 mined repos — findings/token ratio
+    does NOT scale linearly with repo size):
+      1. Recency          (0–40)  recently active repos yield better patterns
+      2. File-count sweet spot (0–25)  20-500 files is goldilocks
+      3. Source kind       (0–10)  git > loose source tree
+      4. Canonical sibling (-20)  if another iteration was already mined
+      5. Size efficiency   (0–25)  smaller repos are cheaper per finding
+    """
+    _now = now or time.time()
+    score = 0.0
+
+    # --- Factor 1: Recency (0-40 points) ---
+    if candidate.last_commit_ts > 0:
+        age_days = (_now - candidate.last_commit_ts) / 86400
+        if age_days <= 90:
+            score += 40.0
+        elif age_days <= 365:
+            score += 40.0 * (1.0 - (age_days - 90) / 275)
+        elif age_days <= 730:
+            score += 10.0 * (1.0 - (age_days - 365) / 365)
+
+    # --- Factor 2: File count sweet spot (0-25 points) ---
+    fc = candidate.file_count
+    if 20 <= fc <= 500:
+        score += 25.0
+    elif 10 <= fc < 20:
+        score += 15.0
+    elif 500 < fc <= 2000:
+        score += 15.0
+    elif fc < 10:
+        score += 5.0
+    else:
+        score += 5.0
+
+    # --- Factor 3: Source kind (0-10 points) ---
+    if candidate.source_kind == "git":
+        score += 10.0
+    else:
+        score += 3.0
+
+    # --- Factor 4: Canonical sibling already mined (-20 penalty) ---
+    ledger._load()
+    for _key, record in ledger._records.items():
+        if record.canonical_name == candidate.canonical_name:
+            score -= 20.0
+            break
+
+    # --- Factor 5: Size efficiency (0-25 points) ---
+    if candidate.total_bytes > 0:
+        mb = candidate.total_bytes / (1024 * 1024)
+        if mb <= 10:
+            score += 25.0
+        elif mb <= 50:
+            score += 20.0
+        elif mb <= 200:
+            score += 10.0
+        else:
+            score += 2.0
+
+    return score
 
 
 def _relevance_to_priority(relevance: float) -> int:

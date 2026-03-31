@@ -5134,6 +5134,7 @@ def mine(
     scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
     live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys with tiny real calls before live mining"),
     max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
+    yield_sort: bool = typer.Option(True, "--yield-sort/--no-yield-sort", help="Sort candidates by expected yield before mining (default: on)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -5145,6 +5146,7 @@ def mine(
 
     Use --scan-only to preview what repos would be mined without making
     any LLM calls. Use --no-dedup to include all iterations of each project.
+    Use --no-yield-sort to mine in alphabetical order instead of by expected yield.
     """
     _setup_logging(verbose)
 
@@ -5188,6 +5190,7 @@ def mine(
             _mine_async(
                 dir_path, target, max_repos, min_relevance, tasks, config,
                 depth, dedup, skip_known, force_rescan, changed_only,
+                yield_sort=yield_sort,
             ),
             timeout=max_minutes * 60,
         ))
@@ -5441,6 +5444,7 @@ async def _mine_async(
     skip_known: bool = True,
     force_rescan: bool = False,
     changed_only: bool = False,
+    yield_sort: bool = True,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -5468,6 +5472,7 @@ async def _mine_async(
         console.print(f"  Skip unchanged repos: {skip_known}")
         console.print(f"  Force rescan: {force_rescan}")
         console.print(f"  Changed only: {changed_only}")
+        console.print(f"  Yield sort: {yield_sort}")
         console.print(f"  Database: {ctx.config.database.db_path}")
         console.print()
 
@@ -5497,6 +5502,7 @@ async def _mine_async(
             dedup_iterations=dedup_iterations,
             skip_known=skip_known or changed_only,
             force_rescan=force_rescan,
+            yield_sort=yield_sort,
         )
 
         # Display results table
@@ -5573,6 +5579,7 @@ def mine_workspace(
     scan_only: bool = typer.Option(False, "--scan-only", help="Preview discovered repos without mining (no LLM calls)"),
     live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys"),
     max_minutes: int = typer.Option(30, "--max-minutes", help="Wall-clock time guardrail for mining"),
+    yield_sort: bool = typer.Option(True, "--yield-sort/--no-yield-sort", help="Sort candidates by expected yield before mining (default: on)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -5630,6 +5637,7 @@ def mine_workspace(
             _mine_workspace_async(
                 dir_paths, target, max_repos, min_relevance, tasks, config,
                 depth, dedup, skip_known, force_rescan, changed_only,
+                yield_sort=yield_sort,
             ),
             timeout=max_minutes * 60,
         ))
@@ -5780,11 +5788,12 @@ async def _mine_workspace_async(
     skip_known: bool = True,
     force_rescan: bool = False,
     changed_only: bool = False,
+    yield_sort: bool = True,
 ) -> None:
     """Mine repos across multiple directories."""
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
-    from claw.miner import _discover_repos, _dedup_iterations, MiningReport, RepoMiningResult
+    from claw.miner import _discover_repos, _dedup_iterations, _score_yield_priority, MiningReport, RepoMiningResult
 
     config_p = Path(config_path) if config_path else None
     target_path = Path(target).resolve()
@@ -5828,6 +5837,22 @@ async def _mine_workspace_async(
             )
             if should_mine:
                 mining_plan.append(candidate)
+
+        # Sort by expected yield before selecting top-N
+        if yield_sort and mining_plan:
+            mining_plan.sort(
+                key=lambda c: _score_yield_priority(c, ctx.miner.scan_ledger),
+                reverse=True,
+            )
+            import time as _time
+            _log = logging.getLogger("claw.cli")
+            for cand in mining_plan[:min(5, len(mining_plan))]:
+                s = _score_yield_priority(cand, ctx.miner.scan_ledger)
+                age = (_time.time() - cand.last_commit_ts) / 86400 if cand.last_commit_ts > 0 else -1
+                _log.info(
+                    "Yield-priority: %s score=%.1f (files=%d, kind=%s, age=%.0fd)",
+                    cand.name, s, cand.file_count, cand.source_kind, age,
+                )
 
         to_mine = mining_plan[:max_repos]
 
