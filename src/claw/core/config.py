@@ -72,6 +72,8 @@ class SentinelConfig(BaseModel):
     drift_threshold: float = 0.40
     quality_score_threshold: float = 0.60
     min_test_count: int = 0
+    auto_install_deps: bool = True
+    auto_recovery_timeout: int = 120
 
 
 class SecurityConfig(BaseModel):

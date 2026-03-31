@@ -139,6 +139,39 @@ class TestIsCorrectableFailure:
         verification = VerificationResult(approved=False, violations=[])
         assert _is_correctable_failure(outcome, verification) is False
 
+    def test_environment_setup_violation_not_correctable(self):
+        """environment_setup violations cannot be fixed by agent — don't retry."""
+        outcome = TaskOutcome()
+        verification = VerificationResult(
+            approved=False,
+            violations=[{
+                "check": "environment_setup",
+                "detail": "command_not_found: exit code 127 running 'ng'",
+            }],
+        )
+        assert _is_correctable_failure(outcome, verification) is False
+
+    def test_environment_setup_mixed_with_test_failure_not_correctable(self):
+        """If any violation is environment_setup, the whole set is non-correctable."""
+        outcome = TaskOutcome()
+        verification = VerificationResult(
+            approved=False,
+            violations=[
+                {"check": "test_execution", "detail": "Tests failed"},
+                {"check": "environment_setup", "detail": "ModuleNotFoundError"},
+            ],
+        )
+        assert _is_correctable_failure(outcome, verification) is False
+
+    def test_test_execution_without_env_issue_is_correctable(self):
+        """Normal test failures (no environment_setup) should still be correctable."""
+        outcome = TaskOutcome()
+        verification = VerificationResult(
+            approved=False,
+            violations=[{"check": "test_execution", "detail": "AssertionError in test_foo"}],
+        )
+        assert _is_correctable_failure(outcome, verification) is True
+
 
 class TestWorkspaceSnapshotRestore:
     """Tests for content-based workspace snapshot and restore."""

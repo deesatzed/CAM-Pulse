@@ -1101,3 +1101,172 @@ class TestCrossCheckSelfAudit:
         ]
         assert len(contradiction_violations) >= 1
         assert "contradiction" in contradiction_violations[0]["detail"].lower()
+
+
+# ===========================================================================
+# Environment Error Detection and Auto-Recovery
+# ===========================================================================
+
+class TestExitCodeClassification:
+    """Tests for _classify_exit_code — mapping exit codes to failure types."""
+
+    def test_exit_127_is_command_not_found(self):
+        assert Verifier._classify_exit_code(127) == "command_not_found"
+
+    def test_exit_126_is_permission_denied(self):
+        assert Verifier._classify_exit_code(126) == "permission_denied"
+
+    def test_exit_0_is_none(self):
+        assert Verifier._classify_exit_code(0) is None
+
+    def test_exit_1_is_none(self):
+        """Normal test failure — not an environment issue."""
+        assert Verifier._classify_exit_code(1) is None
+
+    def test_exit_2_is_none(self):
+        assert Verifier._classify_exit_code(2) is None
+
+
+class TestEnvErrorDetection:
+    """Tests for _detect_env_error — regex pattern matching on test output."""
+
+    def test_module_not_found_error(self):
+        output = "ModuleNotFoundError: No module named 'flask'"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, recovery = result
+        assert "flask" in msg
+        assert "pip install" in recovery
+
+    def test_cannot_find_module_node(self):
+        output = "Error: Cannot find module '@angular/core'"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, recovery = result
+        assert "npm install" in recovery
+
+    def test_eaddrinuse(self):
+        output = "Error: listen EADDRINUSE: address already in use :::3000"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, recovery = result
+        assert "3000" in msg
+        assert recovery is None  # Can't auto-fix port conflicts
+
+    def test_import_error(self):
+        output = "ImportError: cannot import name 'Foo' from 'bar'"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, recovery = result
+        assert "import failed" in msg.lower()
+
+    def test_err_module_not_found(self):
+        output = "ERR_MODULE_NOT_FOUND: Cannot locate module 'express'"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        _, recovery = result
+        assert "npm install" in recovery
+
+    def test_clean_output_returns_none(self):
+        output = "5 passed, 0 failed in 1.23s"
+        assert Verifier._detect_env_error(output) is None
+
+    def test_normal_test_failure_returns_none(self):
+        output = "FAILED test_auth.py::test_login - AssertionError: expected 200 got 401"
+        assert Verifier._detect_env_error(output) is None
+
+
+class TestResolveBinary:
+    """Tests for _resolve_test_binary — finding test runners in PATH or node_modules."""
+
+    def test_resolves_python3_in_path(self):
+        verifier = _make_verifier()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            cmd, prefix, found = verifier._resolve_test_binary("python3", workspace)
+            assert found is True
+            assert cmd == "python3"
+            assert prefix == []
+
+    def test_missing_binary_not_found(self):
+        verifier = _make_verifier()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            cmd, prefix, found = verifier._resolve_test_binary(
+                "definitely_not_a_real_binary_xyz", workspace
+            )
+            assert found is False
+
+    def test_node_modules_bin_fallback(self):
+        """If binary is in node_modules/.bin, it should be found."""
+        verifier = _make_verifier()
+        import tempfile, pathlib, stat
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            bin_dir = workspace / "node_modules" / ".bin"
+            bin_dir.mkdir(parents=True)
+            fake_bin = bin_dir / "myrunner"
+            fake_bin.write_text("#!/bin/sh\necho ok")
+            fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC)
+
+            cmd, prefix, found = verifier._resolve_test_binary("myrunner", workspace)
+            assert found is True
+            assert "node_modules" in cmd
+
+    def test_npx_fallback_for_node_projects(self):
+        """If package.json exists and npx is available, fall back to npx."""
+        verifier = _make_verifier()
+        import tempfile, pathlib, shutil
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            (workspace / "package.json").write_text("{}")
+
+            if shutil.which("npx"):
+                cmd, prefix, found = verifier._resolve_test_binary(
+                    "some_missing_cli", workspace
+                )
+                assert found is True
+                assert cmd == "npx"
+                assert prefix == ["some_missing_cli"]
+
+
+class TestAutoInstallDeps:
+    """Tests for _auto_install_deps — auto-installing missing deps."""
+
+    async def test_no_action_when_nothing_missing(self):
+        """Empty workspace needs no deps installed."""
+        verifier = _make_verifier()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            result = await verifier._auto_install_deps(workspace, timeout=10)
+            assert result is None
+
+    async def test_npm_install_when_node_modules_missing(self):
+        """If package.json exists but node_modules doesn't, npm install is attempted."""
+        verifier = _make_verifier()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            (workspace / "package.json").write_text('{"name": "test", "version": "1.0.0"}')
+            result = await verifier._auto_install_deps(workspace, timeout=30)
+            assert result is not None
+            assert "npm install" in result
+
+
+class TestRunTestsEnvironmentRecovery:
+    """Integration tests for run_tests with environment failure detection."""
+
+    async def test_no_test_runner_skips_gracefully(self):
+        """Workspace with no recognizable project type skips tests."""
+        verifier = _make_verifier()
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            workspace = pathlib.Path(td)
+            (workspace / "README.md").write_text("# Hello")
+            passed, output, count = await verifier.run_tests(str(workspace))
+            assert passed is True
+            assert "skipped" in output.lower()
+            assert count == 0

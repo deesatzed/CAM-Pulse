@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -160,12 +161,14 @@ class Verifier:
         drift_threshold: float = 0.40,
         llm_client: Optional[Any] = None,
         min_test_count: int = 0,
+        sentinel_config: Optional[Any] = None,
     ):
         self.embedding_engine = embedding_engine
         self.banned_dependencies = set(d.lower() for d in (banned_dependencies or []))
         self.drift_threshold = drift_threshold
         self.llm_client = llm_client
         self.min_test_count = min_test_count
+        self._sentinel_config = sentinel_config
         self._prompt_loader = PromptLoader()
 
     # ===================================================================
@@ -236,10 +239,17 @@ class Verifier:
                 tests_after = test_count
                 full_test_output = test_output
                 if not test_passed:
-                    all_violations.append({
-                        "check": "test_execution",
-                        "detail": f"Tests failed in workspace: {test_output[:500]}",
-                    })
+                    # Distinguish environment failures from test logic failures
+                    if test_output.startswith("[environment_setup]"):
+                        all_violations.append({
+                            "check": "environment_setup",
+                            "detail": test_output.removeprefix("[environment_setup]").strip()[:500],
+                        })
+                    else:
+                        all_violations.append({
+                            "check": "test_execution",
+                            "detail": f"Tests failed in workspace: {test_output[:500]}",
+                        })
             except Exception as e:
                 logger.warning("Test execution failed: %s", e)
                 all_recommendations.append(f"Test execution could not be completed: {e}")
@@ -896,6 +906,180 @@ class Verifier:
         return None
 
     # ===================================================================
+    # Environment error detection and auto-recovery
+    # ===================================================================
+
+    # Patterns in stderr/stdout that indicate environment problems, not test logic.
+    _ENV_ERROR_PATTERNS: list[tuple[str, str, Optional[str]]] = [
+        # (regex, human message, suggested recovery command or None)
+        (r"ModuleNotFoundError:\s*No module named ['\"]?(\S+)", "Python module {0} missing", "pip install -r requirements.txt"),
+        (r"ImportError:\s*cannot import name", "Python import failed — missing dependency", "pip install -r requirements.txt"),
+        (r"Cannot find module ['\"]([^'\"]+)", "Node module {0} missing", "npm install"),
+        (r"ERR_MODULE_NOT_FOUND", "ES module not found", "npm install"),
+        (r"Error: Cannot find module", "Node module not found", "npm install"),
+        (r"EADDRINUSE.*?(\d{2,})", "Port {0} already in use", None),
+        (r"EACCES:\s*permission denied", "Permission denied on file operation", None),
+        (r"SyntaxError.*invalid syntax", "Python syntax error — possible version mismatch", None),
+        (r"error\[E\d+\]:\s*could not compile", "Rust compilation error", None),
+    ]
+
+    @staticmethod
+    def _classify_exit_code(returncode: int) -> Optional[str]:
+        """Classify process exit code into failure type.
+
+        Returns:
+            'command_not_found' for 127, 'permission_denied' for 126,
+            None for normal exit codes (0 = pass, 1+ = test failure).
+        """
+        if returncode == 127:
+            return "command_not_found"
+        if returncode == 126:
+            return "permission_denied"
+        return None
+
+    @classmethod
+    def _detect_env_error(cls, output: str) -> Optional[tuple[str, Optional[str]]]:
+        """Scan test output for environment error patterns.
+
+        Returns:
+            (human_message, recovery_command) if an env error is detected, else None.
+        """
+        for pattern, msg_template, recovery in cls._ENV_ERROR_PATTERNS:
+            m = re.search(pattern, output)
+            if m:
+                groups = m.groups()
+                msg = msg_template.format(*groups) if groups else msg_template
+                return msg, recovery
+        return None
+
+    async def _auto_install_deps(
+        self, workspace: Path, timeout: int = 120
+    ) -> Optional[str]:
+        """Auto-install missing dependencies if config allows.
+
+        Returns a log message describing what was done, or None if nothing needed.
+        """
+        actions: list[str] = []
+
+        # Node.js: install if package.json exists but node_modules doesn't
+        pkg_json = workspace / "package.json"
+        node_modules = workspace / "node_modules"
+        if pkg_json.exists() and not node_modules.exists():
+            logger.info("node_modules missing in %s — running npm install", workspace)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "npm", "install",
+                    cwd=str(workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                if proc.returncode == 0:
+                    actions.append("npm install succeeded")
+                else:
+                    actions.append(f"npm install failed (exit {proc.returncode})")
+            except asyncio.TimeoutError:
+                actions.append(f"npm install timed out after {timeout}s")
+            except FileNotFoundError:
+                actions.append("npm not found — cannot auto-install Node deps")
+
+        # Python: install if requirements.txt exists
+        reqs = workspace / "requirements.txt"
+        pyproject = workspace / "pyproject.toml"
+        if reqs.exists():
+            logger.info("requirements.txt found in %s — running pip install", workspace)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "pip", "install", "-r", "requirements.txt",
+                    cwd=str(workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                if proc.returncode == 0:
+                    actions.append("pip install -r requirements.txt succeeded")
+                else:
+                    actions.append(f"pip install failed (exit {proc.returncode})")
+            except asyncio.TimeoutError:
+                actions.append(f"pip install timed out after {timeout}s")
+            except FileNotFoundError:
+                actions.append("pip not found — cannot auto-install Python deps")
+        elif pyproject.exists():
+            # Check if it's a pip-installable project
+            content = pyproject.read_text(errors="replace")
+            if "[project]" in content or "[tool.setuptools]" in content:
+                logger.info("pyproject.toml found in %s — running pip install -e .", workspace)
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "pip", "install", "-e", ".",
+                        cwd=str(workspace),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                    if proc.returncode == 0:
+                        actions.append("pip install -e . succeeded")
+                    else:
+                        actions.append(f"pip install -e . failed (exit {proc.returncode})")
+                except asyncio.TimeoutError:
+                    actions.append(f"pip install timed out after {timeout}s")
+                except FileNotFoundError:
+                    actions.append("pip not found")
+
+        # Go: download modules if go.mod exists but go.sum is missing
+        go_mod = workspace / "go.mod"
+        go_sum = workspace / "go.sum"
+        if go_mod.exists() and not go_sum.exists():
+            logger.info("go.sum missing in %s — running go mod download", workspace)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "go", "mod", "download",
+                    cwd=str(workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                if proc.returncode == 0:
+                    actions.append("go mod download succeeded")
+                else:
+                    actions.append(f"go mod download failed (exit {proc.returncode})")
+            except asyncio.TimeoutError:
+                actions.append(f"go mod download timed out after {timeout}s")
+            except FileNotFoundError:
+                actions.append("go not found")
+
+        if actions:
+            msg = "; ".join(actions)
+            logger.info("Auto-install results for %s: %s", workspace, msg)
+            return msg
+        return None
+
+    def _resolve_test_binary(
+        self, cmd: str, workspace: Path
+    ) -> tuple[str, list[str], bool]:
+        """Resolve the test binary, falling back to npx for Node projects.
+
+        Returns:
+            (resolved_cmd, extra_prefix_args, found)
+            If the binary isn't found anywhere, found=False.
+        """
+        # Direct PATH check
+        if shutil.which(cmd):
+            return cmd, [], True
+
+        # Node.js: check node_modules/.bin
+        local_bin = workspace / "node_modules" / ".bin" / cmd
+        if local_bin.exists():
+            return str(local_bin), [], True
+
+        # Node.js: fall back to npx if npm-based project
+        if (workspace / "package.json").exists() and shutil.which("npx"):
+            logger.info("Binary '%s' not in PATH, falling back to npx", cmd)
+            return "npx", [cmd], True
+
+        return cmd, [], False
+
+    # ===================================================================
     # Test execution
     # ===================================================================
 
@@ -904,10 +1088,10 @@ class Verifier:
     ) -> tuple[bool, str, int]:
         """Run the appropriate test command for the project.
 
-        Detects the project type from config files and runs:
-        - Python: pytest
-        - Node.js: npm test
-        - Otherwise: skip (return pass with 0 tests)
+        Detects the project type from config files, auto-installs dependencies
+        if missing (when auto_install_deps is enabled), validates the test
+        binary exists, and classifies failures as either test logic errors
+        or environment setup errors.
 
         Args:
             workspace_dir: Path to the repository root.
@@ -927,21 +1111,69 @@ class Verifier:
             logger.info("No test runner detected for %s, skipping test check", workspace_dir)
             return True, "No test runner detected — skipped", 0
 
-        proc = await asyncio.create_subprocess_exec(
-            cmd,
-            *args,
-            cwd=str(workspace),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        # ── Pre-flight: auto-install deps if enabled ──
+        sentinel_cfg = getattr(self, "_sentinel_config", None)
+        auto_install = getattr(sentinel_cfg, "auto_install_deps", True) if sentinel_cfg else True
+        recovery_timeout = getattr(sentinel_cfg, "auto_recovery_timeout", 120) if sentinel_cfg else 120
+
+        install_log = None
+        if auto_install:
+            install_log = await self._auto_install_deps(workspace, timeout=recovery_timeout)
+
+        # ── Pre-flight: resolve binary ──
+        resolved_cmd, prefix_args, binary_found = self._resolve_test_binary(cmd, workspace)
+        full_args = prefix_args + args
+
+        if not binary_found:
+            detail = f"Binary '{cmd}' not found in PATH or node_modules/.bin."
+            if install_log:
+                detail += f" Auto-install attempted: {install_log}"
+            logger.warning("Environment setup failure: %s", detail)
+            return False, f"[environment_setup] {detail}", 0
+
+        # ── Execute tests ──
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                resolved_cmd,
+                *full_args,
+                cwd=str(workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+        except FileNotFoundError as e:
+            detail = f"Binary '{resolved_cmd}' vanished during execution: {e}"
+            return False, f"[environment_setup] {detail}", 0
 
         output = stdout.decode("utf-8", errors="replace")
         error_output = stderr.decode("utf-8", errors="replace")
         full_output = output + error_output
 
-        passed = proc.returncode == 0
+        # ── Classify the result ──
+        exit_class = self._classify_exit_code(proc.returncode)
+        if exit_class:
+            # Exit 127 (command not found) or 126 (permission denied)
+            detail = f"{exit_class}: exit code {proc.returncode} running '{resolved_cmd}'."
+            if install_log:
+                detail += f" Auto-install: {install_log}"
+            detail += f"\nOutput: {full_output[:500]}"
+            logger.warning("Environment setup failure in %s: %s", workspace_dir, exit_class)
+            return False, f"[environment_setup] {detail}", 0
 
+        # Check for env errors hidden in output (exit code 1 but caused by missing deps)
+        if proc.returncode != 0:
+            env_error = self._detect_env_error(full_output)
+            if env_error:
+                msg, recovery = env_error
+                detail = f"{msg}."
+                if recovery:
+                    detail += f" Suggested fix: {recovery}"
+                if install_log:
+                    detail += f" (auto-install was attempted: {install_log})"
+                logger.warning("Environment error detected in %s: %s", workspace_dir, msg)
+                return False, f"[environment_setup] {detail}", 0
+
+        passed = proc.returncode == 0
         test_count = self._parse_test_count(output)
 
         logger.info(
@@ -950,7 +1182,7 @@ class Verifier:
             workspace_dir,
             test_count,
             proc.returncode,
-            cmd,
+            resolved_cmd,
         )
 
         return passed, full_output, test_count
@@ -1123,15 +1355,35 @@ class Verifier:
                     + stderr.decode("utf-8", errors="replace")
                 ).strip()
                 if proc.returncode != 0:
-                    violations.append({
-                        "check": "acceptance_checks",
-                        "detail": (
-                            f"Acceptance check failed (exit {proc.returncode}): {command}. "
-                            f"Output: {output[:500]}"
-                        ),
-                    })
+                    # Classify environment vs logic failures
+                    exit_class = self._classify_exit_code(proc.returncode)
+                    env_error = self._detect_env_error(output) if not exit_class else None
+                    if exit_class or env_error:
+                        detail = f"Environment issue running '{command}': "
+                        if exit_class:
+                            detail += f"{exit_class} (exit {proc.returncode})"
+                        elif env_error:
+                            detail += env_error[0]
+                        detail += f". Output: {output[:400]}"
+                        violations.append({
+                            "check": "environment_setup",
+                            "detail": detail,
+                        })
+                    else:
+                        violations.append({
+                            "check": "acceptance_checks",
+                            "detail": (
+                                f"Acceptance check failed (exit {proc.returncode}): {command}. "
+                                f"Output: {output[:500]}"
+                            ),
+                        })
                 else:
                     logger.info("Acceptance check passed: %s", command)
+            except FileNotFoundError:
+                violations.append({
+                    "check": "environment_setup",
+                    "detail": f"Binary not found for acceptance check: {tokens[0] if tokens else command}",
+                })
             except Exception as e:
                 violations.append({
                     "check": "acceptance_checks",

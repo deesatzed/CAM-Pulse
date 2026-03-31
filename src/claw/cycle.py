@@ -189,7 +189,8 @@ def _is_correctable_failure(
     drift misalignment, etc.) — the agent should see these and correct.
 
     Returns False for infrastructure failures (no agent, budget exceeded, HTTP errors,
-    missing API keys) — retrying won't help.
+    missing API keys, environment setup issues) — retrying won't help because the
+    agent can only edit files, not install dependencies or fix PATH.
     """
     # If the agent itself couldn't execute, don't retry
     if outcome.failure_reason:
@@ -197,8 +198,14 @@ def _is_correctable_failure(
         if error_sig in _NON_CORRECTABLE_FAILURES or error_sig.startswith("http_"):
             return False
 
-    # If verification found violations, those are typically correctable
+    # If verification found violations, check if any are environment_setup —
+    # those cannot be fixed by the agent (missing binaries, missing deps, etc.)
     if verification.violations:
+        has_env_violation = any(
+            v.get("check") == "environment_setup" for v in verification.violations
+        )
+        if has_env_violation:
+            return False
         return True
 
     # If not approved but no violations and no failure_reason, unclear — don't retry

@@ -40,6 +40,8 @@ llm_deep_check = true
 drift_threshold = 0.15
 quality_score_threshold = 0.60
 min_test_count = 0
+auto_install_deps = true
+auto_recovery_timeout = 120
 
 [security]
 autonomy_level = "SUPERVISED"
@@ -349,7 +351,7 @@ keep_alive = -1
 # When provider="ollama", q8_0 is applied via OLLAMA_KV_CACHE_TYPE env var.
 kv_cache_quantization = "q8_0"
 # Path to TurboQuant server binary (only used when provider="turboq")
-turboq_binary = "llama-server-turboq"
+turboq_binary = "/Users/o2satz/.local/bin/llama-server-turboq"
 
 # ---------------------------------------------------------------------------
 # Precomputes methodology corpus into structured text for KV cache injection.

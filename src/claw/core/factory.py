@@ -246,12 +246,14 @@ class ClawFactory:
 
         # Verifier
         from claw.verifier import Verifier
+        sentinel_cfg = config.sentinel if hasattr(config, "sentinel") else None
         verifier = Verifier(
             embedding_engine=embeddings,
-            banned_dependencies=getattr(config.sentinel, "banned_dependencies", []) if hasattr(config, "sentinel") else [],
-            drift_threshold=getattr(config.sentinel, "drift_threshold", 0.40) if hasattr(config, "sentinel") else 0.40,
+            banned_dependencies=getattr(sentinel_cfg, "banned_dependencies", []) if sentinel_cfg else [],
+            drift_threshold=getattr(sentinel_cfg, "drift_threshold", 0.40) if sentinel_cfg else 0.40,
             llm_client=llm_client,
-            min_test_count=getattr(config.sentinel, "min_test_count", 0) if hasattr(config, "sentinel") else 0,
+            min_test_count=getattr(sentinel_cfg, "min_test_count", 0) if sentinel_cfg else 0,
+            sentinel_config=sentinel_cfg,
         )
 
         # Health Monitor
