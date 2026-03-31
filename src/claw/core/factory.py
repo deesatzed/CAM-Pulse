@@ -140,6 +140,7 @@ class ClawFactory:
                 continue
             agent = _create_agent(agent_name, agent_cfg, workspace_dir=str(ws))
             if agent:
+                agent._max_concurrent = getattr(agent_cfg, "max_concurrent", 2)
                 agents[agent_name] = agent
 
         # CAG corpus loading — inject into all agents if enabled

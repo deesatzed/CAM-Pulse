@@ -8521,8 +8521,8 @@ async def _kb_search_async(query: str, limit: int) -> None:
         table.add_column("ID", width=8)
         table.add_column("Description", max_width=50)
         table.add_column("Domains", max_width=20)
+        table.add_column("BM25", justify="right", width=8)
         table.add_column("Novelty", justify="right", width=8)
-        table.add_column("Potential", justify="right", width=8)
         table.add_column("State", width=10)
 
         state_colors = {
@@ -8530,10 +8530,10 @@ async def _kb_search_async(query: str, limit: int) -> None:
             "declining": "magenta", "dormant": "dim", "dead": "red",
         }
 
-        for i, m in enumerate(text_results, 1):
+        for i, (m, bm25_rank) in enumerate(text_results, 1):
             domains = ", ".join((m.capability_data or {}).get("domain", [])[:3])
+            bm25_str = f"{bm25_rank:.2f}"
             novelty_str = f"{m.novelty_score:.3f}" if m.novelty_score is not None else "-"
-            potential_str = f"{m.potential_score:.3f}" if m.potential_score is not None else "-"
             color = state_colors.get(m.lifecycle_state, "")
             state_str = f"[{color}]{m.lifecycle_state}[/{color}]" if color else m.lifecycle_state
 
@@ -8542,8 +8542,8 @@ async def _kb_search_async(query: str, limit: int) -> None:
                 m.id[:8],
                 m.problem_description[:50],
                 domains,
+                bm25_str,
                 novelty_str,
-                potential_str,
                 state_str,
             )
 

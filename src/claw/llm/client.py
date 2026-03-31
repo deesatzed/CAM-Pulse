@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 from typing import Any, Optional
@@ -79,6 +80,7 @@ class LLMClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.config.timeout),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             )
         return self._client
 
@@ -311,8 +313,14 @@ class LLMClient:
 
 
 def _backoff_delay(attempt: int, base_seconds: float = 2.0) -> float:
-    """Exponential backoff: 2s, 4s, 8s, ... capped at 60s."""
-    return min(base_seconds * (2 ** attempt), 60)
+    """Exponential backoff with jitter, capped at 60s.
+
+    Adds up to 25% random jitter to prevent thundering-herd when
+    concurrent clients retry simultaneously.
+    """
+    delay = min(base_seconds * (2 ** attempt), 60)
+    jitter = random.uniform(0, delay * 0.25)
+    return delay + jitter
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:

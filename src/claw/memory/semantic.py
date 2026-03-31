@@ -295,7 +295,7 @@ class SemanticMemory:
         """
         # Search text for the task ID reference
         all_results = await self.repository.search_methodologies_text(str(task_id), limit=20)
-        return [m for m in all_results if m.source_task_id == task_id]
+        return [m for m, _rank in all_results if m.source_task_id == task_id]
 
     # -------------------------------------------------------------------
     # MEE: Outcome feedback loop

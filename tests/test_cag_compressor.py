@@ -108,7 +108,7 @@ class TestCompressText:
         assert result == text
 
     def test_long_text_gets_compressed(self):
-        """Text over min_input_chars should be compressed (via fallback)."""
+        """Text over min_input_chars should be compressed."""
         text = (
             "The system processes incoming requests through a validation pipeline. "
             "Each request is checked for authentication tokens and rate limits. "
@@ -125,7 +125,29 @@ class TestCompressText:
         )
         result = compress_text(text, max_output_chars=300, min_input_chars=100)
         assert len(result) < len(text)
-        # Should contain first and last sentence (extractive fallback)
+        # First sentence should always be preserved (both BART and extractive keep it)
+        assert "validation pipeline" in result
+
+    def test_extractive_keeps_first_and_last(self):
+        """Extractive fallback preserves first and last sentences."""
+        from claw.memory.cag_compressor import _compress_extractive
+
+        text = (
+            "The system processes incoming requests through a validation pipeline. "
+            "Each request is checked for authentication tokens and rate limits. "
+            "Valid requests are routed to the appropriate backend service. "
+            "The backend service processes the request and returns a response. "
+            "Error responses include detailed diagnostics for debugging. "
+            "All request metadata is logged for audit and monitoring purposes. "
+            "The pipeline supports graceful degradation during high load. "
+            "Circuit breakers prevent cascade failures across services. "
+            "Health checks run continuously to detect service anomalies. "
+            "The monitoring dashboard displays request latency percentiles. "
+            "Alert thresholds are configurable per service and per endpoint. "
+            "Automatic scaling triggers when latency exceeds the threshold."
+        )
+        result = _compress_extractive(text, max_output_chars=300)
+        assert len(result) < len(text)
         assert "validation pipeline" in result
         assert "threshold" in result
 

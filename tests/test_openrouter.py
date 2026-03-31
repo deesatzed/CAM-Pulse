@@ -513,10 +513,12 @@ class TestExecuteOpenRouter:
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
             with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
-                result = await agent.execute_openrouter(ctx)
+                with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                    result = await agent.execute_openrouter(ctx)
 
-        assert result.failure_reason == "http_429"
-        assert "Rate limit" in (result.failure_detail or "")
+        # 429 is now retried; persistent 429 exhausts retries
+        assert result.failure_reason == "max_retries"
+        assert result.tests_passed is False
 
     async def test_http_500_server_error(self):
         agent = GeminiAgent(mode=AgentMode.OPENROUTER, model="test/model")
@@ -527,9 +529,11 @@ class TestExecuteOpenRouter:
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
             with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
-                result = await agent.execute_openrouter(ctx)
+                with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                    result = await agent.execute_openrouter(ctx)
 
-        assert result.failure_reason == "http_500"
+        # 500 is now retried; persistent 500 exhausts retries
+        assert result.failure_reason == "max_retries"
         assert result.tests_passed is False
 
     async def test_http_error_without_json_body(self):
@@ -547,9 +551,11 @@ class TestExecuteOpenRouter:
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-key"}):
             with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_response):
-                result = await agent.execute_openrouter(ctx)
+                with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                    result = await agent.execute_openrouter(ctx)
 
-        assert result.failure_reason == "http_502"
+        # 502 is a 5xx error — retried and then exhausted
+        assert result.failure_reason == "max_retries"
         assert result.tests_passed is False
         assert result.duration_seconds >= 0
 
@@ -565,8 +571,10 @@ class TestExecuteOpenRouter:
                 new_callable=AsyncMock,
                 side_effect=httpx.ConnectError("Connection refused"),
             ):
-                result = await agent.execute_openrouter(ctx)
+                with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                    result = await agent.execute_openrouter(ctx)
 
+        # ConnectError is now retried; persistent failures exhaust retries
         assert result.failure_reason == "ConnectError"
         assert "Connection refused" in (result.failure_detail or "")
         assert result.tests_passed is False
@@ -581,8 +589,10 @@ class TestExecuteOpenRouter:
                 new_callable=AsyncMock,
                 side_effect=httpx.ReadTimeout("Read timed out"),
             ):
-                result = await agent.execute_openrouter(ctx)
+                with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                    result = await agent.execute_openrouter(ctx)
 
+        # ReadTimeout is now retried; persistent failures exhaust retries
         assert result.failure_reason == "ReadTimeout"
         assert result.tests_passed is False
 

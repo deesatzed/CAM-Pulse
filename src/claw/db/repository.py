@@ -771,8 +771,15 @@ class Repository:
                 results.append((meth, similarity))
         return results
 
-    async def search_methodologies_text(self, query: str, limit: int = 5) -> list[Methodology]:
-        """Full-text search on methodologies using FTS5."""
+    async def search_methodologies_text(
+        self, query: str, limit: int = 5
+    ) -> list[tuple[Methodology, float]]:
+        """Full-text search on methodologies using FTS5.
+
+        Returns list of (Methodology, bm25_rank) tuples. FTS5 rank is
+        negative (more negative = better match). Callers should normalize
+        before fusion.
+        """
         safe_query = _build_safe_fts5_query(query)
         if not safe_query:
             return []
@@ -785,11 +792,11 @@ class Repository:
             [safe_query, limit],
         )
 
-        results = []
+        results: list[tuple[Methodology, float]] = []
         for row in rows:
             meth = await self.get_methodology(row["methodology_id"])
             if meth:
-                results.append(meth)
+                results.append((meth, float(row["rank"])))
         return results
 
     async def get_methodology(self, methodology_id: str) -> Optional[Methodology]:

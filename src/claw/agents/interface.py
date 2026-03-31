@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -22,6 +23,30 @@ from typing import Any, Optional
 import httpx
 
 from claw.core.models import AgentHealth, AgentMode, AgentResult, TaskContext, TaskOutcome
+
+logger = logging.getLogger("claw.agent.interface")
+
+# ---------------------------------------------------------------------------
+# Module-level concurrency guard — enforces AgentConfig.max_concurrent
+# ---------------------------------------------------------------------------
+_AGENT_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_AGENT_SEMAPHORE_LIMIT: int = 0
+
+
+def get_agent_semaphore(max_concurrent: int = 2) -> asyncio.Semaphore:
+    """Return (or create) a module-level semaphore for agent HTTP calls."""
+    global _AGENT_SEMAPHORE, _AGENT_SEMAPHORE_LIMIT
+    if _AGENT_SEMAPHORE is None or _AGENT_SEMAPHORE_LIMIT != max_concurrent:
+        _AGENT_SEMAPHORE = asyncio.Semaphore(max_concurrent)
+        _AGENT_SEMAPHORE_LIMIT = max_concurrent
+    return _AGENT_SEMAPHORE
+
+
+def _agent_backoff_delay(attempt: int, base_seconds: float = 2.0) -> float:
+    """Exponential backoff with jitter for agent HTTP calls."""
+    delay = min(base_seconds * (2 ** attempt), 60)
+    jitter = random.uniform(0, base_seconds * 0.5)
+    return delay + jitter
 
 
 def _coerce_openrouter_content(choice: dict[str, Any]) -> str:
@@ -124,6 +149,7 @@ class AgentInterface(ABC):
             "total_successes": 0,
             "last_duration_seconds": 0.0,
         }
+        self._max_concurrent: int = 2  # Wired from AgentConfig.max_concurrent
         self._cag_corpus: str = ""
         self._cag_knowledge_budget: int = 16000
         self._token_budget: int = 100_000
@@ -302,11 +328,23 @@ class AgentInterface(ABC):
     async def execute_openrouter(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> TaskOutcome:
-        """Execute task via OpenRouter API (OpenAI-compatible).
+        """Execute task via OpenRouter API with retry + concurrency guard.
 
         All agents share this method. It uses OPENROUTER_API_KEY and
         the model specified in the agent's config. No native SDK needed.
+
+        Retries transient errors (429, 5xx, timeout, connect) with
+        exponential backoff + jitter. Bounded by module-level semaphore
+        wired from AgentConfig.max_concurrent.
         """
+        sem = get_agent_semaphore(self._max_concurrent)
+        async with sem:
+            return await self._execute_openrouter_inner(task, context)
+
+    async def _execute_openrouter_inner(
+        self, task: TaskContext, context: Optional[Any] = None
+    ) -> TaskOutcome:
+        """Inner OpenRouter execution with retry logic."""
         model = getattr(self, "model", None)
         if not model:
             return TaskOutcome(
@@ -367,19 +405,92 @@ class AgentInterface(ABC):
             if needs_structured:
                 payload["response_format"] = {"type": "json_object"}
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://github.com/deesatzed/CAM-Pulse",
-                        "X-Title": "CLAW",
-                    },
-                    json=payload,
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/deesatzed/CAM-Pulse",
+                "X-Title": "CLAW",
+            }
+            url = "https://openrouter.ai/api/v1/chat/completions"
+
+            # Retry with exponential backoff + jitter
+            max_retries = 3
+            last_error: Optional[Exception] = None
+            data: Optional[dict] = None
+
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+                        response = await client.post(url, headers=headers, json=payload)
+
+                    if response.status_code == 401:
+                        detail = "Invalid OPENROUTER_API_KEY."
+                        try:
+                            err_body = response.json()
+                            detail = err_body.get("error", {}).get("message", detail)
+                        except Exception:
+                            pass
+                        return TaskOutcome(
+                            agent_id=self.agent_id,
+                            failure_reason="http_401",
+                            failure_detail=detail,
+                            duration_seconds=time.monotonic() - start,
+                        )
+                    if response.status_code == 404:
+                        detail = f"Model not found: {model}"
+                        try:
+                            err_body = response.json()
+                            detail = err_body.get("error", {}).get("message", detail)
+                        except Exception:
+                            pass
+                        return TaskOutcome(
+                            agent_id=self.agent_id,
+                            failure_reason="http_404",
+                            failure_detail=detail,
+                            duration_seconds=time.monotonic() - start,
+                        )
+                    if response.status_code == 429:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Rate limited (429). Waiting %.1fs before retry %d/%d",
+                            delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    if response.status_code >= 500:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Server error %d. Waiting %.1fs before retry %d/%d",
+                            response.status_code, delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    response.raise_for_status()
+                    data = response.json()
+                    break  # Success
+
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Network error: %s. Waiting %.1fs before retry %d/%d",
+                            e, delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                    continue
+
+            if data is None:
+                duration = time.monotonic() - start
+                reason = type(last_error).__name__ if last_error else "max_retries"
+                detail = str(last_error) if last_error else f"Failed after {max_retries} attempts"
+                return TaskOutcome(
+                    agent_id=self.agent_id,
+                    failure_reason=reason,
+                    failure_detail=detail,
+                    duration_seconds=duration,
                 )
-                response.raise_for_status()
-                data = response.json()
 
             duration = time.monotonic() - start
 
@@ -431,14 +542,25 @@ class AgentInterface(ABC):
     async def execute_local(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> TaskOutcome:
-        """Execute task via a local LLM provider (Ollama, MLX, Atomic-Chat).
+        """Execute task via a local LLM provider with retry + concurrency guard.
 
         Uses the OpenAI-compatible /v1/chat/completions endpoint. When a
         KVCacheManager is active, the CAG corpus is sent as a stable system
         message to enable Ollama 0.19's automatic prefix caching — the MLX
         runner reuses KV state for byte-identical prefixes, eliminating
         re-processing of the corpus on every request.
+
+        Retries transient errors (429, 5xx, timeout) with exponential
+        backoff + jitter. Bounded by module-level semaphore.
         """
+        sem = get_agent_semaphore(self._max_concurrent)
+        async with sem:
+            return await self._execute_local_inner(task, context)
+
+    async def _execute_local_inner(
+        self, task: TaskContext, context: Optional[Any] = None
+    ) -> TaskOutcome:
+        """Inner local execution with retry logic."""
         model = getattr(self, "model", None)
         if not model:
             return TaskOutcome(
@@ -462,7 +584,6 @@ class AgentInterface(ABC):
         )
 
         if use_kv_prefix:
-            # Build prompt without CAG corpus — it's in the system message
             prompt = self._build_openrouter_prompt(task, context, skip_cag=True)
         else:
             prompt = self._build_openrouter_prompt(task, context)
@@ -470,21 +591,15 @@ class AgentInterface(ABC):
         start = time.monotonic()
 
         try:
-            # Build messages — KV cache prefix strategy uses system message
-            # for stable corpus, keeping task content in user message
             local_messages: list[dict[str, str]] = []
             local_needs_structured = self.can_use_internal_workspace_executor()
 
             if use_kv_prefix:
-                # KV cache path: stable system message = CAG corpus
-                # This prefix is byte-identical across requests, enabling
-                # Ollama 0.19 MLX runner to reuse cached KV state
                 local_messages.append({
                     "role": "system",
                     "content": kv_mgr.system_message,
                 })
                 if local_needs_structured:
-                    # Append structured output instructions to user message
                     prompt += (
                         "\n\n## Required Output Format\n"
                         "Return only valid JSON: "
@@ -515,18 +630,83 @@ class AgentInterface(ABC):
             if local_needs_structured:
                 local_payload["response_format"] = {"type": "json_object"}
 
-            # Add keep_alive for Ollama to prevent model/cache eviction
             if kv_mgr is not None:
                 local_payload["keep_alive"] = kv_mgr.keep_alive
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(local_timeout)) as client:
-                response = await client.post(
-                    endpoint,
-                    headers={"Content-Type": "application/json"},
-                    json=local_payload,
+            local_headers = {"Content-Type": "application/json"}
+
+            # Retry with exponential backoff + jitter
+            max_retries = 3
+            last_error: Optional[Exception] = None
+            data: Optional[dict] = None
+
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(local_timeout)) as client:
+                        response = await client.post(
+                            endpoint, headers=local_headers, json=local_payload,
+                        )
+
+                    if response.status_code == 429:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Local LLM rate limited (429). Waiting %.1fs before retry %d/%d",
+                            delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    if response.status_code >= 500:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Local LLM server error %d. Waiting %.1fs before retry %d/%d",
+                            response.status_code, delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    response.raise_for_status()
+                    data = response.json()
+                    break
+
+                except httpx.ConnectError as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Local LLM connect error. Waiting %.1fs before retry %d/%d",
+                            delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                    continue
+                except httpx.TimeoutException as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        delay = _agent_backoff_delay(attempt)
+                        self.logger.warning(
+                            "Local LLM timeout. Waiting %.1fs before retry %d/%d",
+                            delay, attempt + 1, max_retries,
+                        )
+                        await asyncio.sleep(delay)
+                    continue
+
+            if data is None:
+                duration = time.monotonic() - start
+                if isinstance(last_error, httpx.ConnectError):
+                    return TaskOutcome(
+                        agent_id=self.agent_id,
+                        failure_reason="local_unreachable",
+                        failure_detail=f"Local LLM endpoint not reachable at {endpoint} after {max_retries} attempts. "
+                                       f"Start Ollama (`ollama serve`) or MLX-LM (`mlx_lm.server --model ...`).",
+                        duration_seconds=duration,
+                    )
+                reason = type(last_error).__name__ if last_error else "max_retries"
+                detail = str(last_error) if last_error else f"Failed after {max_retries} attempts"
+                return TaskOutcome(
+                    agent_id=self.agent_id,
+                    failure_reason=reason,
+                    failure_detail=detail,
+                    duration_seconds=duration,
                 )
-                response.raise_for_status()
-                data = response.json()
 
             duration = time.monotonic() - start
 
@@ -543,7 +723,6 @@ class AgentInterface(ABC):
             tokens_used = prompt_tokens + eval_tokens
             model_used = data.get("model", model)
 
-            # Record KV cache metrics
             if kv_mgr is not None and use_kv_prefix:
                 kv_mgr.record_request(prompt_tokens, eval_tokens)
 
@@ -557,15 +736,6 @@ class AgentInterface(ABC):
                 duration_seconds=duration,
             )
 
-        except httpx.ConnectError:
-            duration = time.monotonic() - start
-            return TaskOutcome(
-                agent_id=self.agent_id,
-                failure_reason="local_unreachable",
-                failure_detail=f"Local LLM endpoint not reachable at {endpoint}. "
-                               f"Start Ollama (`ollama serve`) or MLX-LM (`mlx_lm.server --model ...`).",
-                duration_seconds=duration,
-            )
         except httpx.HTTPStatusError as e:
             duration = time.monotonic() - start
             detail = str(e)

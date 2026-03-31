@@ -433,9 +433,11 @@ class TestRepository:
         )
         await repository.save_methodology(m)
 
-        # FTS search
+        # FTS search (returns list[tuple[Methodology, float]])
         results = await repository.search_methodologies_text("connection pool")
         assert len(results) >= 1
+        assert isinstance(results[0], tuple)
+        assert isinstance(results[0][1], float)
 
         # Vec search
         vec_results = await repository.find_similar_methodologies([0.2] * 384)

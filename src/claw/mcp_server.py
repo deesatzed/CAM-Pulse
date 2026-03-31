@@ -408,7 +408,7 @@ class ClawMCPServer:
         results_data: list[dict[str, Any]] = []
         try:
             methodologies = await self.repository.search_methodologies_text(query, limit=limit)
-            for meth in methodologies:
+            for meth, bm25_rank in methodologies:
                 results_data.append({
                     "methodology_id": meth.id,
                     "problem_description": meth.problem_description,
@@ -420,7 +420,7 @@ class ClawMCPServer:
                     "lifecycle_state": meth.lifecycle_state,
                     "combined_score": None,
                     "vector_score": None,
-                    "text_score": None,
+                    "text_score": bm25_rank,
                 })
                 # Record retrieval
                 await self.repository.update_methodology_retrieval(meth.id)

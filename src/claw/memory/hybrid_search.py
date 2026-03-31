@@ -190,20 +190,26 @@ class HybridSearch:
             return []
 
     async def _text_search(self, query: str, limit: int) -> list[HybridSearchResult]:
-        """Execute full-text search."""
+        """Execute full-text search with real BM25 score normalization."""
         try:
             raw_results = await self.repository.search_methodologies_text(query, limit=limit)
 
             if not raw_results:
                 return []
 
-            # Normalize text scores to 0.0-1.0 range
-            # Since we don't get rank scores back from repository, assign
-            # descending scores based on position (first result = highest rank)
+            # FTS5 rank is negative: more negative = better match.
+            # Min-max normalize to [0, 1]: best_rank → 1.0, worst_rank → 0.0
+            ranks = [rank for _, rank in raw_results]
+            best_rank = min(ranks)    # most negative = best match
+            worst_rank = max(ranks)   # least negative = worst match
+            spread = worst_rank - best_rank
+
             results = []
-            for i, methodology in enumerate(raw_results):
-                # Linear decay: first result gets 1.0, last gets something > 0
-                text_score = 1.0 - (i / max(len(raw_results), 1))
+            for methodology, rank in raw_results:
+                if spread > 0:
+                    text_score = (worst_rank - rank) / spread
+                else:
+                    text_score = 1.0  # Single result or all identical ranks
                 results.append(
                     HybridSearchResult(
                         methodology=methodology,

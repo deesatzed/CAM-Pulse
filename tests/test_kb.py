@@ -304,13 +304,14 @@ class TestKBIntegration:
         assert stats["total_explored"] > 0
 
     async def test_search_finds_capabilities(self, repository):
-        """FTS5 search returns matching capabilities."""
+        """FTS5 search returns matching capabilities with BM25 rank."""
         await self._seed_full_kb(repository)
         results = await repository.search_methodologies_text("error handling", limit=5)
         assert len(results) > 0
         # Every result should mention "error" in the problem description
-        for m in results:
+        for m, rank in results:
             assert "error" in m.problem_description.lower()
+            assert isinstance(rank, float)
 
     async def test_capability_detail_by_prefix(self, repository):
         """Can retrieve full capability detail by prefix."""

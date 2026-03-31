@@ -357,7 +357,9 @@ class TestRepositoryMethodologyTextSearch:
 
         results = await repository.search_methodologies_text("memory leak")
         assert len(results) >= 1
-        assert results[0].problem_description == "Memory leak in connection pool"
+        meth, rank = results[0]
+        assert meth.problem_description == "Memory leak in connection pool"
+        assert isinstance(rank, float)
 
     async def test_returns_empty_for_no_match(self, repository):
         project, task = await _setup_project_and_task(repository)
@@ -418,7 +420,8 @@ class TestRepositoryMethodologyTextSearch:
 
         results = await repository.search_methodologies_text("Creation mode: new")
         assert len(results) >= 1
-        assert results[0].id == m.id
+        meth, _rank = results[0]
+        assert meth.id == m.id
 
 
 class TestRepositoryMethodologyByState:

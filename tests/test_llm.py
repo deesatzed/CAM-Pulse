@@ -29,12 +29,17 @@ class TestLLMResponse:
 
 class TestBackoff:
     def test_exponential(self):
-        assert _backoff_delay(0) == 2.0
-        assert _backoff_delay(1) == 4.0
-        assert _backoff_delay(2) == 8.0
+        # Base delay is exponential; jitter adds up to 25%
+        d0 = _backoff_delay(0)
+        d1 = _backoff_delay(1)
+        d2 = _backoff_delay(2)
+        assert 2.0 <= d0 <= 2.5   # 2.0 + up to 0.5 jitter
+        assert 4.0 <= d1 <= 5.0   # 4.0 + up to 1.0 jitter
+        assert 8.0 <= d2 <= 10.0  # 8.0 + up to 2.0 jitter
 
     def test_cap_at_60(self):
-        assert _backoff_delay(10) == 60.0
+        d = _backoff_delay(10)
+        assert 60.0 <= d <= 75.0  # 60.0 + up to 15.0 jitter (25%)
 
 
 class TestParseJson:
