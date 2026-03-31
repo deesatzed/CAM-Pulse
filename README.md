@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**2,663 tests** | **3,201 learned methodologies** | **345+ source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
+**2,871 tests** | **3,201 learned methodologies** | **345+ source repos** | **11 languages** | **4 agent backends** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -51,7 +51,9 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 2,663 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 2,871 tests passing. Zero skips with API keys configured.
+
+On first startup, CAM automatically loads **31 curated seed methodologies** covering its own algorithms (yield-priority mining, Kelly routing, EMA fitness, lifecycle management, correction loop, and more). No configuration needed — `cam govern stats` triggers seeding if the database is empty.
 
 ### Other Install Options
 
@@ -784,6 +786,50 @@ Configurable via `[deep_conf]` in `claw.toml`. Weights sum to 1.0.
 ### Co-Retrieval Stigmergic Links
 When multiple methodologies are retrieved together and the build succeeds, CAM records stigmergic links between them (`memory/semantic.py:record_co_retrieval_outcome()`). Future retrievals boost co-proven methodology pairs — patterns that work together surface together.
 
+### Seed Knowledge — Self-Aware from First Run
+
+Every fresh install of CAM ships with **31 curated seed methodologies** in `src/claw/data/seed/core_v1.jsonl`. On first startup, the factory auto-loads these into the methodology store with real embeddings — CAM immediately knows its own algorithms:
+
+- Yield-priority mining scoring
+- Kelly criterion routing
+- EMA fitness scoring
+- Lifecycle state machine
+- Inner correction loop
+- Knowledge injection with attribution
+- Content-hash dedup
+- Mining optimizations (README-first, .mineignore)
+
+Seed knowledge is tagged `origin:seed` and protected from lifecycle decay — seeds never drop below `viable` but can promote to `thriving` when proven through real use. Idempotent: running `cam kb seed` twice skips duplicates via content-hash dedup.
+
+```bash
+cam kb seed                      # Load seed knowledge (auto-runs on first startup)
+cam kb seed --force              # Re-seed even if seeds already exist
+cam kb seed --repair-embeddings  # Generate missing embeddings for existing records
+cam kb search "yield priority"   # Verify seed knowledge is searchable
+```
+
+### Yield-Priority Mining
+
+Mining repositories in alphabetical order wastes tokens on low-yield targets. Data from 90+ mined repos shows top yield at 0.7-1.25 findings per 1K tokens (small, focused repos) vs bottom yield at 0.00-0.035 (bloated or empty repos).
+
+CAM's `_score_yield_priority()` ranks candidates by expected knowledge yield before mining. 5-factor scoring (max 100 points):
+
+| Factor | Points | What It Measures |
+|--------|--------|-----------------|
+| **Recency** | 0-40 | Repos modified < 90 days get full points, linear decay to 2 years |
+| **File count sweet spot** | 0-25 | 20-500 files = goldilocks zone; < 10 or > 2000 penalized |
+| **Source kind** | 0-10 | Git repos score higher than loose source trees |
+| **Canonical sibling** | -20 | If another iteration already mined, marginal value drops |
+| **Size efficiency** | 0-25 | < 10 MB full points, > 200 MB nearly zero |
+
+Applied automatically before `mining_plan[:max_repos]` selection. Opt out with `--no-yield-sort`.
+
+```bash
+cam mine /path/to/repos --max-repos 10             # Yield-sorted by default
+cam mine /path/to/repos --no-yield-sort             # Alphabetical order
+cam mine-workspace /path --max-repos 20             # Workspace mining, also yield-sorted
+```
+
 ### Safety Mitigations
 - **`--dry-run`** on all destructive PULSE commands — preview without executing
 - **Auto-backup** before self-enhancement swaps
@@ -1019,6 +1065,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 3.75**: Resilience — Inner correction loop, metric expectations, HF-mount, freshness monitor, deepConf scoring, co-retrieval links, safety mitigations | **Complete** |
 | **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), CAM Swarm ganglion federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
 | **Phase 4**: Drive-Ops — 1.5TB ganglion mining marathon, content-hash dedup, brain federation proven at scale | **Complete** |
+| **Phase 4.5**: Self-Awareness — Seed knowledge system (31 curated methodologies ship with install), yield-priority mining (5-factor scoring), `_approve_record()` FTS5+embedding fix, `origin:seed` lifecycle protection | **Complete** |
 | **Phase 5**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
 | **Phase 6**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 

@@ -8,6 +8,30 @@ All notable changes to CAM-PULSE are documented here.
 
 ---
 
+## [0.8.0] - 2026-03-31
+
+### Added — Phase 4.5: Seed Knowledge + Yield-Priority Mining
+- **Seed knowledge system** (`src/claw/community/seeder.py`): 31 curated methodologies auto-loaded on first startup — CAM ships knowing its own algorithms
+- **Seed pack** (`src/claw/data/seed/core_v1.jsonl`): yield-priority mining, Kelly routing, EMA fitness, lifecycle management, correction loop, knowledge injection, content-hash dedup, mining optimizations
+- **`cam kb seed` CLI command**: `--force` to re-seed, `--repair-embeddings` to generate missing vectors, `--verbose` for debug output
+- **`origin:seed` lifecycle protection**: seed knowledge never decays below `viable`, can still promote to `thriving` when proven through real use
+- **Yield-priority mining** (`miner.py:_score_yield_priority()`): 5-factor scoring (recency, file count sweet spot, source kind, canonical sibling penalty, size efficiency) ranks mining candidates by expected knowledge yield
+- **`--yield-sort/--no-yield-sort`** flags on `cam mine` and `cam mine-workspace` — enabled by default
+- **Seed pack generator** (`scripts/generate_seed_pack.py`): extract curated methodologies from local DB to JSONL format
+- 20 new tests in `test_seeder.py`; all passing
+
+### Fixed
+- **`_approve_record()` in importer.py**: was writing to `methodologies` table but silently skipping FTS5 and embedding inserts — all community imports were invisible to both text and semantic search
+- **`test_community.py` FakeEngine**: added `methodology_fts` FTS5 table to in-memory schema for import tests
+
+### Changed
+- Test count: 2,663 → 2,871 passing (+208 from seed, yield-priority, and related tests)
+- `.gitignore`: added exceptions for `src/claw/data/` and `src/claw/data/seed/*.jsonl`
+- `pyproject.toml`: added `[tool.setuptools.package-data]` to ship seed JSONL files with `pip install`
+- Factory startup (`factory.py`): auto-seeds database after schema + embeddings initialization (non-fatal on failure)
+
+---
+
 ## [0.7.0] - 2026-03-30
 
 ### Added — Phase 5.1: Bayesian Kelly Criterion

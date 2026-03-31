@@ -90,7 +90,7 @@ Preflight the real provider path first:
 .venv/bin/cam doctor keycheck --for mine --live
 ```
 
-Real mining:
+Real mining (yield-sorted by default — high-value repos mined first):
 
 ```bash
 .venv/bin/cam mine /path/to/repo-folder \
@@ -99,9 +99,36 @@ Real mining:
   --max-minutes 20
 ```
 
+Alphabetical order (disable yield sort):
+
+```bash
+.venv/bin/cam mine /path/to/repo-folder --no-yield-sort --max-repos 4
+```
+
 Use this when:
 - you want CAM to learn from other repos
 - you want CAM memory enriched before building something new
+
+## 4b. Seed Knowledge (Auto-Loaded on First Run)
+
+CAM ships with 31 curated seed methodologies. They load automatically on first startup — no action needed.
+
+Manual re-seed (after data reset or upgrade):
+
+```bash
+.venv/bin/cam kb seed --force --verbose
+```
+
+Fix missing embeddings (if first run had no GOOGLE_API_KEY):
+
+```bash
+.venv/bin/cam kb seed --repair-embeddings
+```
+
+Use this when:
+- you deleted your database and want seed knowledge back
+- you added a `GOOGLE_API_KEY` after initial setup and want embeddings generated
+- you upgraded CAM and want to pick up new seed methodologies
 
 ## 5. Ask CAM For New App Ideas
 

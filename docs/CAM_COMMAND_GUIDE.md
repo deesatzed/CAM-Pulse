@@ -923,6 +923,7 @@ Key options:
 - `--force-rescan`: ignore the mining ledger and rescan selected repos
 - `--live-keycheck`: validate required provider keys with tiny real calls before live mining
 - `--tasks`: whether to generate tasks from findings
+- `--yield-sort/--no-yield-sort`: sort candidates by expected knowledge yield before mining (enabled by default). Yield-priority scoring ranks repos by recency, file count, source kind, canonical sibling overlap, and size efficiency. Data from 90+ mined repos shows 20-30x yield variance per token spent.
 
 Example use case: improve CAM itself
 
@@ -1478,6 +1479,49 @@ Example:
 ```bash
 cam kb synergies --limit 15
 ```
+
+### `cam kb seed`
+
+Purpose:
+Load built-in seed knowledge into the methodology store. Runs automatically on first startup.
+
+What it does:
+- discovers seed packs in `src/claw/data/seed/` (shipped with the package)
+- parses JSONL records and tags each with `origin:seed`
+- checks if seeding is needed (skips if seed records already exist)
+- imports each record into methodologies + FTS5 + embeddings (3-part write)
+- records content hashes for idempotent dedup
+
+Syntax:
+
+```bash
+cam kb seed [--force] [--repair-embeddings] [--verbose] [--config PATH]
+```
+
+Key options:
+- `--force`: re-seed even if seed records already exist in the database
+- `--repair-embeddings`: generate missing embeddings for existing methodologies (useful when first run had no `GOOGLE_API_KEY`)
+- `--verbose`: show detailed import progress and debug output
+
+Example: first-time seeding (happens automatically):
+
+```bash
+cam govern stats    # This triggers factory startup, which auto-seeds
+```
+
+Example: re-seed after data reset:
+
+```bash
+cam kb seed --force --verbose
+```
+
+Example: fix missing embeddings after adding an API key:
+
+```bash
+cam kb seed --repair-embeddings
+```
+
+Note: Seed knowledge is protected from lifecycle decay — `origin:seed` tagged methodologies never drop below `viable` but can promote to `thriving` when proven through real use. The seed pack ships 31 curated methodologies covering CAM's own algorithms.
 
 ## Recommended Workflows
 
