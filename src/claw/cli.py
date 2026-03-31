@@ -10725,6 +10725,101 @@ def status(
     asyncio.run(_run())
 
 
+@cag_app.command()
+def convert(
+    source: str = typer.Argument(..., help="Path to RAG source (directory, Chroma DB, LanceDB, or FAISS index)"),
+    fmt: Optional[str] = typer.Option(None, "--format", "-f", help="Source format: auto, directory, chroma, lancedb, faiss (default: auto-detect)"),
+    ganglion: str = typer.Option("imported", "--ganglion", "-g", help="Ganglion name for the converted cache"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+    max_docs: int = typer.Option(0, "--max-docs", "-n", help="Max documents to import (0 = all)"),
+    min_chars: int = typer.Option(50, "--min-chars", help="Skip documents shorter than this"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be imported without building cache"),
+) -> None:
+    """Convert an external RAG source into a CAG cache.
+
+    Reads documents from Chroma, LanceDB, FAISS, or plain file directories
+    and builds a CAG corpus that can be loaded into agent prompts.
+    """
+
+    async def _run() -> None:
+        from claw.core.config import load_config
+        from claw.memory.cag_retriever import CAGRetriever
+        from claw.memory.rag_adapter import adapt_to_methodologies, read_source
+
+        # Validate source path
+        source_path = Path(source).resolve()
+        if not source_path.exists():
+            console.print(f"[red]Source path does not exist: {source_path}[/red]")
+            return
+        if not source_path.is_dir():
+            console.print(f"[red]Source path is not a directory: {source_path}[/red]")
+            return
+
+        # Read documents
+        try:
+            docs, detected_fmt = read_source(source_path, fmt=fmt)
+        except ImportError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            return
+
+        console.print(f"Detected format: [bold]{detected_fmt}[/bold]")
+        console.print(f"  Found {len(docs)} documents")
+
+        # Filter short documents
+        original_count = len(docs)
+        docs = [d for d in docs if len(d.content) >= min_chars]
+        filtered_count = original_count - len(docs)
+        if filtered_count > 0:
+            console.print(f"  Filtered: {filtered_count} below {min_chars} char minimum")
+
+        # Limit document count
+        if max_docs > 0 and len(docs) > max_docs:
+            docs = docs[:max_docs]
+            console.print(f"  Limited to {max_docs} documents (--max-docs)")
+
+        if not docs:
+            console.print("[yellow]No documents to convert after filtering.[/yellow]")
+            return
+
+        total_chars = sum(len(d.content) for d in docs)
+
+        # Dry run — show stats and exit
+        if dry_run:
+            console.print(f"\n[bold]Dry run summary:[/bold]")
+            console.print(f"  Documents: {len(docs)}")
+            console.print(f"  Total chars: {total_chars:,}")
+            console.print(f"  Approx tokens: {total_chars // 4:,}")
+            console.print(f"  Target ganglion: {ganglion}")
+            console.print(f"\n  Sample documents:")
+            for i, doc in enumerate(docs[:3], 1):
+                title = doc.title or doc.source or "(untitled)"
+                console.print(f"    {i}. {title[:80]} ({len(doc.content):,} chars)")
+            return
+
+        # Convert to Methodology objects
+        console.print(f"  Converting {len(docs)} documents to CAG format...")
+        adapted = adapt_to_methodologies(docs)
+
+        # Load config and build cache
+        cfg = load_config(Path(config) if config else None)
+        retriever = CAGRetriever(cfg.cag)
+
+        console.print(f"\nBuilding CAG cache for ganglion [bold]{ganglion}[/bold]...")
+        meta = await retriever.build_cache(ganglion=ganglion, methodologies=adapted)
+
+        console.print(f"  Documents converted: {meta['methodology_count']}")
+        console.print(f"  Corpus tokens (approx): {meta['corpus_tokens_approx']:,}")
+        console.print(f"  Cache dir: {cfg.cag.cache_dir}/{ganglion}/")
+        console.print(f"  Built at: {meta['built_at']}")
+        console.print("[green]CAG cache built successfully.[/green]")
+        console.print(f"Use [bold]cam cag status -g {ganglion}[/bold] to verify.")
+
+    asyncio.run(_run())
+
+
 def app_main() -> None:
     """Entry point for the installed CLI."""
     app()

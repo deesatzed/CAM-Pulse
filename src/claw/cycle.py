@@ -85,11 +85,41 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
     return files_changed, "\n".join(lines)
 
 
+# Directories excluded from workspace snapshot/restore. These are either
+# VCS internals, build caches, or installed dependency trees that should
+# persist across correction attempts (otherwise auto-installed deps get
+# wiped and the next attempt fails with the same env error).
+_SNAPSHOT_EXCLUDE_DIRS = frozenset({
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "target",        # Rust/Cargo build dir
+    "dist",
+    "build",
+    ".next",
+    ".angular",
+})
+
+
+def _is_excluded_path(rel: Path) -> bool:
+    """Check if a relative path falls under any excluded directory."""
+    return any(part in _SNAPSHOT_EXCLUDE_DIRS for part in rel.parts)
+
+
 def _snapshot_workspace_content(workspace_dir: Optional[str]) -> dict[str, bytes]:
     """Snapshot workspace file CONTENTS (not just hashes) for restoration.
 
     Used by the correction loop to revert the workspace to its pre-attempt
     state before re-prompting the agent with feedback.
+
+    Excludes dependency directories (node_modules, venv, etc.) so that
+    auto-installed dependencies persist across correction attempts.
     """
     snapshot: dict[str, bytes] = {}
     if not workspace_dir:
@@ -103,7 +133,7 @@ def _snapshot_workspace_content(workspace_dir: Optional[str]) -> dict[str, bytes
         if not path.is_file():
             continue
         rel = path.relative_to(root)
-        if ".git" in rel.parts or "__pycache__" in rel.parts:
+        if _is_excluded_path(rel):
             continue
         try:
             snapshot[str(rel)] = path.read_bytes()
@@ -118,6 +148,9 @@ def _restore_workspace(workspace_dir: str, snapshot: dict[str, bytes]) -> None:
     - Files present in the snapshot are written back (created/overwritten).
     - Files NOT in the snapshot but currently on disk are removed.
     - Directories are cleaned up if empty after file removal.
+
+    Excludes dependency directories (node_modules, venv, etc.) so that
+    auto-installed dependencies are not wiped between correction attempts.
     """
     root = Path(workspace_dir)
     if not root.exists():
@@ -129,7 +162,7 @@ def _restore_workspace(workspace_dir: str, snapshot: dict[str, bytes]) -> None:
         if not path.is_file():
             continue
         rel = path.relative_to(root)
-        if ".git" in rel.parts or "__pycache__" in rel.parts:
+        if _is_excluded_path(rel):
             continue
         current_files.add(str(rel))
 
@@ -154,7 +187,7 @@ def _restore_workspace(workspace_dir: str, snapshot: dict[str, bytes]) -> None:
         if not dirpath.is_dir():
             continue
         rel = dirpath.relative_to(root)
-        if ".git" in rel.parts or "__pycache__" in rel.parts:
+        if _is_excluded_path(rel):
             continue
         try:
             dirpath.rmdir()  # Only succeeds if empty

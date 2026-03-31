@@ -1075,16 +1075,36 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 
 **Landing page**: [deesatzed.github.io/CAM-Pulse](https://deesatzed.github.io/CAM-Pulse/)
 
+### Getting Started
+
 | Doc | Purpose |
 |-----|---------|
+| [Getting Started](docs/GETTING_STARTED.md) | First 30 minutes: install, mine, see results |
 | [Command Guide](docs/CAM_COMMAND_GUIDE.md) | Every command, every flag |
+| [Operator Cheatsheet](docs/CAM_OPERATOR_CHEATSHEET.md) | Quick reference for daily use |
+| [Beginner Assimilation Guide](docs/CAM_BEGINNER_ASSIMILATION_GUIDE.md) | Two-path workflows for learning and building |
 | [Decision Tree](docs/CAM_COMMAND_DECISION_TREE.md) | Which command to use first |
-| [Operator Cheatsheet](docs/CAM_OPERATOR_CHEATSHEET.md) | Quick reference |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common errors and fixes |
+
+### Feature Guides
+
+| Doc | Purpose |
+|-----|---------|
+| [CAG Guide](docs/CAG_GUIDE.md) | Cache-Augmented Generation: vectorless, zero-latency knowledge retrieval |
+| [Local LLM Setup](docs/LOCAL_LLM_SETUP.md) | Ollama, TurboQuant, MLX-LM — zero cloud cost inference |
+| [KV Cache Guide](docs/KV_CACHE_GUIDE.md) | KV cache compression, TurboQuant turbo3/turbo4, A/B test results |
+| [Advanced Features](docs/ADVANCED_FEATURES.md) | Kelly routing, deepConf, prompt evolution, error KB, budget, pattern learning |
+| [Governance Tuning](docs/GOVERNANCE_TUNING.md) | Memory lifecycle, quotas, methodology management |
+| [Ganglion Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a specialist ganglion |
+
+### Proof and Examples
+
+| Doc | Purpose |
+|-----|---------|
 | [Proven Capabilities](docs/CAM_PROVEN_CAPABILITIES.md) | Evidence-backed claims |
 | [Plugin Event System](docs/CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) | Cross-repo synthesis proof |
 | [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
 | [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
-| [Ganglion Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a specialist ganglion |
 | [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
 
 ---
