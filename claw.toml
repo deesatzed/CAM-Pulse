@@ -89,7 +89,7 @@ quick_fixes = "grok"
 web_lookup = "grok"
 
 [kelly]
-enabled = false
+enabled = true
 kappa = 10.0
 f_max = 0.40
 min_exploration_floor = 0.02
@@ -208,10 +208,10 @@ max_budget_usd = 1.0
 # Ollama:     http://localhost:11434/v1
 
 [agents.local]
-enabled = false
+enabled = true
 mode = "local"
-model = ""
-local_base_url = "http://localhost:1337/v1"
+model = "qwen3.5:9b"
+local_base_url = "http://localhost:11434/v1"
 max_concurrent = 1
 timeout = 300
 max_budget_usd = 0.0
@@ -323,18 +323,69 @@ min_critical_threshold = 0.15    # Suppress results where critical factors below
 # ---------------------------------------------------------------------------
 # CAG — Cache-Augmented Generation (vectorless retrieval via KV cache)
 # ---------------------------------------------------------------------------
-# Precomputes methodology corpus into TurboQuant-compressed KV cache.
+# Local LLM backend configuration (Ollama 0.19+, MLX, Atomic-Chat, llama.cpp)
+# Controls KV cache settings for prefix caching.
+
+[local_llm]
+# Provider: "ollama" (native q8_0, 2x) or "turboq" (TurboQuant turbo3, ~4.9x).
+# TurboQuant is recommended for CAG workloads — same API, much better compression.
+# turboq requires llama-server-turboq (TheTom/llama-cpp-turboquant fork).
+provider = "ollama"
+base_url = "http://localhost:11434/v1"
+model = "qwen3.5:9b"
+timeout = 300
+ctx_size = 32768
+kv_cache_type = "q8_0"
+# keep_alive=-1 prevents model/KV cache eviction between requests.
+# Essential for prefix caching — the corpus system message stays cached.
+keep_alive = -1
+# KV cache quantization tiers:
+#   f16    = full precision (1x baseline)
+#   q8_0   = 8-bit (2x compression, Ollama default, safe quality)
+#   q4_0   = 4-bit (4x compression, measurable quality loss)
+#   turbo3 = TurboQuant 3.25-bit (~4.9x, near-zero quality loss) [RECOMMENDED]
+#   turbo4 = TurboQuant 4-bit (~6x, near-zero quality loss)
+# When provider="turboq", turbo3 is applied server-side via --cache-type-k turbo3.
+# When provider="ollama", q8_0 is applied via OLLAMA_KV_CACHE_TYPE env var.
+kv_cache_quantization = "q8_0"
+# Path to TurboQuant server binary (only used when provider="turboq")
+turboq_binary = "llama-server-turboq"
+
+# ---------------------------------------------------------------------------
+# Precomputes methodology corpus into structured text for KV cache injection.
 # When enabled, the CAG retriever loads cached context for instant,
 # perfectly-grounded retrieval — no vector search, no embedding noise.
-# Requires a local backend with /slots/ API (Phase 2).
+# Ollama 0.19 automatically caches the corpus system message prefix.
 
 [cag]
-enabled = false
+enabled = true
 cache_dir = "data/cag_caches"
 auto_rebuild_on_stale = false
 max_methodologies_per_cache = 2000
 serialization_format = "structured_text"
 max_solution_chars = 2000
+# Max chars of methodology corpus injected into CAG-eligible prompts.
+# 16K chars ≈ 4K tokens. Tuned via A/B testing on qwen3.5:9b (2026-03-31):
+#   8K  → marginal quality gain, 2.3x token cost (too small)
+#   16K → best quality/cost tradeoff for 9B model (selected)
+#   64K → 25% timeout rate, quality drop, 8.4x token cost (too large)
+# For larger models (32B+) or cloud, increase proportionally.
+knowledge_budget_chars = 16000
+
+# Token budget: max tokens for full prompt context assembly.
+# Should match the local model's context window. Default 100K for cloud models.
+token_budget_max = 100000
+
+# Context pointers: solutions > this threshold are replaced with compact
+# pointer blocks (problem + capability summary + reference ID).
+# Saves ~4x space per large methodology. Set to 0 to disable.
+context_pointer_threshold = 2000
+
+# Shorthand compression: compress long solution text via BART summarizer
+# at build time for 2-3x density. Requires `transformers` package.
+# Falls back to extractive compression if BART unavailable.
+shorthand_compression = false
+shorthand_max_solution_chars = 800
 
 # ---------------------------------------------------------------------------
 # Self-Enhancement Pipeline

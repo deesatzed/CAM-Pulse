@@ -3,11 +3,16 @@
 Validates that the CAG retrieval path is correctly wired into
 AgentInterface._build_openrouter_prompt() and _resolve_cag_context().
 
+Also validates token budget enforcement (L4) — the _token_budget attribute,
+set_token_budget(), _resolve_knowledge_source budget parameter, and the
+enforcement warning in _build_openrouter_prompt().
+
 All tests use REAL Pydantic model objects -- no mocks, no placeholders,
 no cached responses.
 """
 from __future__ import annotations
 
+import logging
 import pytest
 
 from claw.agents.interface import AgentInterface
@@ -264,19 +269,30 @@ class TestCagCorpusBudgetLimit:
     def test_cag_corpus_truncated_to_budget(self):
         """CAG corpus injection must respect the knowledge budget."""
         agent = _make_agent()
-        # Create a corpus larger than 8000 chars (the minimum budget)
+        # Create a corpus larger than the configured budget
+        budget = 5000
         large_corpus = "X" * 20000
+        agent.set_cag_corpus(large_corpus, knowledge_budget_chars=budget)
+
+        ctx = _make_task_context("mining_extraction")
+        prompt = agent._build_openrouter_prompt(ctx)
+
+        # The corpus text in the prompt must be truncated to the budget
+        x_count_in_prompt = prompt.count("X")
+        assert x_count_in_prompt <= budget
+        assert x_count_in_prompt > 0
+
+    def test_cag_corpus_uses_default_budget(self):
+        """CAG corpus uses 16K default budget when none specified."""
+        agent = _make_agent()
+        large_corpus = "Y" * 100000
         agent.set_cag_corpus(large_corpus)
 
         ctx = _make_task_context("mining_extraction")
         prompt = agent._build_openrouter_prompt(ctx)
 
-        # The corpus text in the prompt must be shorter than the full 20000 chars
-        # Budget is at least 8000 chars; the prompt should contain at most
-        # 8000 X chars from the corpus, not the full 20000
-        x_count_in_prompt = prompt.count("X")
-        assert x_count_in_prompt <= 8000
-        assert x_count_in_prompt > 0
+        y_count = prompt.count("Y")
+        assert y_count == 16000
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +324,214 @@ class TestHybridSearchFallbackPreserved:
         assert "CAG: full methodology corpus" in prompt
         # Standard HybridSearch header should NOT be present (CAG replaces it)
         assert "Retrieved Knowledge (from PULSE-mined methodologies)" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Test: Token Budget Enforcement (L4)
+# ---------------------------------------------------------------------------
+
+class TestTokenBudgetEnforcement:
+    """Validate that the token budget attribute, setter, and enforcement
+    logic work correctly across AgentInterface."""
+
+    def test_token_budget_default(self):
+        """New agent must have _token_budget defaulting to 100_000."""
+        agent = _make_agent()
+        assert agent._token_budget == 100_000
+
+    def test_set_token_budget(self):
+        """set_token_budget must update the _token_budget attribute."""
+        agent = _make_agent()
+        agent.set_token_budget(32000)
+        assert agent._token_budget == 32000
+
+    def test_set_token_budget_to_zero(self):
+        """Setting token budget to 0 must be stored (edge case)."""
+        agent = _make_agent()
+        agent.set_token_budget(0)
+        assert agent._token_budget == 0
+
+    def test_set_token_budget_large_value(self):
+        """Setting a large token budget must be stored."""
+        agent = _make_agent()
+        agent.set_token_budget(1_000_000)
+        assert agent._token_budget == 1_000_000
+
+    def test_resolve_knowledge_source_respects_budget(self):
+        """Token budget should limit knowledge chars via the formula."""
+        ctx = _make_task_context("analysis")
+        # With no context and no knowledge_override, should always return empty
+        methods, max_chars = AgentInterface._resolve_knowledge_source(
+            ctx, context=None, token_budget=1000
+        )
+        assert methods == []
+        assert max_chars == 0
+
+    def test_resolve_knowledge_source_default_budget(self):
+        """Default token_budget parameter should be 100_000."""
+        ctx = _make_task_context("analysis")
+        # Call without explicit token_budget — should use default 100_000
+        methods, max_chars = AgentInterface._resolve_knowledge_source(ctx, context=None)
+        assert methods == []
+        assert max_chars == 0
+
+    def test_resolve_knowledge_source_budget_limits_past_solutions(self):
+        """When context has past_solutions, budget should control max_chars.
+
+        Formula: max_chars = min(int(token_budget * 0.25 * 4), 8000)
+                 max_chars = max(max_chars, 2000)
+
+        With token_budget=1000:
+            raw = int(1000 * 0.25 * 4) = 1000
+            capped = min(1000, 8000) = 1000
+            floored = max(1000, 2000) = 2000
+        """
+        ctx = _make_task_context("analysis")
+
+        class FakeContext:
+            past_solutions = ["solution1"]
+
+        methods, max_chars = AgentInterface._resolve_knowledge_source(
+            ctx, context=FakeContext(), token_budget=1000
+        )
+        assert methods == ["solution1"]
+        assert max_chars == 2000  # Floor of 2000
+
+    def test_resolve_knowledge_source_large_budget_caps_at_8000(self):
+        """With a large token_budget the max_chars should cap at 8000.
+
+        With token_budget=100_000:
+            raw = int(100_000 * 0.25 * 4) = 100_000
+            capped = min(100_000, 8000) = 8000
+            floored = max(8000, 2000) = 8000
+        """
+        ctx = _make_task_context("analysis")
+
+        class FakeContext:
+            past_solutions = ["solution1", "solution2"]
+
+        methods, max_chars = AgentInterface._resolve_knowledge_source(
+            ctx, context=FakeContext(), token_budget=100_000
+        )
+        assert methods == ["solution1", "solution2"]
+        assert max_chars == 8000
+
+    def test_resolve_knowledge_source_mid_budget(self):
+        """With a mid-range token_budget the formula should produce the expected value.
+
+        With token_budget=5000:
+            raw = int(5000 * 0.25 * 4) = 5000
+            capped = min(5000, 8000) = 5000
+            floored = max(5000, 2000) = 5000
+        """
+        ctx = _make_task_context("analysis")
+
+        class FakeContext:
+            past_solutions = ["sol"]
+
+        methods, max_chars = AgentInterface._resolve_knowledge_source(
+            ctx, context=FakeContext(), token_budget=5000
+        )
+        assert methods == ["sol"]
+        assert max_chars == 5000
+
+    def test_token_budget_warning_logged_when_exceeded(self, caplog):
+        """When the prompt exceeds the token budget, a warning must be logged."""
+        agent = _make_agent()
+        # Set token budget to 1 so even a minimal prompt exceeds it.
+        # The shortest prompt is "# Task: <title>\n\n<desc>" which is at
+        # least 20+ chars = 5+ approx tokens, always exceeding budget=1.
+        agent.set_token_budget(1)
+
+        ctx = _make_task_context(
+            "analysis",
+            title="Analyze this codebase thoroughly",
+            description="Perform a comprehensive analysis of the entire repository",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="claw.agent.claude"):
+            prompt = agent._build_openrouter_prompt(ctx)
+
+        # The prompt must be at least 8+ chars (so >1 approx token at chars//4)
+        assert len(prompt) > 4
+
+        # Check that the warning was emitted
+        warning_found = any(
+            "Prompt exceeds token budget" in record.message
+            for record in caplog.records
+        )
+        assert warning_found, (
+            f"Expected 'Prompt exceeds token budget' warning in logs. "
+            f"Got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_no_warning_when_within_budget(self, caplog):
+        """When the prompt fits within the token budget, no warning should be logged."""
+        agent = _make_agent()
+        # Set a very large token budget
+        agent.set_token_budget(1_000_000)
+
+        ctx = _make_task_context("analysis", title="A task", description="desc")
+
+        with caplog.at_level(logging.WARNING, logger="claw.agent.claude"):
+            agent._build_openrouter_prompt(ctx)
+
+        warning_found = any(
+            "Prompt exceeds token budget" in record.message
+            for record in caplog.records
+        )
+        assert not warning_found, (
+            f"Did not expect 'Prompt exceeds token budget' warning but got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+
+    def test_token_budget_wired_into_prompt_knowledge_path(self):
+        """The _build_openrouter_prompt must pass _token_budget to _resolve_knowledge_source.
+
+        We verify by setting a tiny budget and checking the prompt does not
+        contain a huge knowledge section. With no CAG corpus and no
+        past_solutions, the knowledge section is empty either way, so we
+        test the complete code path doesn't crash.
+        """
+        agent = _make_agent()
+        agent.set_token_budget(500)
+
+        ctx = _make_task_context("analysis", title="task", description="desc")
+        prompt = agent._build_openrouter_prompt(ctx)
+
+        # Prompt should still be generated (not crash)
+        assert "# Task:" in prompt
+        # No knowledge section since there's no context
+        assert "Retrieved Knowledge" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Test: CAGConfig.token_budget_max field
+# ---------------------------------------------------------------------------
+
+class TestCAGConfigTokenBudgetMax:
+    """Validate that CAGConfig has the token_budget_max field."""
+
+    def test_cag_config_has_token_budget_max(self):
+        """CAGConfig must have token_budget_max with default 100_000."""
+        from claw.core.config import CAGConfig
+        cfg = CAGConfig()
+        assert cfg.token_budget_max == 100_000
+
+    def test_cag_config_token_budget_max_custom(self):
+        """CAGConfig token_budget_max must accept custom values."""
+        from claw.core.config import CAGConfig
+        cfg = CAGConfig(token_budget_max=32768)
+        assert cfg.token_budget_max == 32768
+
+    def test_cag_config_token_budget_max_in_clawconfig(self):
+        """ClawConfig.cag.token_budget_max must be accessible."""
+        from claw.core.config import ClawConfig
+        config = ClawConfig()
+        assert config.cag.token_budget_max == 100_000
+
+    def test_cag_config_token_budget_max_overridden_in_clawconfig(self):
+        """ClawConfig with custom CAG config must propagate token_budget_max."""
+        from claw.core.config import ClawConfig, CAGConfig
+        config = ClawConfig(cag=CAGConfig(token_budget_max=65536))
+        assert config.cag.token_budget_max == 65536

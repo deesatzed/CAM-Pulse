@@ -125,6 +125,85 @@ class ClawFactory:
             if agent:
                 agents[agent_name] = agent
 
+        # CAG corpus loading — inject into all agents if enabled
+        cag_loaded = False
+        cag_retriever = None
+        if config.cag.enabled:
+            from claw.memory.cag_retriever import CAGRetriever
+            cag_retriever = CAGRetriever(config.cag)
+            cag_loaded = await cag_retriever.load_cache(
+                config.instances.instance_name if hasattr(config, "instances") else "general"
+            )
+            if cag_loaded:
+                corpus = cag_retriever.get_corpus(
+                    config.instances.instance_name if hasattr(config, "instances") else "general"
+                )
+                budget = config.cag.knowledge_budget_chars
+                for agent in agents.values():
+                    agent.set_cag_corpus(corpus, knowledge_budget_chars=budget)
+                logger.info(
+                    "CAG corpus loaded into %d agents (budget=%d chars)",
+                    len(agents), budget,
+                )
+
+        # Token budget — derive from local model ctx_size or CAG config
+        # Priority: local agent config ctx_size (if a "local" agent is enabled)
+        #           > cag.token_budget_max (when CAG is enabled)
+        #           > default 100_000
+        local_agent_cfg = config.agents.get("local")
+        if local_agent_cfg and local_agent_cfg.enabled and local_agent_cfg.mode == "local":
+            # LocalLLMConfig.ctx_size is not on AgentConfig, but the
+            # orchestrator.max_tokens_per_task mirrors the intent. For local
+            # models the practical budget is the model's context window, which
+            # the user sets via cag.token_budget_max or orchestrator settings.
+            token_budget = config.cag.token_budget_max
+        elif config.cag.enabled:
+            token_budget = config.cag.token_budget_max
+        else:
+            token_budget = 100_000
+
+        for agent in agents.values():
+            agent.set_token_budget(token_budget)
+
+        if token_budget != 100_000:
+            logger.info(
+                "Token budget set to %d for %d agents",
+                token_budget, len(agents),
+            )
+
+        # KV cache manager — enable prefix caching for local agents
+        # when CAG is loaded and a local agent is configured.
+        # Tier 1: TurboQuant (turboq) — ~4.9x compression, near-lossless
+        # Tier 2: Ollama 0.19 MLX — 2x (q8_0) or 4x (q4_0) compression
+        # Both tiers use the same stable system message prefix strategy.
+        if config.cag.enabled and local_agent_cfg and local_agent_cfg.enabled:
+            from claw.memory.kv_cache_manager import KVCacheManager
+            local_llm_cfg = config.local_llm if hasattr(config, "local_llm") else None
+            keep_alive = local_llm_cfg.keep_alive if local_llm_cfg else -1
+            kv_quant = local_llm_cfg.kv_cache_quantization if local_llm_cfg else "q8_0"
+            provider = local_llm_cfg.provider if local_llm_cfg else "ollama"
+            kv_mgr = KVCacheManager(
+                keep_alive=keep_alive,
+                kv_cache_quantization=kv_quant,
+                provider=provider,
+            )
+
+            # Build the stable system message from the CAG corpus
+            corpus_for_kv = ""
+            if cag_loaded and cag_retriever is not None:
+                ganglion = config.instances.instance_name if hasattr(config, "instances") else "general"
+                corpus_for_kv = cag_retriever.get_corpus(ganglion)
+            if corpus_for_kv:
+                kv_mgr.build_system_message(corpus_for_kv, config.cag.knowledge_budget_chars)
+                for agent in agents.values():
+                    agent.set_kv_cache_manager(kv_mgr)
+                logger.info(
+                    "KV cache manager enabled: provider=%s, quant=%s (%.1fx), "
+                    "keep_alive=%d, system_msg=%d chars",
+                    provider, kv_quant, kv_mgr.compression_ratio,
+                    keep_alive, len(kv_mgr.system_message),
+                )
+
         # Dispatcher (with optional Kelly sizer)
         from claw.dispatcher import Dispatcher
         kelly_sizer = None

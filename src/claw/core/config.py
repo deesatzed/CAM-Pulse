@@ -115,13 +115,36 @@ class TokenTrackingConfig(BaseModel):
 
 
 class LocalLLMConfig(BaseModel):
-    """Configuration for local LLM providers (Ollama, MLX-LM, Atomic-Chat, llama.cpp)."""
-    provider: str = "ollama"  # ollama | mlx-server | atomic-chat | llama-cpp
+    """Configuration for local LLM providers.
+
+    Providers:
+        ollama      — Ollama 0.19+, MLX on Apple Silicon, native q8_0/q4_0 KV cache (2-4x).
+        turboq      — TurboQuant via llama-server-turboq (TheTom fork), turbo3 KV cache
+                      (~4.9x compression, near-zero quality loss). Ollama-compatible API.
+        mlx-server  — MLX-LM native server.
+        atomic-chat — Atomic Chat with tauri-plugin-llamacpp (port 1337).
+        llama-cpp   — Vanilla llama.cpp server.
+
+    KV cache quantization tiers (kv_cache_quantization):
+        f16     — Full precision, 1x (baseline).
+        q8_0    — 8-bit, 2x compression (Ollama default, safe quality).
+        q4_0    — 4-bit, 4x compression (Ollama, measurable quality loss).
+        turbo3  — TurboQuant 3.25-bit, ~4.9x compression, near-zero quality loss.
+        turbo4  — TurboQuant 4-bit variant, ~6x compression, near-zero quality loss.
+
+    TurboQuant (turbo3) is the recommended tier for long-context CAG workloads
+    on Apple Silicon. It provides 2.5x better compression than Ollama q8_0 with
+    no measurable quality degradation.
+    """
+    provider: str = "ollama"  # ollama | turboq | mlx-server | atomic-chat | llama-cpp
     base_url: str = "http://localhost:11434/v1"
     model: str = ""
     timeout: int = 300
     ctx_size: int = 32768  # 64GB default; set 131072 for 128GB
-    kv_cache_type: str = "f16"  # f16 | q4_0 | turbo3
+    kv_cache_type: str = "f16"  # f16 | q4_0 | q8_0 (legacy, prefer kv_cache_quantization)
+    keep_alive: int = -1  # -1 = never unload (keeps KV cache hot)
+    kv_cache_quantization: str = "q8_0"  # f16 | q8_0 | q4_0 | turbo3 | turbo4
+    turboq_binary: str = "llama-server-turboq"  # Path to TurboQuant server binary
 
 
 class AgentConfig(BaseModel):
@@ -288,6 +311,11 @@ class CAGConfig(BaseModel):
     max_methodologies_per_cache: int = 2000
     serialization_format: str = "structured_text"
     max_solution_chars: int = 2000
+    knowledge_budget_chars: int = 16000
+    token_budget_max: int = 100_000  # Max tokens for full context assembly
+    context_pointer_threshold: int = 2000  # Solutions > this get pointer format; 0 = disabled
+    shorthand_compression: bool = False  # Enable BART shorthand compression
+    shorthand_max_solution_chars: int = 800  # Max chars per solution after compression
 
 
 class PulseConfig(BaseModel):
@@ -426,6 +454,7 @@ class ClawConfig(BaseModel):
     community: CommunityConfig = Field(default_factory=CommunityConfig)
     instances: InstanceRegistryConfig = Field(default_factory=InstanceRegistryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    local_llm: LocalLLMConfig = Field(default_factory=LocalLLMConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
 

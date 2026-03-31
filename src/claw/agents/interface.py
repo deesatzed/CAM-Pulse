@@ -125,15 +125,47 @@ class AgentInterface(ABC):
             "last_duration_seconds": 0.0,
         }
         self._cag_corpus: str = ""
+        self._cag_knowledge_budget: int = 16000
+        self._token_budget: int = 100_000
+        self._kv_cache_manager: Optional[Any] = None  # KVCacheManager when enabled
 
-    def set_cag_corpus(self, corpus: str) -> None:
+    def set_cag_corpus(self, corpus: str, knowledge_budget_chars: int = 16000) -> None:
         """Set the CAG corpus for knowledge injection.
 
         When set, eligible task types will use this full corpus text
         instead of the top-K HybridSearch results. Call with an empty
         string to disable CAG injection.
+
+        Args:
+            corpus: The serialized methodology corpus text.
+            knowledge_budget_chars: Max chars of corpus to inject into prompt.
         """
         self._cag_corpus = corpus
+        self._cag_knowledge_budget = knowledge_budget_chars
+
+    def set_token_budget(self, budget: int) -> None:
+        """Set the token budget for context assembly.
+
+        This budget limits how many tokens (approximate, chars/4) the full
+        prompt can consume. It also controls how much knowledge from
+        HybridSearch results is injected into the prompt.
+
+        Args:
+            budget: Maximum token budget for context assembly.
+        """
+        self._token_budget = budget
+
+    def set_kv_cache_manager(self, manager: Any) -> None:
+        """Set the KV cache manager for prefix-based caching.
+
+        When set, execute_local() will use a stable system message
+        containing the CAG corpus, enabling Ollama 0.19's automatic
+        prefix caching for KV state reuse across requests.
+
+        Args:
+            manager: A KVCacheManager instance.
+        """
+        self._kv_cache_manager = manager
 
     @staticmethod
     def _resolve_cag_context(
@@ -399,10 +431,13 @@ class AgentInterface(ABC):
     async def execute_local(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> TaskOutcome:
-        """Execute task via a local LLM provider (Ollama or MLX-LM).
+        """Execute task via a local LLM provider (Ollama, MLX, Atomic-Chat).
 
-        Uses the OpenAI-compatible /v1/chat/completions endpoint that both
-        Ollama and mlx_lm.server expose. No API key required for local.
+        Uses the OpenAI-compatible /v1/chat/completions endpoint. When a
+        KVCacheManager is active, the CAG corpus is sent as a stable system
+        message to enable Ollama 0.19's automatic prefix caching — the MLX
+        runner reuses KV state for byte-identical prefixes, eliminating
+        re-processing of the corpus on every request.
         """
         model = getattr(self, "model", None)
         if not model:
@@ -415,14 +450,47 @@ class AgentInterface(ABC):
         local_base_url = getattr(self, "local_base_url", None) or "http://localhost:11434/v1"
         endpoint = f"{local_base_url.rstrip('/')}/chat/completions"
 
-        prompt = self._build_openrouter_prompt(task, context)
+        # When KV cache manager is active with a system message, build the
+        # prompt WITHOUT CAG corpus injection (it's in the system message).
+        # Otherwise, the standard path includes CAG in the user message.
+        kv_mgr = self._kv_cache_manager
+        use_kv_prefix = (
+            kv_mgr is not None
+            and kv_mgr.system_message
+            and self._cag_corpus
+            and self._resolve_cag_context(task, self._cag_corpus) is not None
+        )
+
+        if use_kv_prefix:
+            # Build prompt without CAG corpus — it's in the system message
+            prompt = self._build_openrouter_prompt(task, context, skip_cag=True)
+        else:
+            prompt = self._build_openrouter_prompt(task, context)
+
         start = time.monotonic()
 
         try:
-            # Build messages — add system message when structured output is needed
+            # Build messages — KV cache prefix strategy uses system message
+            # for stable corpus, keeping task content in user message
             local_messages: list[dict[str, str]] = []
             local_needs_structured = self.can_use_internal_workspace_executor()
-            if local_needs_structured:
+
+            if use_kv_prefix:
+                # KV cache path: stable system message = CAG corpus
+                # This prefix is byte-identical across requests, enabling
+                # Ollama 0.19 MLX runner to reuse cached KV state
+                local_messages.append({
+                    "role": "system",
+                    "content": kv_mgr.system_message,
+                })
+                if local_needs_structured:
+                    # Append structured output instructions to user message
+                    prompt += (
+                        "\n\n## Required Output Format\n"
+                        "Return only valid JSON: "
+                        '{"summary": "...", "file_operations": [{"path": "...", "action": "write", "content": "..."}]}'
+                    )
+            elif local_needs_structured:
                 local_messages.append({
                     "role": "system",
                     "content": (
@@ -438,6 +506,7 @@ class AgentInterface(ABC):
                 })
             local_messages.append({"role": "user", "content": prompt})
 
+            local_timeout = float(getattr(self, "timeout", 300) or 300)
             local_payload: dict[str, object] = {
                 "model": model,
                 "messages": local_messages,
@@ -446,7 +515,11 @@ class AgentInterface(ABC):
             if local_needs_structured:
                 local_payload["response_format"] = {"type": "json_object"}
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+            # Add keep_alive for Ollama to prevent model/cache eviction
+            if kv_mgr is not None:
+                local_payload["keep_alive"] = kv_mgr.keep_alive
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(local_timeout)) as client:
                 response = await client.post(
                     endpoint,
                     headers={"Content-Type": "application/json"},
@@ -465,8 +538,14 @@ class AgentInterface(ABC):
                     content = str(content or "")
 
             usage = data.get("usage", {})
-            tokens_used = (usage.get("prompt_tokens", 0) or 0) + (usage.get("completion_tokens", 0) or 0)
+            prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            eval_tokens = usage.get("completion_tokens", 0) or 0
+            tokens_used = prompt_tokens + eval_tokens
             model_used = data.get("model", model)
+
+            # Record KV cache metrics
+            if kv_mgr is not None and use_kv_prefix:
+                kv_mgr.record_request(prompt_tokens, eval_tokens)
 
             return TaskOutcome(
                 approach_summary=content[:500],
@@ -514,6 +593,7 @@ class AgentInterface(ABC):
     def _resolve_knowledge_source(
         task: "TaskContext",
         context: Optional[Any],
+        token_budget: int = 100_000,
     ) -> tuple[list[Any], int]:
         """Resolve knowledge to inject using 3-tier precedence.
 
@@ -521,6 +601,10 @@ class AgentInterface(ABC):
           1. Task-level override: task.knowledge_override (if present)
           2. Context past_solutions: retrieved methodologies from PULSE
           3. Default: empty (no knowledge injection)
+
+        The token_budget parameter controls how much of the context window
+        can be allocated to knowledge injection. A smaller budget means
+        less knowledge is injected.
 
         Returns (methodologies, budget_chars).
         """
@@ -534,8 +618,9 @@ class AgentInterface(ABC):
         if context is not None:
             past_solutions = getattr(context, "past_solutions", None) or []
             if past_solutions:
-                budget_remaining = getattr(context, "token_budget_remaining", 100_000)
-                max_chars = min(int(budget_remaining * 0.25 * 4), 8000)
+                # Use the explicit token_budget parameter instead of
+                # the dead getattr fallback on context.
+                max_chars = min(int(token_budget * 0.25 * 4), 8000)
                 max_chars = max(max_chars, 2000)
                 return (past_solutions, max_chars)
 
@@ -543,9 +628,17 @@ class AgentInterface(ABC):
         return ([], 0)
 
     def _build_openrouter_prompt(
-        self, task: TaskContext, context: Optional[Any] = None
+        self, task: TaskContext, context: Optional[Any] = None,
+        skip_cag: bool = False,
     ) -> str:
-        """Build prompt for OpenRouter execution. Agents can override."""
+        """Build prompt for OpenRouter execution. Agents can override.
+
+        Args:
+            task: The enriched task context.
+            context: Optional execution context with past solutions.
+            skip_cag: When True, skip CAG corpus injection (used when
+                the corpus is in the system message for KV cache reuse).
+        """
         parts = [f"# Task: {task.task.title}\n"]
         parts.append(task.task.description)
 
@@ -661,12 +754,12 @@ class AgentInterface(ABC):
         # inject the full corpus instead of individual HybridSearch results.
         # This gives broad-scan tasks (mining, novelty detection, etc.) access
         # to the complete methodology knowledge base in a single context window.
-        cag_text = self._resolve_cag_context(task, self._cag_corpus)
+        # When skip_cag=True, the corpus is in the system message (KV cache
+        # prefix strategy) — skip injection here to avoid duplication.
+        cag_text = None if skip_cag else self._resolve_cag_context(task, self._cag_corpus)
         if cag_text:
-            # Determine budget: use same calculation as HybridSearch path
-            # but allow larger budget for CAG since it replaces retrieval
-            _unused_solutions, hs_budget = self._resolve_knowledge_source(task, context)
-            knowledge_budget = max(hs_budget, 8000)
+            # Use configured CAG budget (default 16K chars ≈ 4K tokens)
+            knowledge_budget = self._cag_knowledge_budget
             parts.append(
                 "\n## Knowledge Base (CAG: full methodology corpus)\n"
                 "The following is the complete methodology corpus from the knowledge base. "
@@ -683,7 +776,9 @@ class AgentInterface(ABC):
         else:
             # Standard HybridSearch path: inject individual methodology patterns
             # Uses 3-tier precedence: task override > context past_solutions > empty
-            past_solutions, max_knowledge_chars = self._resolve_knowledge_source(task, context)
+            past_solutions, max_knowledge_chars = self._resolve_knowledge_source(
+                task, context, token_budget=self._token_budget
+            )
             if past_solutions:
                 knowledge_parts: list[str] = []
                 knowledge_chars = 0
@@ -805,6 +900,16 @@ class AgentInterface(ABC):
                 "- Use action `write` to create or replace a file.\n"
                 "- Use action `delete` only when removal is necessary.\n"
                 "- For standalone app requests, do not import CAM runtime code unless explicitly asked."
+            )
+
+        # --- Token budget enforcement logging ---
+        total_chars = sum(len(p) for p in parts)
+        total_tokens_approx = total_chars // 4
+        if total_tokens_approx > self._token_budget:
+            self.logger.warning(
+                "Prompt exceeds token budget: ~%d tokens > %d budget (task=%s)",
+                total_tokens_approx, self._token_budget,
+                getattr(task.task, 'title', 'unknown'),
             )
 
         return "\n".join(parts)

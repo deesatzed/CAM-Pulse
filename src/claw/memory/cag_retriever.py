@@ -84,7 +84,8 @@ class CAGRetriever:
         -------
         dict
             Metadata dict with keys: ganglion, methodology_count, built_at,
-            stale, corpus_tokens_approx, methodology_ids.
+            stale, corpus_tokens_approx, methodology_ids, pointer_count,
+            shorthand_compression.
         """
         # 1. Get methodologies -- either provided or from repository
         if methodologies is not None:
@@ -108,19 +109,37 @@ class CAGRetriever:
         # 3. Take top max_methodologies_per_cache
         top_methods = sorted_methods[: self._config.max_methodologies_per_cache]
 
-        # 4. Serialize using serialize_corpus() with config.max_solution_chars
+        # 4. Serialize using serialize_corpus() with config.max_solution_chars,
+        #    context_pointer_threshold for L2 compact pointers, and
+        #    shorthand_compression for L3 density compression.
         #    Note: serialize_corpus also sorts internally, but we pre-sort so
         #    the methodology_ids list matches the corpus order.
+        pointer_threshold = self._config.context_pointer_threshold
+        compress = self._config.shorthand_compression
+        compress_max_chars = self._config.shorthand_max_solution_chars
+
         corpus_text = serialize_corpus(
             top_methods,
             max_count=0,  # Already limited above
             max_solution_chars=self._config.max_solution_chars,
+            pointer_threshold=pointer_threshold,
+            compress=compress,
+            compress_max_chars=compress_max_chars,
         )
 
         # 5. Build metadata
         built_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         methodology_ids = [m.id for m in top_methods]
         corpus_tokens_approx = len(corpus_text) // 4
+
+        # Count how many methodologies got context pointers
+        pointer_count = sum(
+            1
+            for m in top_methods
+            if pointer_threshold > 0
+            and (m.solution_code or "")
+            and len(m.solution_code or "") > pointer_threshold
+        )
 
         meta = {
             "ganglion": ganglion,
@@ -129,6 +148,8 @@ class CAGRetriever:
             "stale": False,
             "corpus_tokens_approx": corpus_tokens_approx,
             "methodology_ids": methodology_ids,
+            "pointer_count": pointer_count,
+            "shorthand_compression": compress,
         }
 
         # 6. Write to disk
@@ -145,9 +166,11 @@ class CAGRetriever:
         self._meta[ganglion] = meta
 
         logger.info(
-            "CAG cache built for ganglion=%s: %d methodologies, ~%d tokens",
+            "CAG cache built for ganglion=%s: %d methodologies (%d pointers, compression=%s), ~%d tokens",
             ganglion,
             len(top_methods),
+            pointer_count,
+            compress,
             corpus_tokens_approx,
         )
 
@@ -247,7 +270,7 @@ class CAGRetriever:
 
         Returns a dict with keys:
             ganglion, methodology_count, built_at, stale,
-            corpus_tokens_approx, loaded
+            corpus_tokens_approx, loaded, pointer_count, shorthand_compression
         """
         meta = self._meta.get(ganglion, {})
         return {
@@ -257,6 +280,8 @@ class CAGRetriever:
             "stale": meta.get("stale", True),
             "corpus_tokens_approx": meta.get("corpus_tokens_approx", 0),
             "loaded": self.is_loaded(ganglion),
+            "pointer_count": meta.get("pointer_count", 0),
+            "shorthand_compression": meta.get("shorthand_compression", False),
         }
 
     def get_corpus(self, ganglion: str = "general") -> str:
