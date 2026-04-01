@@ -6,6 +6,25 @@
 
 ---
 
+## Automated: `cam camify`
+
+The `cam camify` command automates this entire guide in one step:
+
+```bash
+# Basic — analyze repo and generate enhancement plan
+cam camify /path/to/target-repo
+
+# With explicit goals
+cam camify /path/to/repo --goal "enhance error handling" --goal "learn for CAM KB"
+
+# With a domain guide file
+cam camify /path/to/repo --guide /path/to/repo/AI_Augment.md
+```
+
+This discovers what the repo does, cross-references with CAM's KB, and generates a step-by-step plan with concrete `cam` commands saved as markdown. Continue reading below for the manual process.
+
+---
+
 ## The Three-Phase Pipeline
 
 ```

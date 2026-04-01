@@ -52,6 +52,7 @@ from claw.cli._monolith import (  # noqa: F811
     # Constants (underscore-prefixed)
     _IDEA_DIR,
     _PREFLIGHT_DIR,
+    _CAMIFY_DIR,
     _FOUNDATION_CHARTER,
     _TRIGGER_KEYWORDS,
     _STOPWORDS,
@@ -188,6 +189,8 @@ from claw.cli._monolith import (  # noqa: F811
     mine_self,
     pulse_ingest_hf,
     # Top-level commands (used by grouped aliases and tests)
+    camify,
+    _camify_async,
     evaluate,
     enhance,
     fleet_enhance,

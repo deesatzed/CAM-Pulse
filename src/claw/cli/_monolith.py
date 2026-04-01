@@ -51,6 +51,7 @@ console = Console()
 ROOT_DIR = Path(__file__).resolve().parents[3]
 _IDEA_DIR = ROOT_DIR / "data" / "ideation"
 _PREFLIGHT_DIR = ROOT_DIR / "data" / "preflights"
+_CAMIFY_DIR = ROOT_DIR / "data" / "camify"
 
 learn_app = typer.Typer(
     name="learn",
@@ -2821,6 +2822,156 @@ def _assess_repo_expectation_baseline(analysis: dict[str, Any]) -> dict[str, Any
         "unmet": unmet,
         "summary": f"repo baseline matched {len(matched)}/{len(clauses)} expectation clauses",
     }
+
+
+# ---------------------------------------------------------------------------
+# cam camify — guided CAM-ification planner
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def camify(
+    repo: str = typer.Argument(..., help="Path to the target repository to CAM-ify"),
+    goal: list[str] = typer.Option([], "--goal", "-g", help="Enhancement goal (repeatable). Examples: 'enhance error handling', 'learn patterns for CAM KB'"),
+    guide: list[str] = typer.Option([], "--guide", help="Path to domain guide .md file (repeatable, auto-detected if omitted)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Path to save the plan markdown"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Analyze a repo, match with CAM's KB, and generate an executable enhancement plan.
+
+    Automates the manual CAM-ify workflow: discover what the repo does, cross-reference
+    with CAM's knowledge base of 2,895+ learned methodologies, and produce a step-by-step
+    plan with concrete 'cam' commands.
+
+    Examples:
+        cam camify /path/to/repo
+        cam camify /path/to/repo --goal "enhance error handling" --goal "learn for CAM KB"
+        cam camify /path/to/repo --guide /path/to/repo/AI_Augment.md
+    """
+    _setup_logging(verbose)
+
+    repo_path = Path(repo).resolve()
+    if not repo_path.exists():
+        console.print(f"[red]Repository path does not exist: {repo_path}[/red]")
+        raise typer.Exit(1)
+    if not repo_path.is_dir():
+        console.print(f"[red]Path is not a directory: {repo_path}[/red]")
+        raise typer.Exit(1)
+
+    asyncio.run(_camify_async(
+        repo_path=repo_path,
+        goals=goal,
+        guide_paths=[Path(g) for g in guide],
+        output_path=Path(output) if output else None,
+        config_path=config,
+    ))
+
+
+async def _camify_async(
+    repo_path: Path,
+    goals: list[str],
+    guide_paths: list[Path],
+    output_path: Path | None,
+    config_path: str | None,
+) -> None:
+    from claw.camify import (
+        CamifyDiscovery,
+        CamifyMatcher,
+        CamifyPlanner,
+        write_camify_artifact,
+    )
+    from claw.core.factory import ClawFactory
+
+    console.print(f"\n[bold]CAM-ify Planner: {repo_path.name}[/bold]")
+    console.print(f"  Target: {repo_path}")
+
+    # Interactive goal collection if none provided and TTY
+    if not goals and sys.stdin.isatty():
+        console.print("\n[cyan]No goals specified. Let's define them.[/cyan]")
+        while True:
+            g = _chat_prompt("Enhancement goal (e.g. 'enhance error handling')")
+            if g:
+                goals.append(g)
+            if not _chat_confirm("Add another goal?", default=False):
+                break
+    if not goals:
+        goals = ["enhance the repo"]
+
+    console.print(f"  Goals: {', '.join(goals)}")
+
+    # Phase 1: Discover
+    console.print("\n[cyan]Phase 1: Discovering repository...[/cyan]")
+    discovery = CamifyDiscovery()
+    profile = await discovery.discover(repo_path, guide_paths or None)
+
+    table = Table(title="Repository Profile")
+    table.add_column("Attribute", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Files", str(profile.file_count))
+    table.add_row("Languages", ", ".join(profile.languages) or "None")
+    table.add_row("README", "Yes" if profile.has_readme else "No")
+    table.add_row("CLAUDE.md", "Yes" if profile.has_claude_md else "No")
+    table.add_row("Tests", "Yes" if profile.has_tests else "No")
+    table.add_row("Guide files", ", ".join(profile.guide_files) or "None auto-detected")
+    table.add_row("Domain keywords", ", ".join(profile.domain_keywords[:10]) or "None extracted")
+    console.print(table)
+
+    # Phase 2: Match with KB
+    console.print("\n[cyan]Phase 2: Matching with CAM knowledge base...[/cyan]")
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
+    try:
+        matcher = CamifyMatcher()
+        matches = await matcher.match(
+            profile=profile,
+            semantic_memory=ctx.semantic_memory,
+            repository=ctx.repository,
+        )
+
+        match_table = Table(title="KB Match Results")
+        match_table.add_column("KB Size", style="cyan")
+        match_table.add_column("Matches", style="green")
+        match_table.add_column("Gaps", style="yellow")
+        match_table.add_row(
+            str(matches.kb_methodology_count),
+            str(len(matches.matched_methodologies)),
+            ", ".join(matches.gap_areas) or "None",
+        )
+        console.print(match_table)
+
+        if matches.matched_methodologies:
+            mt = Table(title="Top Matched Methodologies")
+            mt.add_column("#", style="dim")
+            mt.add_column("Problem", style="white")
+            mt.add_column("Score", style="green", justify="right")
+            for i, m in enumerate(matches.matched_methodologies[:5], 1):
+                mt.add_row(str(i), m.problem[:80], str(m.score))
+            console.print(mt)
+
+        # Phase 3: Generate plan
+        console.print("\n[cyan]Phase 3: Generating enhancement plan...[/cyan]")
+        planner = CamifyPlanner()
+        plan = planner.plan(profile, matches, goals)
+        plan_md = planner.render_markdown(plan)
+
+        # Save
+        out_path = write_camify_artifact(plan_md, plan, output_path)
+        console.print(f"\n[bold green]Plan saved to: {out_path}[/bold green]")
+        console.print(f"  JSON sidecar: {out_path.with_suffix('.json')}")
+        console.print(f"  Steps: {len(plan.steps)}")
+        console.print(f"  Goals: {len(plan.goals)}")
+
+        # Display plan summary
+        console.print(f"\n[bold]Plan Summary[/bold]")
+        for i, step in enumerate(plan.steps, 1):
+            opt = " [dim](optional)[/dim]" if not step.required else ""
+            console.print(f"  {i}. [{step.phase}] {step.purpose}{opt}")
+
+        console.print(f"\n[dim]To execute: review the plan, then run the commands in order.[/dim]")
+
+    finally:
+        await ctx.close()
 
 
 @app.command()
