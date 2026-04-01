@@ -1,0 +1,51 @@
+[project]
+name = "cag-core"
+version = "0.1.0"
+description = "Standalone Cache-Augmented Generation runtime — load and inject pre-built knowledge corpora"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "CAM-Pulse Project", email = "deesatzed@users.noreply.github.com"},
+]
+keywords = ["cag", "cache-augmented-generation", "llm", "knowledge-base", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/deesatzed/CAM-Pulse"
+Repository = "https://github.com/deesatzed/CAM-Pulse"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cag_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
