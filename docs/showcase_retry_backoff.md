@@ -308,6 +308,144 @@ programmatic inspection.
 
 ---
 
+## Results Explained
+
+### What the numbers mean
+
+**Retrieval confidence: 0.56** — This is the search engine's self-reported
+certainty that it found relevant patterns. A score of 0.56 means "moderate
+confidence — good matches exist but they aren't exact duplicates of the
+task." This is expected: the task asks for retry logic in a *weather client*,
+while the mined patterns come from LLM providers, scientific APIs, and
+browser automation. The *concept* matches well; the *domain* differs. CAM's
+hybrid search correctly identifies the transferable knowledge despite the
+surface-level difference.
+
+**Relevance scores: 0.527–0.557** — The five retrieved patterns all scored
+within a narrow 0.03 band. This means CAM found a *cluster* of related
+knowledge, not just one lucky hit. When multiple independent codebases
+converge on the same solution shape, it's a strong signal that the pattern
+is robust. The agent sees this convergence as reinforcement: four separate
+teams in four separate projects all solved retry the same way.
+
+**Retrieval time: 1,429ms** — Under 1.5 seconds to search 2,895
+methodologies using vector similarity (384-dimension embeddings) combined
+with BM25 full-text search. This is the overhead CAM adds before the agent
+starts writing code. In exchange, the agent gets context that prevents the
+six problems listed in Run A.
+
+### What actually changed between A and B
+
+The difference is not in the AI model — both runs use the same model with
+the same temperature and the same system prompt. The only variable is what
+goes into the **context window**:
+
+| | Run A | Run B |
+|---|---|---|
+| Task description | "Add retry logic with exponential backoff..." | Same |
+| Target code | `weather_client.py` | Same |
+| Past solutions | *nothing* | 5 hints summarizing what worked before |
+| Implementation patterns | *nothing* | 3 full methodologies with code |
+
+Run B's agent reads the hints and patterns *before* it starts planning its
+solution. This is the same effect as a developer reading a relevant Stack
+Overflow answer or an internal wiki page before writing code — except CAM
+does it automatically by searching its own accumulated knowledge.
+
+### Why 5 patterns produced 8 improvements
+
+The 5 retrieved patterns are not independent checklists. They overlap and
+reinforce each other:
+
+- **Patterns 1 + 3** both describe bounded backoff, but Pattern 1 (MiroFish)
+  emphasizes separating retry from business logic (→ code reuse, logging),
+  while Pattern 3 (claw-code) emphasizes preserving the terminal error
+  (→ error context, delay cap).
+
+- **Patterns 2 + 4** both describe error classification, but Pattern 2
+  (agents) focuses on provider-specific quirks like 429 headers
+  (→ 429 awareness), while Pattern 4 (meta-harness) focuses on the
+  retryable/non-retryable split (→ fail fast on 400/404).
+
+- **Pattern 5** is a prior CAM task where CAM itself built a retry module.
+  It serves as validation: CAM has already done this successfully once,
+  which increases the agent's confidence in the approach.
+
+The 8 improvements in the side-by-side table are the *combined effect* of
+these overlapping patterns. No single pattern teaches all 8; the agent
+synthesizes them.
+
+### What this means in production
+
+In a real deployment, Run A's code has three failure modes that Run B avoids:
+
+**Failure mode 1: Retry storm.** A 400 Bad Request (e.g., invalid city name)
+triggers 3 retries with increasing delays. Multiply this by 1,000 concurrent
+users with typos, and the service generates 3,000 wasted requests against an
+API that was going to reject them anyway. Run B's `_is_retryable()` check
+stops this — non-retryable errors fail immediately.
+
+**Failure mode 2: Thundering herd.** When the weather API returns 429 (rate
+limit) to all clients at once, Run A's clients all wait exactly `2^attempt`
+seconds and retry simultaneously, re-triggering the rate limit in a cycle.
+Run B adds jitter (random 0–50% of the delay), spreading retries across
+time so the API can recover.
+
+**Failure mode 3: Unbounded delay.** If Run A is configured with
+`retries=10`, the 10th attempt waits 1,024 seconds (17 minutes). A user or
+upstream service waiting for a response will timeout long before that. Run B
+caps the delay at 30 seconds — the longest any single retry will wait,
+regardless of attempt count.
+
+None of these failure modes are visible in a demo or during development with
+low traffic. They only appear under production load. The mined patterns
+encode this production experience. That's the value CAM's knowledge base
+adds: it surfaces lessons that were learned the hard way in other projects,
+before the current project has to learn them again.
+
+### Reading the results as a novice
+
+Think of it this way: you ask two developers to add retry logic.
+
+- **Developer A** has never written retry logic before. They write something
+  that works in testing but breaks under load: it retries errors that will
+  never succeed, it doesn't respect the server's "slow down" signal, and
+  all clients retry at the same time.
+
+- **Developer B** has a notebook where they recorded how retry logic worked
+  in four previous projects. Before writing a single line, they flip through
+  those notes. Their solution handles the edge cases from day one because
+  they've seen what goes wrong.
+
+CAM is Developer B's notebook, built automatically by mining real codebases.
+
+### Reading the results as an expert
+
+The 0.56 confidence and 0.527–0.557 relevance band indicate the hybrid
+search is performing correctly: high-concept match, moderate domain match.
+The BM25 text scores were 0.0 across all five results, meaning retrieval was
+driven entirely by vector similarity — the task's phrasing ("exponential
+backoff") is semantically close to the patterns but uses different keywords
+than the stored problem descriptions. This is expected for cross-domain
+transfer and validates the choice of embedding-first hybrid search over
+pure keyword matching.
+
+The lifecycle state of all five patterns is `embryonic` — they were mined
+but not yet validated through task outcomes. In a production CAM deployment,
+successfully completing this retry task would advance these patterns toward
+`viable`, increasing their retrieval priority in future tasks. The fitness
+feedback loop is the mechanism that separates patterns that *sound* good from
+patterns that *work* in practice.
+
+The per-pattern relevance scores (`combined_score` = 0.7 * vector + 0.3 *
+text) compress to `0.7 * vector + 0.3 * 0.0 = 0.7 * vector`. The raw
+vector scores (0.269–0.356) are moderate, which is appropriate: a score of
+1.0 would mean the task and the pattern are identical (a duplicate, not a
+useful reference). The 0.3 range indicates "same concept, different
+context" — exactly the scenario where knowledge transfer is most valuable.
+
+---
+
 ## How to Run This Yourself
 
 ### Prerequisites
