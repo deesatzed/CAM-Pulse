@@ -41,6 +41,7 @@ from claw.core.models import (
     VerificationResult,
 )
 from claw.llm.client import _parse_json_response
+from claw.logging_config import set_context, clear_context
 
 logger = logging.getLogger("claw.cycle")
 
@@ -1381,10 +1382,15 @@ class MicroClaw(ClawCycle):
 
         start = time.monotonic()
         try:
+            set_context(session_id=self.session_id, cycle_level=self.level)
+
             _step("grab", "Fetching next task...")
             target = await self.grab()
             if target is None:
+                clear_context()
                 return CycleResult(cycle_level=self.level, success=False)
+
+            set_context(task_id=getattr(target, "id", None), project_id=self.project_id)
 
             _step("evaluate", f"Analyzing: {target.title[:60]}")
             evaluation = await self.evaluate(target)
@@ -1392,6 +1398,7 @@ class MicroClaw(ClawCycle):
             _step("decide", "Selecting best agent...")
             decision = await self.decide(evaluation)
             agent_id = decision[0] if isinstance(decision, tuple) else "unknown"
+            set_context(agent_id=agent_id)
 
             # Inner correction loop: act + verify, with retries on correctable failures
             verification = await self._act_with_correction(decision, on_step=on_step)
@@ -1404,6 +1411,7 @@ class MicroClaw(ClawCycle):
             v_outcome = verification[2] if isinstance(verification, tuple) and len(verification) > 2 else TaskOutcome()
             v_result = verification[3] if isinstance(verification, tuple) and len(verification) > 3 else None
             _step("done", f"Cycle complete ({duration:.1f}s)")
+            clear_context()
             return CycleResult(
                 cycle_level=self.level,
                 task_id=getattr(target, "id", None),
@@ -1418,6 +1426,7 @@ class MicroClaw(ClawCycle):
         except Exception as e:
             duration = time.monotonic() - start
             logger.error("Cycle %s failed: %s", self.level, e, exc_info=True)
+            clear_context()
             return CycleResult(
                 cycle_level=self.level,
                 success=False,

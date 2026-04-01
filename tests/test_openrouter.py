@@ -28,8 +28,21 @@ from claw.agents.claude import ClaudeCodeAgent
 from claw.agents.codex import CodexAgent
 from claw.agents.gemini import GeminiAgent
 from claw.agents.grok import GrokAgent
-from claw.agents.interface import AgentInterface
+from claw.agents.interface import AgentInterface, get_local_llm_circuit, get_openrouter_circuit
 from claw.core.models import AgentHealth, AgentMode, Task, TaskContext, TaskOutcome
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker reset -- prevents state leaking between tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    get_openrouter_circuit().reset()
+    get_local_llm_circuit().reset()
+    yield
+    get_openrouter_circuit().reset()
+    get_local_llm_circuit().reset()
 
 
 # ---------------------------------------------------------------------------
@@ -516,8 +529,9 @@ class TestExecuteOpenRouter:
                 with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                     result = await agent.execute_openrouter(ctx)
 
-        # 429 is now retried; persistent 429 exhausts retries
-        assert result.failure_reason == "max_retries"
+        # 429 is retried; persistent 429 exhausts retries, fallback chain wraps result
+        assert result.failure_reason == "all_models_failed"
+        assert "max_retries" in (result.failure_detail or "")
         assert result.tests_passed is False
 
     async def test_http_500_server_error(self):
@@ -532,8 +546,9 @@ class TestExecuteOpenRouter:
                 with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                     result = await agent.execute_openrouter(ctx)
 
-        # 500 is now retried; persistent 500 exhausts retries
-        assert result.failure_reason == "max_retries"
+        # 500 is retried; persistent 500 exhausts retries, fallback chain wraps result
+        assert result.failure_reason == "all_models_failed"
+        assert "max_retries" in (result.failure_detail or "")
         assert result.tests_passed is False
 
     async def test_http_error_without_json_body(self):
@@ -554,8 +569,9 @@ class TestExecuteOpenRouter:
                 with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                     result = await agent.execute_openrouter(ctx)
 
-        # 502 is a 5xx error — retried and then exhausted
-        assert result.failure_reason == "max_retries"
+        # 502 is a 5xx error -- retried and then exhausted, fallback chain wraps result
+        assert result.failure_reason == "all_models_failed"
+        assert "max_retries" in (result.failure_detail or "")
         assert result.tests_passed is False
         assert result.duration_seconds >= 0
 
@@ -574,9 +590,9 @@ class TestExecuteOpenRouter:
                 with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                     result = await agent.execute_openrouter(ctx)
 
-        # ConnectError is now retried; persistent failures exhaust retries
-        assert result.failure_reason == "ConnectError"
-        assert "Connection refused" in (result.failure_detail or "")
+        # ConnectError is retried; persistent failures exhaust retries, fallback chain wraps
+        assert result.failure_reason == "all_models_failed"
+        assert "ConnectError" in (result.failure_detail or "")
         assert result.tests_passed is False
 
     async def test_timeout_error(self):
@@ -592,8 +608,9 @@ class TestExecuteOpenRouter:
                 with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                     result = await agent.execute_openrouter(ctx)
 
-        # ReadTimeout is now retried; persistent failures exhaust retries
-        assert result.failure_reason == "ReadTimeout"
+        # ReadTimeout is retried; persistent failures exhaust retries, fallback chain wraps
+        assert result.failure_reason == "all_models_failed"
+        assert "ReadTimeout" in (result.failure_detail or "")
         assert result.tests_passed is False
 
     # -- Response parsing edge cases --

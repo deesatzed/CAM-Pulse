@@ -9,6 +9,12 @@ backoff_base = 2.0
 backoff_cap = 60.0
 model_failure_threshold = 2
 model_cooldown_seconds = 90
+# SDK fallback model chain: when an agent's primary model fails (404, 5xx,
+# timeout), these models are tried in order before returning a failure.
+# This is model-level fallback (within one agent), separate from the
+# DegradationManager's agent-level fallback (which routes to a different agent).
+# Leave empty to disable model-level fallback.
+fallback_models = []
 
 [embeddings]
 model = "gemini-embedding-2-preview"
@@ -321,6 +327,13 @@ novelty_weight = 0.10
 provenance_weight = 0.10
 verification_weight = 0.15
 min_critical_threshold = 0.15    # Suppress results where critical factors below this
+
+# ---------------------------------------------------------------------------
+# Logging — structured JSON logging for observability
+# ---------------------------------------------------------------------------
+[logging]
+json_mode = false       # true → JSON lines instead of text logs
+log_file = ""           # path to write JSON log file (empty = stderr only)
 
 # ---------------------------------------------------------------------------
 # CAG — Cache-Augmented Generation (vectorless retrieval via KV cache)

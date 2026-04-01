@@ -430,6 +430,8 @@ SwarmConfig = InstanceRegistryConfig
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    json_mode: bool = False
+    log_file: str = ""
 
 
 class ClawConfig(BaseModel):

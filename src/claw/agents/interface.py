@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import time
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
@@ -47,6 +48,196 @@ def _agent_backoff_delay(attempt: int, base_seconds: float = 2.0) -> float:
     delay = min(base_seconds * (2 ** attempt), 60)
     jitter = random.uniform(0, base_seconds * 0.5)
     return delay + jitter
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker for LLM HTTP endpoints
+# ---------------------------------------------------------------------------
+
+class CircuitBreaker:
+    """Simple circuit breaker for LLM API endpoints.
+
+    States:
+      CLOSED  -- normal operation, calls go through
+      OPEN    -- fail fast, too many consecutive failures
+      HALF_OPEN -- cooldown expired, allow one probe call
+
+    After ``failure_threshold`` consecutive failures the circuit opens and
+    rejects calls for ``cooldown_seconds``. Once the cooldown expires the
+    circuit enters half-open state: the next call is a probe. If the probe
+    succeeds the circuit closes; if it fails the circuit reopens for another
+    cooldown period.
+
+    Thread-safe via a threading.Lock (the breaker state is read/written from
+    both sync helpers and async methods that may share a thread).
+    """
+
+    STATE_CLOSED = "closed"
+    STATE_OPEN = "open"
+    STATE_HALF_OPEN = "half_open"
+
+    def __init__(
+        self,
+        name: str,
+        failure_threshold: int = 5,
+        cooldown_seconds: float = 30.0,
+    ):
+        self.name = name
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+
+        self._lock = threading.Lock()
+        self._state: str = self.STATE_CLOSED
+        self._consecutive_failures: int = 0
+        self._opened_at: float = 0.0  # monotonic timestamp
+        self._total_rejected: int = 0
+        self._total_failures: int = 0
+
+    # -- public query ---------------------------------------------------------
+
+    @property
+    def state(self) -> str:
+        """Current breaker state (closed / open / half_open)."""
+        with self._lock:
+            return self._resolve_state()
+
+    @property
+    def consecutive_failures(self) -> int:
+        with self._lock:
+            return self._consecutive_failures
+
+    @property
+    def total_rejected(self) -> int:
+        with self._lock:
+            return self._total_rejected
+
+    @property
+    def total_failures(self) -> int:
+        with self._lock:
+            return self._total_failures
+
+    # -- call guard -----------------------------------------------------------
+
+    def allow_request(self) -> bool:
+        """Return True if a request should be attempted.
+
+        Returns False (and increments rejected counter) when the circuit is
+        OPEN. Returns True for CLOSED and HALF_OPEN (probe).
+        """
+        with self._lock:
+            resolved = self._resolve_state()
+            if resolved == self.STATE_OPEN:
+                self._total_rejected += 1
+                logger.warning(
+                    "CircuitBreaker[%s] OPEN -- rejecting request "
+                    "(%d consecutive failures, %.0fs remaining in cooldown)",
+                    self.name,
+                    self._consecutive_failures,
+                    max(0, self.cooldown_seconds - (time.monotonic() - self._opened_at)),
+                )
+                return False
+            if resolved == self.STATE_HALF_OPEN:
+                logger.info(
+                    "CircuitBreaker[%s] HALF_OPEN -- allowing probe request",
+                    self.name,
+                )
+            return True
+
+    # -- outcome recording ----------------------------------------------------
+
+    def record_success(self) -> None:
+        """Record a successful call. Resets failures and closes circuit."""
+        with self._lock:
+            was_open = self._state in (self.STATE_OPEN, self.STATE_HALF_OPEN)
+            self._consecutive_failures = 0
+            self._state = self.STATE_CLOSED
+            if was_open:
+                logger.info(
+                    "CircuitBreaker[%s] CLOSED after successful call",
+                    self.name,
+                )
+
+    def record_failure(self) -> None:
+        """Record a failed call. Opens circuit after threshold is reached."""
+        with self._lock:
+            self._consecutive_failures += 1
+            self._total_failures += 1
+            logger.warning(
+                "CircuitBreaker[%s] failure #%d (threshold=%d)",
+                self.name,
+                self._consecutive_failures,
+                self.failure_threshold,
+            )
+            if self._consecutive_failures >= self.failure_threshold:
+                if self._state != self.STATE_OPEN:
+                    logger.warning(
+                        "CircuitBreaker[%s] OPENED after %d consecutive failures -- "
+                        "fast-failing for %.0fs",
+                        self.name,
+                        self._consecutive_failures,
+                        self.cooldown_seconds,
+                    )
+                else:
+                    logger.warning(
+                        "CircuitBreaker[%s] remains OPEN after probe failure -- "
+                        "resetting cooldown for %.0fs",
+                        self.name,
+                        self.cooldown_seconds,
+                    )
+                self._state = self.STATE_OPEN
+                self._opened_at = time.monotonic()
+
+    def reset(self) -> None:
+        """Force-reset the circuit breaker to closed state."""
+        with self._lock:
+            self._consecutive_failures = 0
+            self._state = self.STATE_CLOSED
+            self._opened_at = 0.0
+            logger.info("CircuitBreaker[%s] force-reset to CLOSED", self.name)
+
+    # -- internals ------------------------------------------------------------
+
+    def _resolve_state(self) -> str:
+        """Resolve effective state, transitioning OPEN -> HALF_OPEN on cooldown expiry.
+
+        Must be called while holding self._lock.
+        """
+        if self._state == self.STATE_OPEN:
+            elapsed = time.monotonic() - self._opened_at
+            if elapsed >= self.cooldown_seconds:
+                self._state = self.STATE_HALF_OPEN
+                logger.info(
+                    "CircuitBreaker[%s] cooldown expired (%.1fs) -- entering HALF_OPEN",
+                    self.name,
+                    elapsed,
+                )
+                return self.STATE_HALF_OPEN
+        return self._state
+
+
+# Module-level circuit breakers -- one per endpoint type.
+# These persist across agent instances for the lifetime of the process.
+_openrouter_circuit = CircuitBreaker(
+    name="openrouter",
+    failure_threshold=5,
+    cooldown_seconds=30.0,
+)
+_local_llm_circuit = CircuitBreaker(
+    name="local_llm",
+    failure_threshold=5,
+    cooldown_seconds=30.0,
+)
+
+
+def get_openrouter_circuit() -> CircuitBreaker:
+    """Return the module-level OpenRouter circuit breaker."""
+    return _openrouter_circuit
+
+
+def get_local_llm_circuit() -> CircuitBreaker:
+    """Return the module-level local LLM circuit breaker."""
+    return _local_llm_circuit
+
 
 
 def _coerce_openrouter_content(choice: dict[str, Any]) -> str:
@@ -154,6 +345,7 @@ class AgentInterface(ABC):
         self._cag_knowledge_budget: int = 16000
         self._token_budget: int = 100_000
         self._kv_cache_manager: Optional[Any] = None  # KVCacheManager when enabled
+        self._fallback_models: list[str] = []  # SDK fallback model chain from config.llm
 
     def set_cag_corpus(self, corpus: str, knowledge_budget_chars: int = 16000) -> None:
         """Set the CAG corpus for knowledge injection.
@@ -192,6 +384,28 @@ class AgentInterface(ABC):
             manager: A KVCacheManager instance.
         """
         self._kv_cache_manager = manager
+
+    def set_fallback_models(self, models: list[str]) -> None:
+        """Set the SDK fallback model chain for OpenRouter execution.
+
+        When the primary model fails with a retryable error (model not found,
+        server error after retries, timeout after retries), the agent will try
+        each fallback model in order before returning a failure.
+
+        The fallback chain is independent of the DegradationManager's
+        agent-level fallback (which routes to a different agent entirely).
+        This provides model-level fallback within a single agent's execution.
+
+        Args:
+            models: List of OpenRouter model identifiers to try in order
+                    when the primary model fails. E.g.
+                    ["openai/gpt-4o-mini", "google/gemini-flash-1.5"].
+        """
+        self._fallback_models = list(models)
+        if models:
+            self.logger.info(
+                "Fallback model chain set: %s", ", ".join(models),
+            )
 
     @staticmethod
     def _resolve_cag_context(
@@ -344,9 +558,17 @@ class AgentInterface(ABC):
     async def _execute_openrouter_inner(
         self, task: TaskContext, context: Optional[Any] = None
     ) -> TaskOutcome:
-        """Inner OpenRouter execution with retry logic."""
-        model = getattr(self, "model", None)
-        if not model:
+        """Inner OpenRouter execution with retry logic and SDK fallback chain.
+
+        Tries the primary model first. If it fails with a retryable error
+        (model not found, server error after retries, network timeout after
+        retries), each fallback model in ``self._fallback_models`` is tried
+        in order.
+
+        Non-retryable errors (401 auth) abort immediately without fallback.
+        """
+        primary_model = getattr(self, "model", None)
+        if not primary_model:
             return TaskOutcome(
                 agent_id=self.agent_id,
                 failure_reason="no_model",
@@ -361,6 +583,19 @@ class AgentInterface(ABC):
                 failure_detail="OPENROUTER_API_KEY not set in environment.",
             )
 
+        # Circuit breaker: fail fast if OpenRouter endpoint is down
+        circuit = _openrouter_circuit
+        if not circuit.allow_request():
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason="circuit_open",
+                failure_detail=(
+                    f"OpenRouter circuit breaker is OPEN after "
+                    f"{circuit.consecutive_failures} consecutive failures. "
+                    f"Waiting for cooldown ({circuit.cooldown_seconds:.0f}s) before retrying."
+                ),
+            )
+
         prompt = self._build_openrouter_prompt(task, context)
         knowledge_sections = prompt.count("### Pattern:")
         self.logger.debug(
@@ -368,17 +603,86 @@ class AgentInterface(ABC):
             getattr(getattr(task, "task", None), "id", "?")[:8],
             len(prompt),
             knowledge_sections,
-            model,
+            primary_model,
         )
         if knowledge_sections > 0:
             self.logger.info(
                 "Injected %d PULSE methodology pattern(s) into agent prompt",
                 knowledge_sections,
             )
+
+        # Build the model chain: primary first, then fallbacks (deduped, order-preserved)
+        model_chain: list[str] = [primary_model]
+        for fb_model in self._fallback_models:
+            if fb_model and fb_model not in model_chain:
+                model_chain.append(fb_model)
+
+        # Try each model in the chain
+        chain_failures: list[str] = []
+        for chain_idx, current_model in enumerate(model_chain):
+            is_fallback = chain_idx > 0
+            if is_fallback:
+                self.logger.info(
+                    "Primary model failed, trying fallback model %d/%d: %s",
+                    chain_idx, len(model_chain) - 1, current_model,
+                )
+
+            outcome = await self._try_single_model_openrouter(
+                model=current_model,
+                api_key=api_key,
+                prompt=prompt,
+                task=task,
+            )
+
+            # Non-retryable failures: abort the chain immediately
+            if outcome.failure_reason in ("http_401", "no_api_key"):
+                return outcome
+
+            # Success: return the outcome
+            if outcome.failure_reason is None:
+                if is_fallback:
+                    self.logger.info(
+                        "Fallback model '%s' succeeded (primary '%s' failed)",
+                        current_model, primary_model,
+                    )
+                return outcome
+
+            # Retryable failure: log and continue to next model in chain
+            chain_failures.append(
+                f"{current_model}: {outcome.failure_reason} - {outcome.failure_detail}"
+            )
+
+        # All models in chain failed
+        failure_summary = "; ".join(chain_failures)
+        return TaskOutcome(
+            agent_id=self.agent_id,
+            failure_reason="all_models_failed",
+            failure_detail=(
+                f"All {len(model_chain)} model(s) in fallback chain failed. "
+                f"Details: {failure_summary}"
+            ),
+            duration_seconds=sum(
+                0.0 for _ in chain_failures  # duration tracked per-attempt
+            ),
+        )
+
+    async def _try_single_model_openrouter(
+        self,
+        model: str,
+        api_key: str,
+        prompt: str,
+        task: TaskContext,
+    ) -> TaskOutcome:
+        """Attempt a single model via OpenRouter with retry logic.
+
+        Returns a TaskOutcome. On success, failure_reason is None.
+        On failure, failure_reason is set (e.g. http_404, http_401,
+        TimeoutException, max_retries).
+        """
         start = time.monotonic()
 
         try:
-            # Build messages — add system message when structured output is needed
+            # Build messages -- add system message when structured output is needed
             messages: list[dict[str, str]] = []
             needs_structured = self.can_use_internal_workspace_executor()
             if needs_structured:
@@ -485,6 +789,7 @@ class AgentInterface(ABC):
                 duration = time.monotonic() - start
                 reason = type(last_error).__name__ if last_error else "max_retries"
                 detail = str(last_error) if last_error else f"Failed after {max_retries} attempts"
+                _openrouter_circuit.record_failure()
                 return TaskOutcome(
                     agent_id=self.agent_id,
                     failure_reason=reason,
@@ -493,6 +798,9 @@ class AgentInterface(ABC):
                 )
 
             duration = time.monotonic() - start
+
+            # Circuit breaker: record success -- OpenRouter API responded with parseable data
+            _openrouter_circuit.record_success()
 
             # Parse response
             choices = data.get("choices", [])
@@ -524,6 +832,10 @@ class AgentInterface(ABC):
                 detail = err_body.get("error", {}).get("message", detail)
             except Exception:
                 pass
+            # Record failure for server errors (5xx); client errors (4xx)
+            # are config issues and should not trip the circuit breaker.
+            if e.response.status_code >= 500:
+                _openrouter_circuit.record_failure()
             return TaskOutcome(
                 agent_id=self.agent_id,
                 failure_reason=f"http_{e.response.status_code}",
@@ -532,6 +844,7 @@ class AgentInterface(ABC):
             )
         except Exception as e:
             duration = time.monotonic() - start
+            _openrouter_circuit.record_failure()
             return TaskOutcome(
                 agent_id=self.agent_id,
                 failure_reason=type(e).__name__,
@@ -567,6 +880,19 @@ class AgentInterface(ABC):
                 agent_id=self.agent_id,
                 failure_reason="no_model",
                 failure_detail="No model configured for local mode. Set model in claw.toml.",
+            )
+
+        # Circuit breaker: fail fast if local LLM endpoint is down
+        local_circuit = _local_llm_circuit
+        if not local_circuit.allow_request():
+            return TaskOutcome(
+                agent_id=self.agent_id,
+                failure_reason="circuit_open",
+                failure_detail=(
+                    f"Local LLM circuit breaker is OPEN after "
+                    f"{local_circuit.consecutive_failures} consecutive failures. "
+                    f"Waiting for cooldown ({local_circuit.cooldown_seconds:.0f}s) before retrying."
+                ),
             )
 
         local_base_url = getattr(self, "local_base_url", None) or "http://localhost:11434/v1"
@@ -691,6 +1017,7 @@ class AgentInterface(ABC):
 
             if data is None:
                 duration = time.monotonic() - start
+                local_circuit.record_failure()
                 if isinstance(last_error, httpx.ConnectError):
                     return TaskOutcome(
                         agent_id=self.agent_id,
@@ -709,6 +1036,9 @@ class AgentInterface(ABC):
                 )
 
             duration = time.monotonic() - start
+
+            # Circuit breaker: record success — local LLM responded with parseable data
+            local_circuit.record_success()
 
             choices = data.get("choices", [])
             content = ""
@@ -744,6 +1074,8 @@ class AgentInterface(ABC):
                 detail = err_body.get("error", {}).get("message", detail)
             except Exception:
                 pass
+            if e.response.status_code >= 500:
+                local_circuit.record_failure()
             return TaskOutcome(
                 agent_id=self.agent_id,
                 failure_reason=f"http_{e.response.status_code}",
@@ -752,6 +1084,7 @@ class AgentInterface(ABC):
             )
         except Exception as e:
             duration = time.monotonic() - start
+            local_circuit.record_failure()
             return TaskOutcome(
                 agent_id=self.agent_id,
                 failure_reason=type(e).__name__,

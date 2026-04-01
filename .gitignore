@@ -15,6 +15,7 @@ env/
 
 # Testing/Coverage
 .coverage
+.coverage.*
 htmlcov/
 .pytest_cache/
 
@@ -53,6 +54,25 @@ Thumbs.db
 !tests/fixtures/**/*.jsonl
 !src/claw/data/seed/*.jsonl
 
+# Evaluation and report outputs
+*.evaluation.json
+*.evaluation.md
+*_report.html
+*_report.json
+evaluation_*/
+cag_export/
+
+# Loose evaluation/audit scratch files
+claim-gate-evaluation.json
+deep-analysis-evidence-gap.json
+driftx_audit.json
+sotappr_evaluation.json
+ultrathink_evaluation.md
+outcome_audit_report.md
+DEBT_TRACKER_EVALUATION.md
+app__mitigen_remediation_roadmap.md
+workspace-scan-report.md
+
 # Local working notes and agent instruction files
 CLAUDE.md
 AGENTS.md
@@ -81,11 +101,17 @@ page-agent/
 repo2e3/
 repoTst/
 tmp/
+/tmp/
 googembed.md
 medCSS.md
 updCAM.md
 full_history.txt
 history.txt
+
+# Scratch directories
+cl/
+evidence/
+templates/
 
 # Internal dev plans (removed from tracking)
 docs/CAM_FORGE_DECOUPLING_PLAN.md

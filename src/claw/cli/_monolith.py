@@ -48,7 +48,7 @@ app = typer.Typer(
 )
 console = Console()
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 _IDEA_DIR = ROOT_DIR / "data" / "ideation"
 _PREFLIGHT_DIR = ROOT_DIR / "data" / "preflights"
 
@@ -124,12 +124,12 @@ _FOUNDATION_CHARTER = [
 ]
 
 
-def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
+def _setup_logging(verbose: bool = False, json_mode: bool = False, log_file: str = "") -> None:
+    from claw.logging_config import setup_logging
+    setup_logging(
+        verbose=verbose,
+        json_mode=json_mode,
+        log_file=log_file or None,
     )
 
 
@@ -5135,6 +5135,7 @@ def mine(
     live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys with tiny real calls before live mining"),
     max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
     yield_sort: bool = typer.Option(True, "--yield-sort/--no-yield-sort", help="Sort candidates by expected yield before mining (default: on)"),
+    self_assess: bool = typer.Option(False, "--self-assess", help="After mining, classify findings as DUPLICATE/PARTIAL_GAP/NOVEL vs existing CAM knowledge"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -5147,6 +5148,7 @@ def mine(
     Use --scan-only to preview what repos would be mined without making
     any LLM calls. Use --no-dedup to include all iterations of each project.
     Use --no-yield-sort to mine in alphabetical order instead of by expected yield.
+    Use --self-assess to classify findings against existing knowledge after mining.
     """
     _setup_logging(verbose)
 
@@ -5191,6 +5193,7 @@ def mine(
                 dir_path, target, max_repos, min_relevance, tasks, config,
                 depth, dedup, skip_known, force_rescan, changed_only,
                 yield_sort=yield_sort,
+                self_assess=self_assess,
             ),
             timeout=max_minutes * 60,
         ))
@@ -5445,6 +5448,7 @@ async def _mine_async(
     force_rescan: bool = False,
     changed_only: bool = False,
     yield_sort: bool = True,
+    self_assess: bool = False,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -5559,6 +5563,52 @@ async def _mine_async(
             console.print(task_table)
 
         console.print(f"\n[dim]Use 'claw results' to view tasks, 'claw enhance .' to work on them.[/dim]")
+
+        # Self-assessment: classify findings vs existing knowledge
+        if self_assess and report.total_findings > 0:
+            console.print(f"\n[bold]Self-Assessment: classifying {report.total_findings} findings against existing knowledge[/bold]")
+            from claw.miner import assess_findings_against_existing
+            assessments = await assess_findings_against_existing(
+                report=report,
+                embedding_engine=ctx.embeddings,
+                repository=ctx.repository,
+                semantic_memory=ctx.semantic_memory,
+            )
+            if assessments:
+                assess_table = Table(title="Finding Classification")
+                assess_table.add_column("Finding", style="cyan", max_width=50)
+                assess_table.add_column("Class", width=14)
+                assess_table.add_column("Sim", justify="right", width=5)
+                assess_table.add_column("Closest Match", style="dim", max_width=45)
+
+                novel_count = 0
+                partial_count = 0
+                dup_count = 0
+                for a in assessments:
+                    if a["classification"] == "NOVEL":
+                        cls_style = "[green]NOVEL[/green]"
+                        novel_count += 1
+                    elif a["classification"] == "PARTIAL_GAP":
+                        cls_style = "[yellow]PARTIAL_GAP[/yellow]"
+                        partial_count += 1
+                    else:
+                        cls_style = "[dim]DUPLICATE[/dim]"
+                        dup_count += 1
+                    assess_table.add_row(
+                        a["title"][:48],
+                        cls_style,
+                        f"{a['similarity']:.2f}",
+                        a.get("closest_match", "-")[:43],
+                    )
+
+                console.print(assess_table)
+                console.print(
+                    f"\n  [green]{novel_count} novel[/green], "
+                    f"[yellow]{partial_count} partial gaps[/yellow], "
+                    f"[dim]{dup_count} duplicates[/dim]"
+                )
+            else:
+                console.print("[dim]  No findings to assess.[/dim]")
 
     finally:
         await ctx.close()
@@ -8074,6 +8124,130 @@ async def _prism_demo_async(verbose: bool) -> None:
 
     console.print(f"\n[bold green]PRISM demonstration complete.[/bold green]")
     console.print("[dim]PRISM adds hierarchical (p-adic), fault-tolerant (RNS), and uncertainty-aware (vMF) signals to standard cosine similarity.[/dim]")
+
+
+
+# ---------------------------------------------------------------------------
+# stats — Quick summary of this CAM ganglion
+# ---------------------------------------------------------------------------
+
+@app.command()
+def stats(
+    as_json: bool = typer.Option(False, "--json", help="Output machine-readable JSON to stdout"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show methodology count, repo count, ganglion name, and CAG cache status."""
+    _setup_logging(False)
+    asyncio.run(_stats_async(as_json=as_json, config_path=config))
+
+
+async def _stats_async(*, as_json: bool, config_path: Optional[str]) -> None:
+    """Gather counts from the database and CAG cache, then print."""
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+    from claw.db.repository import Repository
+
+    cfg = load_config(Path(config_path) if config_path else None)
+
+    # -- database counts --
+    engine = DatabaseEngine(cfg.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+    repo = Repository(engine)
+
+    try:
+        methodology_count = await repo.count_methodologies()
+        active_count = await repo.count_active_methodologies()
+        state_counts = await repo.count_methodologies_by_state()
+
+        # Count distinct source repos from tags (source:reponame)
+        import json as _json
+
+        tag_rows = await engine.fetch_all(
+            "SELECT tags FROM methodologies WHERE tags IS NOT NULL"
+        )
+        sources: set[str] = set()
+        for row in tag_rows:
+            tags = _json.loads(row["tags"]) if isinstance(row["tags"], str) else (row["tags"] or [])
+            for t in tags:
+                if isinstance(t, str) and t.startswith("source:"):
+                    sources.add(t[7:])
+        source_repo_count = len(sources)
+
+        # -- ganglion identity --
+        ganglion_name = cfg.instances.instance_name or "general"
+        ganglion_description = cfg.instances.instance_description or ""
+        federation_enabled = cfg.instances.enabled
+        sibling_count = len(cfg.instances.siblings)
+
+        # -- CAG cache status --
+        cag_status: dict = {"enabled": cfg.cag.enabled, "loaded": False, "methodology_count": 0}
+        if cfg.cag.enabled:
+            try:
+                from claw.memory.cag_retriever import CAGRetriever
+
+                retriever = CAGRetriever(cfg.cag)
+                await retriever.load_cache(ganglion=ganglion_name)
+                cag_status = retriever.get_status(ganglion=ganglion_name)
+            except Exception:
+                cag_status["error"] = "failed to load CAG cache"
+    finally:
+        await engine.close()
+
+    result = {
+        "ganglion": ganglion_name,
+        "ganglion_description": ganglion_description,
+        "methodology_count": methodology_count,
+        "active_methodology_count": active_count,
+        "source_repo_count": source_repo_count,
+        "lifecycle_states": state_counts,
+        "federation_enabled": federation_enabled,
+        "sibling_count": sibling_count,
+        "db_path": cfg.database.db_path,
+        "cag": cag_status,
+    }
+
+    if as_json:
+        import json as _json2
+        sys.stdout.write(_json2.dumps(result, indent=2) + "\n")
+    else:
+        from rich.panel import Panel
+
+        console.print(Panel.fit(
+            f"[bold cyan]CAM Stats[/bold cyan]  —  ganglion: [bold]{ganglion_name}[/bold]",
+            border_style="cyan",
+        ))
+
+        console.print(f"  Methodologies:       [bold]{methodology_count:,}[/bold]  ({active_count:,} active)")
+        console.print(f"  Source repos:        [bold]{source_repo_count:,}[/bold]")
+        console.print(f"  DB path:             {cfg.database.db_path}")
+
+        if ganglion_description:
+            console.print(f"  Description:         {ganglion_description}")
+
+        # Lifecycle breakdown
+        if state_counts:
+            parts = []
+            for state in ["thriving", "viable", "embryonic", "declining", "dormant", "dead"]:
+                cnt = state_counts.get(state, 0)
+                if cnt:
+                    parts.append(f"{state}={cnt}")
+            console.print(f"  Lifecycle:           {', '.join(parts)}")
+
+        # Federation
+        fed_str = "enabled" if federation_enabled else "disabled"
+        console.print(f"  Federation:          {fed_str}  ({sibling_count} sibling(s))")
+
+        # CAG
+        if cfg.cag.enabled:
+            loaded_str = "yes" if cag_status.get("loaded") else "no"
+            cag_meths = cag_status.get("methodology_count", 0)
+            cag_built = cag_status.get("built_at", "never")
+            stale_str = "yes" if cag_status.get("stale") else "no"
+            console.print(f"  CAG cache:           loaded={loaded_str}  meths={cag_meths}  built={cag_built}  stale={stale_str}")
+        else:
+            console.print("  CAG cache:           [dim]disabled[/dim]")
 
 
 # ---------------------------------------------------------------------------

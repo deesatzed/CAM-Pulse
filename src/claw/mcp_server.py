@@ -43,148 +43,12 @@ logger = logging.getLogger("claw.mcp_server")
 
 
 # ---------------------------------------------------------------------------
-# Tool schemas (MCP-compatible JSON Schema format)
+# Tool schemas — generated from Pydantic models in claw.tools.schemas
 # ---------------------------------------------------------------------------
 
-TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
-        "name": "claw_query_memory",
-        "description": (
-            "Query CLAW's semantic memory for relevant patterns, past fixes, "
-            "or known issues related to the current task. Returns up to ``limit`` "
-            "matching methodologies with their problem descriptions, solution "
-            "code, tags, and relevance scores."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Problem description or search terms to find similar past solutions.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return.",
-                    "default": 3,
-                },
-                "language": {
-                    "type": "string",
-                    "description": "Optional programming language filter (e.g. 'python', 'typescript').",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "claw_store_finding",
-        "description": (
-            "Store a discovered pattern, error fix, or insight in CLAW's semantic "
-            "memory. This persists the finding so future tasks across the entire "
-            "fleet can benefit from it."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "problem_description": {
-                    "type": "string",
-                    "description": "Natural language description of the problem solved or pattern discovered.",
-                },
-                "solution_code": {
-                    "type": "string",
-                    "description": "The code, configuration, or procedure that solves the problem.",
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Tags for categorizing the finding (e.g. ['auth', 'fastapi', 'security']).",
-                },
-                "methodology_type": {
-                    "type": "string",
-                    "description": "Type of finding: BUG_FIX, PATTERN, DECISION, or GOTCHA.",
-                    "enum": ["BUG_FIX", "PATTERN", "DECISION", "GOTCHA"],
-                },
-            },
-            "required": ["problem_description", "solution_code"],
-        },
-    },
-    {
-        "name": "claw_verify_claim",
-        "description": (
-            "Run claim-gate verification on a specific assertion about code. "
-            "Checks for placeholder patterns (TODO, FIXME, stubs, NotImplementedError), "
-            "validates the claim text against known claim patterns, and optionally "
-            "runs basic validation in the workspace directory."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "claim": {
-                    "type": "string",
-                    "description": "The claim to verify (e.g. 'all tests pass', 'no placeholders remain').",
-                },
-                "workspace_dir": {
-                    "type": "string",
-                    "description": "Optional path to the workspace directory for file-level verification.",
-                },
-            },
-            "required": ["claim"],
-        },
-    },
-    {
-        "name": "claw_request_specialist",
-        "description": (
-            "Request another agent to handle a subtask that the current agent "
-            "cannot do well. CLAW's dispatcher routes the subtask to the best-fit "
-            "agent based on learned Bayesian scores and the static routing table."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_description": {
-                    "type": "string",
-                    "description": "Description of the subtask that needs a specialist agent.",
-                },
-                "preferred_agent": {
-                    "type": "string",
-                    "description": (
-                        "Optional preferred agent ID ('claude', 'codex', 'gemini', 'grok'). "
-                        "The dispatcher may override this based on learned scores."
-                    ),
-                },
-            },
-            "required": ["task_description"],
-        },
-    },
-    {
-        "name": "claw_escalate",
-        "description": (
-            "Flag this task as beyond AI capability and escalate to a human. "
-            "This pauses autonomous processing and notifies the human operator "
-            "with full context about what was attempted and why escalation is needed."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "Why this task needs human intervention.",
-                },
-                "context": {
-                    "type": "object",
-                    "description": (
-                        "Additional context: what was attempted, error details, "
-                        "partial results, etc."
-                    ),
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "ID of the task being escalated (for traceability).",
-                },
-            },
-            "required": ["reason"],
-        },
-    },
-]
+from claw.tools.schemas import generate_mcp_tool_schemas, validate_tool_input
+
+TOOL_SCHEMAS: list[dict[str, Any]] = generate_mcp_tool_schemas()
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +162,23 @@ class ClawMCPServer:
 
         logger.info("Dispatching MCP tool call: %s(%s)", tool_name, _truncate_args(arguments))
 
+        # Validate inputs through Pydantic schemas
         try:
-            result = await handler(**arguments)
+            validated = validate_tool_input(tool_name, arguments)
+            validated_args = validated.model_dump(exclude_none=True)
+        except KeyError:
+            validated_args = arguments  # unknown tool — pass through
+        except Exception as ve:
+            logger.warning("MCP tool '%s' input validation failed: %s", tool_name, ve)
+            return {
+                "status": "error",
+                "tool": tool_name,
+                "error": f"Input validation failed: {ve}",
+                "error_type": "ValidationError",
+            }
+
+        try:
+            result = await handler(**validated_args)
             logger.info("MCP tool '%s' completed successfully", tool_name)
             return result
         except Exception as exc:

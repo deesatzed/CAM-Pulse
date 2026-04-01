@@ -2157,3 +2157,79 @@ def _default_scan_ledger_path(config: ClawConfig) -> Path:
     if db_path == ":memory:":
         return Path("data") / "mining_registry.json"
     return Path(db_path).resolve().parent / "mining_registry.json"
+
+
+async def assess_findings_against_existing(
+    report: MiningReport,
+    embedding_engine: Any,
+    repository: Repository,
+    semantic_memory: SemanticMemory,
+) -> list[dict[str, Any]]:
+    """Classify mined findings as DUPLICATE, PARTIAL_GAP, or NOVEL.
+
+    For each finding in the mining report, computes embedding similarity
+    against all existing methodologies in semantic memory.  Returns a list
+    of assessment dicts with classification, similarity score, and the
+    title of the closest existing methodology.
+
+    Thresholds:
+        cosine > 0.85  →  DUPLICATE
+        0.60 - 0.85    →  PARTIAL_GAP
+        < 0.60         →  NOVEL
+    """
+    assessments: list[dict[str, Any]] = []
+
+    for result in report.repo_results:
+        if result.skipped or result.error:
+            continue
+        for finding in result.findings:
+            query_text = f"{finding.title}: {finding.description[:200]}"
+
+            # Search for similar existing methodologies
+            try:
+                similar = await semantic_memory.search(
+                    query=query_text,
+                    limit=1,
+                )
+            except Exception as e:
+                logger.warning("Self-assess search failed for '%s': %s", finding.title[:40], e)
+                assessments.append({
+                    "title": finding.title,
+                    "classification": "NOVEL",
+                    "similarity": 0.0,
+                    "closest_match": f"(search error: {e})",
+                })
+                continue
+
+            if similar and len(similar) > 0:
+                best = similar[0]
+                # SemanticMemory.search returns Methodology objects or dicts
+                if hasattr(best, "problem_description"):
+                    match_title = (best.problem_description or "")[:80]
+                    sim_score = getattr(best, "similarity", 0.0)
+                elif isinstance(best, dict):
+                    match_title = (best.get("problem_description") or best.get("title", ""))[:80]
+                    sim_score = best.get("similarity", best.get("score", 0.0))
+                else:
+                    match_title = str(best)[:80]
+                    sim_score = 0.0
+            else:
+                match_title = "-"
+                sim_score = 0.0
+
+            if sim_score > 0.85:
+                classification = "DUPLICATE"
+            elif sim_score >= 0.60:
+                classification = "PARTIAL_GAP"
+            else:
+                classification = "NOVEL"
+
+            assessments.append({
+                "title": finding.title,
+                "classification": classification,
+                "similarity": sim_score,
+                "closest_match": match_title,
+                "source_repo": finding.source_repo,
+            })
+
+    return assessments

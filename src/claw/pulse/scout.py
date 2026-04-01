@@ -174,7 +174,7 @@ class XScout:
                     elif isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict):
-                                text_parts.append(block.get("text", ""))
+                                text_parts.append(block.get("text", "") or "")
         elif isinstance(output, str):
             text_parts.append(output)
 

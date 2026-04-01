@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import struct
+import time
 from typing import Optional
 
 import numpy as np
@@ -21,6 +22,10 @@ logger = logging.getLogger("claw.embeddings")
 # Lazy import — sentence-transformers is heavy and requires torch
 _SentenceTransformer = None
 _SENTENCE_TRANSFORMERS_AVAILABLE: bool | None = None
+
+# Retry configuration for Gemini API calls
+_GEMINI_MAX_ATTEMPTS = 3
+_GEMINI_BACKOFF_BASE = 2  # seconds: 2, 4, 8
 
 
 def _get_sentence_transformer():
@@ -44,6 +49,57 @@ def _get_sentence_transformer():
                 "Or use Gemini API embeddings (set embeddings.model to a gemini-embedding model in claw.toml)."
             )
     return _SentenceTransformer
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    """Return True if the exception is a transient Gemini/network error worth retrying."""
+    # Network-level errors
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+
+    # httpx transport errors (lazy check to avoid hard import)
+    exc_module = type(exc).__module__ or ""
+    if exc_module.startswith("httpx"):
+        exc_name = type(exc).__name__
+        if exc_name in (
+            "ConnectError",
+            "TimeoutException",
+            "ReadTimeout",
+            "WriteTimeout",
+            "ConnectTimeout",
+            "PoolTimeout",
+            "NetworkError",
+            "RemoteProtocolError",
+        ):
+            return True
+
+    # google.genai.errors — ServerError covers all 5xx
+    try:
+        from google.genai.errors import ServerError, ClientError
+        if isinstance(exc, ServerError):
+            return True
+        # ClientError with 429 (rate limit / resource exhausted)
+        if isinstance(exc, ClientError) and getattr(exc, "code", None) == 429:
+            return True
+    except ImportError:
+        pass
+
+    # google.api_core.exceptions (may be raised by underlying transport)
+    try:
+        from google.api_core import exceptions as gapi_exc
+        if isinstance(exc, (
+            gapi_exc.TooManyRequests,
+            gapi_exc.InternalServerError,
+            gapi_exc.BadGateway,
+            gapi_exc.ServiceUnavailable,
+            gapi_exc.GatewayTimeout,
+            gapi_exc.DeadlineExceeded,
+        )):
+            return True
+    except ImportError:
+        pass
+
+    return False
 
 
 class EmbeddingEngine:
@@ -153,6 +209,12 @@ class EmbeddingEngine:
         return []
 
     def _embed_with_gemini(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts via Gemini API with retry and exponential backoff.
+
+        Retries up to _GEMINI_MAX_ATTEMPTS times on transient errors
+        (network failures, 429 rate-limit, 5xx server errors) with
+        exponential backoff (2s, 4s, 8s).
+        """
         client = self._get_genai_client()
         from google.genai import types
 
@@ -162,18 +224,47 @@ class EmbeddingEngine:
         if self.config.task_type:
             embed_cfg["task_type"] = self.config.task_type
 
-        try:
-            resp = client.models.embed_content(
-                model=self.model_name,
-                contents=texts if len(texts) > 1 else texts[0],
-                config=types.EmbedContentConfig(**embed_cfg),
-            )
-            vectors = self._extract_values_from_genai_response(resp)
-            if not vectors:
-                raise RuntimeError("Gemini embeddings response contained no vectors")
-            return [self._normalize_dimension(v) for v in vectors]
-        except Exception as e:
-            raise RuntimeError(f"Gemini embeddings call failed: {e}") from e
+        text_preview = texts[0][:80] if texts else "<empty>"
+        last_exc: Exception | None = None
+
+        for attempt in range(1, _GEMINI_MAX_ATTEMPTS + 1):
+            try:
+                resp = client.models.embed_content(
+                    model=self.model_name,
+                    contents=texts if len(texts) > 1 else texts[0],
+                    config=types.EmbedContentConfig(**embed_cfg),
+                )
+                vectors = self._extract_values_from_genai_response(resp)
+                if not vectors:
+                    raise RuntimeError("Gemini embeddings response contained no vectors")
+                return [self._normalize_dimension(v) for v in vectors]
+            except Exception as e:
+                last_exc = e
+                if attempt < _GEMINI_MAX_ATTEMPTS and _is_retryable_gemini_error(e):
+                    backoff = _GEMINI_BACKOFF_BASE ** attempt  # 2, 4, 8
+                    logger.warning(
+                        "Gemini embed_content transient error (attempt %d/%d, "
+                        "backoff %ds, text='%s...'): %s",
+                        attempt,
+                        _GEMINI_MAX_ATTEMPTS,
+                        backoff,
+                        text_preview,
+                        e,
+                    )
+                    time.sleep(backoff)
+                    continue
+                # Non-retryable or final attempt -- fall through
+                if attempt >= _GEMINI_MAX_ATTEMPTS and _is_retryable_gemini_error(e):
+                    logger.error(
+                        "Gemini embed_content failed after %d attempts "
+                        "(text='%s...'): %s",
+                        _GEMINI_MAX_ATTEMPTS,
+                        text_preview,
+                        e,
+                    )
+                break
+
+        raise RuntimeError(f"Gemini embeddings call failed: {last_exc}") from last_exc
 
     def encode(self, text: str) -> list[float]:
         """Encode a single text string to a vector."""

@@ -3,14 +3,20 @@
 Manages async connections via aiosqlite and handles schema initialization.
 All queries flow through this engine; the Repository class builds on top.
 WAL mode is enabled on connect for concurrent read/write performance.
+busy_timeout=5000 is set at the connection level so SQLite internally
+retries for up to 5 seconds before raising SQLITE_BUSY.  Application-level
+retry logic (_retry_on_locked) provides a second defense layer with
+exponential backoff for prolonged contention (federation, PULSE scans, etc.).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 import aiosqlite
 import sqlite_vec
@@ -21,6 +27,82 @@ from claw.core.exceptions import ConnectionError, DatabaseError, SchemaInitError
 logger = logging.getLogger("claw.db")
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+T = TypeVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Retry helper for SQLite write contention
+# ---------------------------------------------------------------------------
+
+async def _retry_on_locked(
+    func: Callable[..., Any],
+    *args: Any,
+    max_retries: int = 3,
+    base_delay: float = 0.5,
+    **kwargs: Any,
+) -> Any:
+    """Call *func* and retry on 'database is locked' OperationalError.
+
+    This catches sqlite3.OperationalError (surfaced through aiosqlite) that
+    contain "database is locked" and retries with exponential backoff:
+        attempt 1 delay: 0.5s
+        attempt 2 delay: 1.0s
+        attempt 3 delay: 2.0s
+    If the final attempt still fails, the exception is re-raised.
+
+    Note: busy_timeout=5000 at the PRAGMA level is the *first* line of defense.
+    This helper only fires when busy_timeout itself is exhausted -- i.e. the
+    lock was held for >5 seconds continuously.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc):
+                raise
+            last_exc = exc
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "database is locked (attempt %d/%d), retrying in %.1fs",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "database is locked after %d attempts, giving up",
+                    max_retries + 1,
+                )
+        except Exception as exc:
+            # aiosqlite may wrap sqlite3 errors -- check the cause chain
+            cause = exc.__cause__ or exc
+            if (
+                isinstance(cause, sqlite3.OperationalError)
+                and "database is locked" in str(cause)
+            ):
+                last_exc = exc
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "database is locked (wrapped, attempt %d/%d), retrying in %.1fs",
+                        attempt + 1,
+                        max_retries + 1,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "database is locked (wrapped) after %d attempts, giving up",
+                        max_retries + 1,
+                    )
+            else:
+                raise
+    # All retries exhausted
+    raise last_exc  # type: ignore[misc]
 
 
 class DatabaseEngine:
@@ -34,6 +116,13 @@ class DatabaseEngine:
         async with engine.transaction():
             await engine.execute("INSERT INTO tasks ...")
             await engine.execute("UPDATE projects ...")
+
+    Connection pooling note:
+        This engine uses a single aiosqlite connection.  aiosqlite serializes
+        all operations through a dedicated background thread, so a pool of
+        connections would not improve write throughput (SQLite allows only one
+        writer at a time).  If read-heavy workloads become a bottleneck, consider
+        opening separate read-only connections with PRAGMA query_only=ON.
     """
 
     def __init__(self, config: DatabaseConfig):
@@ -62,6 +151,8 @@ class DatabaseEngine:
             # Enable WAL mode for concurrent reads
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA foreign_keys=ON")
+            # busy_timeout: SQLite will internally retry for up to 5 seconds
+            # before surfacing SQLITE_BUSY as an OperationalError.
             await self._conn.execute("PRAGMA busy_timeout=5000")
 
             logger.info("Connected to SQLite at %s (sqlite-vec loaded)", self.config.db_path)
@@ -473,26 +564,52 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration 15 applied: created community sharing tables")
 
+    # ------------------------------------------------------------------
+    # Write operations — wrapped with _retry_on_locked for contention
+    # ------------------------------------------------------------------
+
     async def execute(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> None:
-        """Execute a query without returning results."""
-        try:
+        """Execute a query without returning results.
+
+        Retries up to 3 times with exponential backoff if the database is
+        locked beyond the 5-second busy_timeout window.
+        """
+        async def _do() -> None:
             await self.conn.execute(query, params or [])
             await self.conn.commit()
+
+        try:
+            await _retry_on_locked(_do)
+        except (sqlite3.OperationalError, DatabaseError):
+            raise
         except Exception as e:
             raise DatabaseError(f"Query failed: {e}") from e
 
     async def execute_returning_lastrowid(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> int:
-        """Execute an INSERT and return lastrowid."""
-        try:
+        """Execute an INSERT and return lastrowid.
+
+        Retries up to 3 times with exponential backoff if the database is
+        locked beyond the 5-second busy_timeout window.
+        """
+        async def _do() -> int:
             cursor = await self.conn.execute(query, params or [])
             await self.conn.commit()
             return cursor.lastrowid or 0
+
+        try:
+            return await _retry_on_locked(_do)
+        except (sqlite3.OperationalError, DatabaseError):
+            raise
         except Exception as e:
             raise DatabaseError(f"Query failed: {e}") from e
+
+    # ------------------------------------------------------------------
+    # Read operations — no retry needed (WAL allows concurrent readers)
+    # ------------------------------------------------------------------
 
     async def fetch_one(
         self, query: str, params: Optional[Sequence[Any]] = None
@@ -518,13 +635,24 @@ class DatabaseEngine:
         except Exception as e:
             raise DatabaseError(f"Query failed: {e}") from e
 
+    # ------------------------------------------------------------------
+    # Transaction context manager
+    # ------------------------------------------------------------------
+
     @asynccontextmanager
     async def transaction(self):
-        """Context manager for explicit transactions."""
-        await self.conn.execute("BEGIN")
+        """Context manager for explicit transactions.
+
+        The BEGIN and COMMIT are retried if the database is locked. If lock
+        contention occurs *during* the transaction body (between BEGIN and
+        COMMIT), individual execute() calls inside the block handle their own
+        retries.  If COMMIT itself fails after retries, the transaction is
+        rolled back and the exception propagates.
+        """
+        await _retry_on_locked(self.conn.execute, "BEGIN")
         try:
             yield self
-            await self.conn.commit()
+            await _retry_on_locked(self.conn.commit)
         except Exception:
             await self.conn.rollback()
             raise

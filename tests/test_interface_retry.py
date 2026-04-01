@@ -1,10 +1,13 @@
-"""Tests for AgentInterface retry + semaphore enhancements.
+"""Tests for AgentInterface retry + semaphore + circuit breaker.
 
 Validates:
 - Retry logic in execute_openrouter() and execute_local()
 - Exponential backoff with jitter
 - Module-level semaphore enforcement
-- Non-retryable errors (401, 404) fail immediately
+- Non-retryable errors (401) fail immediately
+- Fallback chain wraps retryable errors (404, 500, timeout)
+- Circuit breaker opens after consecutive failures
+- Circuit breaker half-open probe and auto-reset
 """
 
 from __future__ import annotations
@@ -18,8 +21,11 @@ import pytest
 
 from claw.agents.interface import (
     AgentInterface,
+    CircuitBreaker,
     _agent_backoff_delay,
     get_agent_semaphore,
+    get_local_llm_circuit,
+    get_openrouter_circuit,
 )
 from claw.core.models import TaskContext, TaskOutcome
 
@@ -63,6 +69,16 @@ def _make_task() -> TaskContext:
         description="Test task",
     )
     return TaskContext(task=task, project_path="/tmp/test")
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    """Reset module-level circuit breakers before each test."""
+    get_openrouter_circuit().reset()
+    get_local_llm_circuit().reset()
+    yield
+    get_openrouter_circuit().reset()
+    get_local_llm_circuit().reset()
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +194,7 @@ class TestExecuteOpenrouterRetry:
 
     @pytest.mark.asyncio
     async def test_fails_after_max_retries_on_500(self):
-        """Persistent 500 errors exhaust retries."""
+        """Persistent 500 errors exhaust retries; fallback chain wraps as all_models_failed."""
         agent = _StubAgent()
         agent._max_concurrent = 10
         task = _make_task()
@@ -194,11 +210,14 @@ class TestExecuteOpenrouterRetry:
                     with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
                         outcome = await agent.execute_openrouter(task)
 
-        assert outcome.failure_reason == "max_retries"
+        # With the fallback chain, exhausted retries on a single model get
+        # wrapped in all_models_failed (even with no fallbacks configured).
+        assert outcome.failure_reason == "all_models_failed"
+        assert "max_retries" in outcome.failure_detail
 
     @pytest.mark.asyncio
     async def test_401_fails_immediately(self):
-        """401 is not retried — returns immediately."""
+        """401 is not retried -- returns immediately (non-retryable)."""
         agent = _StubAgent()
         agent._max_concurrent = 10
         task = _make_task()
@@ -220,8 +239,8 @@ class TestExecuteOpenrouterRetry:
         assert call_count == 1  # No retry
 
     @pytest.mark.asyncio
-    async def test_404_fails_immediately(self):
-        """404 is not retried — returns immediately."""
+    async def test_404_wrapped_by_fallback_chain(self):
+        """404 is fallback-eligible; with no fallbacks it becomes all_models_failed."""
         agent = _StubAgent()
         agent._max_concurrent = 10
         task = _make_task()
@@ -236,7 +255,8 @@ class TestExecuteOpenrouterRetry:
                 with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
                     outcome = await agent.execute_openrouter(task)
 
-        assert outcome.failure_reason == "http_404"
+        assert outcome.failure_reason == "all_models_failed"
+        assert "http_404" in outcome.failure_detail
 
     @pytest.mark.asyncio
     async def test_retries_on_timeout(self):
@@ -348,3 +368,314 @@ class TestExecuteLocalRetry:
                     outcome = await agent.execute_local(task)
 
         assert outcome.failure_reason == "local_unreachable"
+
+
+# ---------------------------------------------------------------------------
+# CircuitBreaker unit tests
+# ---------------------------------------------------------------------------
+
+class TestCircuitBreaker:
+    """CircuitBreaker state machine and behavior."""
+
+    def test_initial_state_is_closed(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=10)
+        assert cb.state == CircuitBreaker.STATE_CLOSED
+        assert cb.consecutive_failures == 0
+        assert cb.total_rejected == 0
+        assert cb.total_failures == 0
+
+    def test_allows_requests_when_closed(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=10)
+        assert cb.allow_request() is True
+
+    def test_stays_closed_below_threshold(self):
+        cb = CircuitBreaker("test", failure_threshold=5, cooldown_seconds=10)
+        for _ in range(4):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_CLOSED
+        assert cb.consecutive_failures == 4
+        assert cb.allow_request() is True
+
+    def test_opens_at_threshold(self):
+        cb = CircuitBreaker("test", failure_threshold=5, cooldown_seconds=10)
+        for _ in range(5):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        assert cb.consecutive_failures == 5
+
+    def test_rejects_requests_when_open(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=100)
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        assert cb.allow_request() is False
+        assert cb.total_rejected == 1
+        # Second rejection
+        assert cb.allow_request() is False
+        assert cb.total_rejected == 2
+
+    def test_success_resets_failure_count(self):
+        cb = CircuitBreaker("test", failure_threshold=5, cooldown_seconds=10)
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.consecutive_failures == 2
+        cb.record_success()
+        assert cb.consecutive_failures == 0
+        assert cb.state == CircuitBreaker.STATE_CLOSED
+
+    def test_success_closes_open_circuit(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=0.01)
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        # Wait for cooldown to expire, then it becomes half-open
+        time.sleep(0.02)
+        assert cb.state == CircuitBreaker.STATE_HALF_OPEN
+        # Success closes it
+        cb.record_success()
+        assert cb.state == CircuitBreaker.STATE_CLOSED
+        assert cb.consecutive_failures == 0
+
+    def test_half_open_after_cooldown(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=0.01)
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        time.sleep(0.02)
+        assert cb.state == CircuitBreaker.STATE_HALF_OPEN
+        # Half-open allows one probe request
+        assert cb.allow_request() is True
+
+    def test_half_open_probe_failure_reopens(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=0.01)
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.02)
+        assert cb.state == CircuitBreaker.STATE_HALF_OPEN
+        # Probe fails
+        cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        assert cb.consecutive_failures == 4
+
+    def test_reset_force_closes(self):
+        cb = CircuitBreaker("test", failure_threshold=3, cooldown_seconds=100)
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.state == CircuitBreaker.STATE_OPEN
+        cb.reset()
+        assert cb.state == CircuitBreaker.STATE_CLOSED
+        assert cb.consecutive_failures == 0
+        assert cb.allow_request() is True
+
+    def test_total_failures_accumulates(self):
+        cb = CircuitBreaker("test", failure_threshold=10, cooldown_seconds=10)
+        for _ in range(7):
+            cb.record_failure()
+        cb.record_success()
+        for _ in range(3):
+            cb.record_failure()
+        # 7 + 3 = 10 total failures, but consecutive is only 3
+        assert cb.total_failures == 10
+        assert cb.consecutive_failures == 3
+
+    def test_different_names_for_module_circuits(self):
+        """Module-level circuits have distinct names."""
+        or_cb = get_openrouter_circuit()
+        local_cb = get_local_llm_circuit()
+        assert or_cb.name == "openrouter"
+        assert local_cb.name == "local_llm"
+        assert or_cb is not local_cb
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker integration with execute_openrouter
+# ---------------------------------------------------------------------------
+
+class TestOpenrouterCircuitBreakerIntegration:
+    """Circuit breaker rejects calls when OpenRouter is persistently failing."""
+
+    @pytest.mark.asyncio
+    async def test_circuit_opens_after_repeated_failures(self):
+        """After 5 consecutive failures, circuit opens and rejects immediately."""
+        agent = _StubAgent()
+        agent._max_concurrent = 10
+        task = _make_task()
+
+        resp_500 = httpx.Response(500, request=httpx.Request("POST", "https://x"))
+
+        async def mock_post(self_client, url, **kwargs):
+            return resp_500
+
+        circuit = get_openrouter_circuit()
+        assert circuit.state == CircuitBreaker.STATE_CLOSED
+
+        # Exhaust 5 calls (each call = 1 failure due to retry exhaustion)
+        for i in range(5):
+            with patch.object(httpx.AsyncClient, "post", mock_post):
+                with patch("os.getenv", return_value="test-key"):
+                    with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                        with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                            outcome = await agent.execute_openrouter(task)
+            assert outcome.failure_reason == "all_models_failed"
+
+        # Circuit should now be open
+        assert circuit.state == CircuitBreaker.STATE_OPEN
+
+        # Next call should be rejected immediately (no HTTP call made)
+        call_count = 0
+
+        async def counting_post(self_client, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return resp_500
+
+        with patch.object(httpx.AsyncClient, "post", counting_post):
+            with patch("os.getenv", return_value="test-key"):
+                outcome = await agent.execute_openrouter(task)
+
+        assert outcome.failure_reason == "circuit_open"
+        assert "OPEN" in outcome.failure_detail
+        assert call_count == 0  # No HTTP call was made
+
+    @pytest.mark.asyncio
+    async def test_circuit_resets_on_success(self):
+        """A successful call after failures resets the circuit breaker."""
+        agent = _StubAgent()
+        agent._max_concurrent = 10
+        task = _make_task()
+
+        circuit = get_openrouter_circuit()
+
+        resp_500 = httpx.Response(500, request=httpx.Request("POST", "https://x"))
+        resp_200 = httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                "model": "test/model",
+            },
+            request=httpx.Request("POST", "https://x"),
+        )
+
+        # Accumulate 4 failures (just under threshold of 5)
+        for _ in range(4):
+            with patch.object(httpx.AsyncClient, "post", lambda self_client, url, **kwargs: asyncio.coroutine(lambda: resp_500)()):
+                with patch("os.getenv", return_value="test-key"):
+                    with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                        with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                            async def failing_post(self_client, url, **kwargs):
+                                return resp_500
+                            with patch.object(httpx.AsyncClient, "post", failing_post):
+                                await agent.execute_openrouter(task)
+
+        assert circuit.consecutive_failures == 4
+        assert circuit.state == CircuitBreaker.STATE_CLOSED
+
+        # Successful call resets the counter
+        async def success_post(self_client, url, **kwargs):
+            return resp_200
+
+        with patch.object(httpx.AsyncClient, "post", success_post):
+            with patch("os.getenv", return_value="test-key"):
+                with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                    outcome = await agent.execute_openrouter(task)
+
+        assert outcome.failure_reason is None
+        assert circuit.consecutive_failures == 0
+        assert circuit.state == CircuitBreaker.STATE_CLOSED
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker integration with execute_local
+# ---------------------------------------------------------------------------
+
+class TestLocalCircuitBreakerIntegration:
+    """Circuit breaker rejects calls when local LLM is persistently failing."""
+
+    @pytest.mark.asyncio
+    async def test_local_circuit_opens_after_repeated_failures(self):
+        """After 5 consecutive local failures, circuit opens."""
+        agent = _StubAgent()
+        agent._max_concurrent = 10
+        task = _make_task()
+
+        circuit = get_local_llm_circuit()
+
+        async def failing_post(self_client, url, **kwargs):
+            raise httpx.ConnectError("refused")
+
+        # Exhaust 5 calls
+        for _ in range(5):
+            with patch.object(httpx.AsyncClient, "post", failing_post):
+                with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                    with patch("claw.agents.interface._agent_backoff_delay", return_value=0.01):
+                        outcome = await agent.execute_local(task)
+            assert outcome.failure_reason == "local_unreachable"
+
+        assert circuit.state == CircuitBreaker.STATE_OPEN
+
+        # Next call rejected without HTTP
+        call_count = 0
+
+        async def counting_post(self_client, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise httpx.ConnectError("refused")
+
+        with patch.object(httpx.AsyncClient, "post", counting_post):
+            outcome = await agent.execute_local(task)
+
+        assert outcome.failure_reason == "circuit_open"
+        assert call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_local_circuit_allows_probe_after_cooldown(self):
+        """After cooldown, circuit enters half-open and allows a probe."""
+        agent = _StubAgent()
+        agent._max_concurrent = 10
+        task = _make_task()
+
+        # Use a very short cooldown for testing
+        circuit = get_local_llm_circuit()
+        original_cooldown = circuit.cooldown_seconds
+        circuit.cooldown_seconds = 0.01  # 10ms
+
+        try:
+            async def failing_post(self_client, url, **kwargs):
+                raise httpx.ConnectError("refused")
+
+            # Open the circuit
+            for _ in range(5):
+                with patch.object(httpx.AsyncClient, "post", failing_post):
+                    with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                        with patch("claw.agents.interface._agent_backoff_delay", return_value=0.001):
+                            await agent.execute_local(task)
+
+            assert circuit.state == CircuitBreaker.STATE_OPEN
+
+            # Wait for cooldown
+            time.sleep(0.02)
+
+            # Now a probe should be allowed and if it succeeds, circuit closes
+            resp_200 = httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "recovered"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+                    "model": "local/model",
+                },
+                request=httpx.Request("POST", "http://localhost:11434/v1/chat/completions"),
+            )
+
+            async def success_post(self_client, url, **kwargs):
+                return resp_200
+
+            with patch.object(httpx.AsyncClient, "post", success_post):
+                with patch.object(agent, "_build_openrouter_prompt", return_value="test"):
+                    outcome = await agent.execute_local(task)
+
+            assert outcome.failure_reason is None
+            assert outcome.raw_output == "recovered"
+            assert circuit.state == CircuitBreaker.STATE_CLOSED
+        finally:
+            circuit.cooldown_seconds = original_cooldown

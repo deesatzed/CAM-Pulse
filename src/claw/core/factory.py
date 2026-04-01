@@ -2,6 +2,11 @@
 
 ClawFactory.create() builds the full dependency graph and returns
 a ClawContext dataclass with all wired components.
+
+Sub-factory helpers group related components:
+  - _build_search_stack:   Repository, PRISM, HybridSearch, SemanticMemory, Governance
+  - _build_cag_stack:      CAGRetriever, corpus injection, KV cache, token budget
+  - _build_feedback_stack: ErrorKB, PromptEvolver, PatternLearner, Miner, SelfConsumer, Assimilation
 """
 
 from __future__ import annotations
@@ -9,7 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from claw.core.config import ClawConfig, load_config
 from claw.core.models import AgentMode
@@ -22,6 +27,42 @@ from claw.security.policy import AutonomyLevel, SecurityPolicy
 from claw.agents.interface import AgentInterface
 
 logger = logging.getLogger("claw.factory")
+
+
+# ---------------------------------------------------------------------------
+# Sub-factory return types
+# ---------------------------------------------------------------------------
+
+
+class SearchComponents(NamedTuple):
+    """Components for search and retrieval."""
+    repository: Repository
+    prism_engine: Any  # PrismEngine
+    hybrid_search: Any  # HybridSearch
+    semantic_memory: Any  # SemanticMemory
+    governance: Any  # MemoryGovernor
+
+
+class CAGComponents(NamedTuple):
+    """Components for Cache-Augmented Generation."""
+    cag_retriever: Any  # CAGRetriever | None
+    cag_loaded: bool
+    token_budget: int
+
+
+class FeedbackComponents(NamedTuple):
+    """Components for the feedback / evolution loop."""
+    error_kb: Any  # ErrorKB
+    prompt_evolver: Any  # PromptEvolver
+    pattern_learner: Any  # PatternLearner
+    miner: Any  # RepoMiner
+    self_consumer: Any  # SelfConsumer
+    assimilation_engine: Any  # CapabilityAssimilationEngine
+
+
+# ---------------------------------------------------------------------------
+# Main context dataclass (public API — unchanged)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -57,6 +98,240 @@ class ClawContext:
         logger.info("ClawContext closed")
 
 
+# ---------------------------------------------------------------------------
+# Sub-factory helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_search_stack(
+    config: ClawConfig,
+    engine: DatabaseEngine,
+    embeddings: EmbeddingEngine,
+) -> SearchComponents:
+    """Build the search / retrieval layer.
+
+    Creates: Repository, PrismEngine, MemoryGovernor, HybridSearch,
+    SemanticMemory — all wired together.
+    """
+    repository = Repository(engine)
+
+    # PRISM multi-scale embeddings
+    from claw.embeddings.prism import PrismEngine
+    prism_engine = PrismEngine(embedding_engine=embeddings)
+
+    # Memory Governance
+    from claw.memory.governance import MemoryGovernor
+    governance = MemoryGovernor(
+        repository=repository,
+        config=config.governance,
+        claw_config=config,
+    )
+
+    # HybridSearch
+    from claw.memory.hybrid_search import HybridSearch
+    hybrid_search = HybridSearch(
+        repository=repository,
+        embedding_engine=embeddings,
+        prism_engine=prism_engine,
+        novelty_retrieval_boost=config.assimilation.novelty_retrieval_boost,
+        potential_retrieval_boost=config.assimilation.potential_retrieval_boost,
+        deep_conf_config=config.deep_conf,
+    )
+
+    # Semantic Memory
+    from claw.memory.semantic import SemanticMemory
+    semantic_memory = SemanticMemory(
+        repository=repository,
+        embedding_engine=embeddings,
+        hybrid_search=hybrid_search,
+        prism_engine=prism_engine,
+        governance=governance,
+    )
+
+    return SearchComponents(
+        repository=repository,
+        prism_engine=prism_engine,
+        hybrid_search=hybrid_search,
+        semantic_memory=semantic_memory,
+        governance=governance,
+    )
+
+
+async def _build_cag_stack(
+    config: ClawConfig,
+    agents: dict[str, AgentInterface],
+) -> CAGComponents:
+    """Build the CAG (Cache-Augmented Generation) layer.
+
+    Loads the CAG corpus (if enabled), injects it into agents,
+    computes token budget, and optionally sets up the KV cache manager
+    for local agents.
+    """
+    cag_loaded = False
+    cag_retriever = None
+    token_budget = 100_000
+
+    if config.cag.enabled:
+        from claw.memory.cag_retriever import CAGRetriever
+        cag_retriever = CAGRetriever(config.cag)
+        ganglion = (
+            config.instances.instance_name
+            if hasattr(config, "instances")
+            else "general"
+        )
+        cag_loaded = await cag_retriever.load_cache(ganglion)
+        if cag_loaded:
+            corpus = cag_retriever.get_corpus(ganglion)
+            budget = config.cag.knowledge_budget_chars
+            for agent in agents.values():
+                agent.set_cag_corpus(corpus, knowledge_budget_chars=budget)
+            logger.info(
+                "CAG corpus loaded into %d agents (budget=%d chars)",
+                len(agents), budget,
+            )
+
+    # Token budget — derive from local model ctx_size or CAG config
+    # Priority: local agent config ctx_size (if a "local" agent is enabled)
+    #           > cag.token_budget_max (when CAG is enabled)
+    #           > default 100_000
+    local_agent_cfg = config.agents.get("local")
+    if local_agent_cfg and local_agent_cfg.enabled and local_agent_cfg.mode == "local":
+        token_budget = config.cag.token_budget_max
+    elif config.cag.enabled:
+        token_budget = config.cag.token_budget_max
+    else:
+        token_budget = 100_000
+
+    for agent in agents.values():
+        agent.set_token_budget(token_budget)
+
+    if token_budget != 100_000:
+        logger.info(
+            "Token budget set to %d for %d agents",
+            token_budget, len(agents),
+        )
+
+    # KV cache manager — enable prefix caching for local agents
+    # when CAG is loaded and a local agent is configured.
+    # Tier 1: TurboQuant (turboq) — ~4.9x compression, near-lossless
+    # Tier 2: Ollama 0.19 MLX — 2x (q8_0) or 4x (q4_0) compression
+    # Both tiers use the same stable system message prefix strategy.
+    if config.cag.enabled and local_agent_cfg and local_agent_cfg.enabled:
+        from claw.memory.kv_cache_manager import KVCacheManager
+        local_llm_cfg = config.local_llm if hasattr(config, "local_llm") else None
+        keep_alive = local_llm_cfg.keep_alive if local_llm_cfg else -1
+        kv_quant = local_llm_cfg.kv_cache_quantization if local_llm_cfg else "q8_0"
+        provider = local_llm_cfg.provider if local_llm_cfg else "ollama"
+        kv_mgr = KVCacheManager(
+            keep_alive=keep_alive,
+            kv_cache_quantization=kv_quant,
+            provider=provider,
+        )
+
+        # Build the stable system message from the CAG corpus
+        corpus_for_kv = ""
+        if cag_loaded and cag_retriever is not None:
+            ganglion = (
+                config.instances.instance_name
+                if hasattr(config, "instances")
+                else "general"
+            )
+            corpus_for_kv = cag_retriever.get_corpus(ganglion)
+        if corpus_for_kv:
+            kv_mgr.build_system_message(corpus_for_kv, config.cag.knowledge_budget_chars)
+            for agent in agents.values():
+                agent.set_kv_cache_manager(kv_mgr)
+            logger.info(
+                "KV cache manager enabled: provider=%s, quant=%s (%.1fx), "
+                "keep_alive=%d, system_msg=%d chars",
+                provider, kv_quant, kv_mgr.compression_ratio,
+                keep_alive, len(kv_mgr.system_message),
+            )
+
+    return CAGComponents(
+        cag_retriever=cag_retriever,
+        cag_loaded=cag_loaded,
+        token_budget=token_budget,
+    )
+
+
+def _build_feedback_stack(
+    config: ClawConfig,
+    repository: Repository,
+    llm_client: LLMClient,
+    semantic_memory: Any,
+    governance: Any,
+    error_kb: Any,
+) -> FeedbackComponents:
+    """Build the feedback / evolution layer.
+
+    Creates: PromptEvolver, PatternLearner, RepoMiner, SelfConsumer,
+    CapabilityAssimilationEngine — all wired together.  Assimilation is
+    cross-wired into miner and self_consumer before returning.
+    """
+    # Prompt Evolver
+    from claw.evolution.prompt_evolver import PromptEvolver
+    prompt_evolver = PromptEvolver(
+        repository=repository,
+        semantic_memory=semantic_memory,
+        error_kb=error_kb,
+        ab_test_kappa=config.evolution.ab_test_kappa,
+    )
+
+    # Pattern Learner
+    from claw.evolution.pattern_learner import PatternLearner
+    pattern_learner = PatternLearner(
+        repository=repository,
+        semantic_memory=semantic_memory,
+    )
+
+    # Repo Miner
+    from claw.miner import RepoMiner
+    miner = RepoMiner(
+        repository=repository,
+        llm_client=llm_client,
+        semantic_memory=semantic_memory,
+        config=config,
+        governance=governance,
+    )
+
+    # Self-Consumer
+    from claw.self_consumer import SelfConsumer
+    self_consumer = SelfConsumer(
+        repository=repository,
+        llm_client=llm_client,
+        semantic_memory=semantic_memory,
+        config=config,
+        governance_config=config.governance,
+    )
+
+    # Capability Assimilation Engine
+    from claw.evolution.assimilation import CapabilityAssimilationEngine
+    assimilation_engine = CapabilityAssimilationEngine(
+        repository=repository,
+        llm_client=llm_client,
+        config=config,
+    )
+
+    # Wire assimilation into miner and self-consumer
+    miner.assimilation_engine = assimilation_engine
+    self_consumer.assimilation_engine = assimilation_engine
+
+    return FeedbackComponents(
+        error_kb=error_kb,
+        prompt_evolver=prompt_evolver,
+        pattern_learner=pattern_learner,
+        miner=miner,
+        self_consumer=self_consumer,
+        assimilation_engine=assimilation_engine,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main factory (public API — unchanged)
+# ---------------------------------------------------------------------------
+
+
 class ClawFactory:
     """Builds the complete CLAW dependency graph."""
 
@@ -73,16 +348,17 @@ class ClawFactory:
         """
         config = load_config(config_path)
 
-        # Database
+        # ── Infrastructure ─────────────────────────────────────────
         engine = DatabaseEngine(config.database)
         await engine.connect()
         await engine.apply_migrations()
         await engine.initialize_schema()
 
-        # Embeddings
         embeddings = EmbeddingEngine(config.embeddings)
 
         # Seed knowledge — auto-import on first run (after schema + embeddings)
+        # Kept in the main factory per design: it touches both engine and
+        # embeddings before search/repo layers exist.
         try:
             from claw.community.seeder import run_seed
             seed_summary = await run_seed(
@@ -98,24 +374,20 @@ class ClawFactory:
         except Exception as e:
             logger.warning("Seed knowledge loading failed (non-fatal): %s", e)
 
-        repository = Repository(engine)
+        # ── Search / Retrieval layer ───────────────────────────────
+        search = _build_search_stack(config, engine, embeddings)
 
-        # PRISM multi-scale embeddings
-        from claw.embeddings.prism import PrismEngine
-        prism_engine = PrismEngine(embedding_engine=embeddings)
-
-        # LLM client
+        # ── LLM client + token tracker ─────────────────────────────
         llm_client = LLMClient(config.llm)
 
-        # Token tracker
         token_tracker = TokenTracker(
-            repository=repository,
+            repository=search.repository,
             jsonl_path=config.token_tracking.jsonl_path if config.token_tracking.enabled else None,
             cost_per_1k_input=config.token_tracking.cost_per_1k_input,
             cost_per_1k_output=config.token_tracking.cost_per_1k_output,
         )
 
-        # Security
+        # ── Security ───────────────────────────────────────────────
         ws = workspace_dir or Path(".").resolve()
         autonomy = AutonomyLevel.SUPERVISED
         sec_cfg = config.security
@@ -133,96 +405,25 @@ class ClawFactory:
             safe_env_vars=sec_cfg.safe_env_vars,
         )
 
-        # Agents
+        # ── Agents ─────────────────────────────────────────────────
         agents: dict[str, AgentInterface] = {}
+        # SDK fallback model chain from [llm] config
+        sdk_fallback_models = config.llm.fallback_models or []
+
         for agent_name, agent_cfg in config.agents.items():
             if not agent_cfg.enabled:
                 continue
             agent = _create_agent(agent_name, agent_cfg, workspace_dir=str(ws))
             if agent:
                 agent._max_concurrent = getattr(agent_cfg, "max_concurrent", 2)
+                if sdk_fallback_models:
+                    agent.set_fallback_models(sdk_fallback_models)
                 agents[agent_name] = agent
 
-        # CAG corpus loading — inject into all agents if enabled
-        cag_loaded = False
-        cag_retriever = None
-        if config.cag.enabled:
-            from claw.memory.cag_retriever import CAGRetriever
-            cag_retriever = CAGRetriever(config.cag)
-            cag_loaded = await cag_retriever.load_cache(
-                config.instances.instance_name if hasattr(config, "instances") else "general"
-            )
-            if cag_loaded:
-                corpus = cag_retriever.get_corpus(
-                    config.instances.instance_name if hasattr(config, "instances") else "general"
-                )
-                budget = config.cag.knowledge_budget_chars
-                for agent in agents.values():
-                    agent.set_cag_corpus(corpus, knowledge_budget_chars=budget)
-                logger.info(
-                    "CAG corpus loaded into %d agents (budget=%d chars)",
-                    len(agents), budget,
-                )
+        # ── CAG layer (corpus, budget, KV cache) ──────────────────
+        cag = await _build_cag_stack(config, agents)
 
-        # Token budget — derive from local model ctx_size or CAG config
-        # Priority: local agent config ctx_size (if a "local" agent is enabled)
-        #           > cag.token_budget_max (when CAG is enabled)
-        #           > default 100_000
-        local_agent_cfg = config.agents.get("local")
-        if local_agent_cfg and local_agent_cfg.enabled and local_agent_cfg.mode == "local":
-            # LocalLLMConfig.ctx_size is not on AgentConfig, but the
-            # orchestrator.max_tokens_per_task mirrors the intent. For local
-            # models the practical budget is the model's context window, which
-            # the user sets via cag.token_budget_max or orchestrator settings.
-            token_budget = config.cag.token_budget_max
-        elif config.cag.enabled:
-            token_budget = config.cag.token_budget_max
-        else:
-            token_budget = 100_000
-
-        for agent in agents.values():
-            agent.set_token_budget(token_budget)
-
-        if token_budget != 100_000:
-            logger.info(
-                "Token budget set to %d for %d agents",
-                token_budget, len(agents),
-            )
-
-        # KV cache manager — enable prefix caching for local agents
-        # when CAG is loaded and a local agent is configured.
-        # Tier 1: TurboQuant (turboq) — ~4.9x compression, near-lossless
-        # Tier 2: Ollama 0.19 MLX — 2x (q8_0) or 4x (q4_0) compression
-        # Both tiers use the same stable system message prefix strategy.
-        if config.cag.enabled and local_agent_cfg and local_agent_cfg.enabled:
-            from claw.memory.kv_cache_manager import KVCacheManager
-            local_llm_cfg = config.local_llm if hasattr(config, "local_llm") else None
-            keep_alive = local_llm_cfg.keep_alive if local_llm_cfg else -1
-            kv_quant = local_llm_cfg.kv_cache_quantization if local_llm_cfg else "q8_0"
-            provider = local_llm_cfg.provider if local_llm_cfg else "ollama"
-            kv_mgr = KVCacheManager(
-                keep_alive=keep_alive,
-                kv_cache_quantization=kv_quant,
-                provider=provider,
-            )
-
-            # Build the stable system message from the CAG corpus
-            corpus_for_kv = ""
-            if cag_loaded and cag_retriever is not None:
-                ganglion = config.instances.instance_name if hasattr(config, "instances") else "general"
-                corpus_for_kv = cag_retriever.get_corpus(ganglion)
-            if corpus_for_kv:
-                kv_mgr.build_system_message(corpus_for_kv, config.cag.knowledge_budget_chars)
-                for agent in agents.values():
-                    agent.set_kv_cache_manager(kv_mgr)
-                logger.info(
-                    "KV cache manager enabled: provider=%s, quant=%s (%.1fx), "
-                    "keep_alive=%d, system_msg=%d chars",
-                    provider, kv_quant, kv_mgr.compression_ratio,
-                    keep_alive, len(kv_mgr.system_message),
-                )
-
-        # Dispatcher (with optional Kelly sizer)
+        # ── Dispatcher (with optional Kelly sizer) ─────────────────
         from claw.dispatcher import Dispatcher
         kelly_sizer = None
         if config.kelly.enabled:
@@ -240,11 +441,11 @@ class ClawFactory:
         dispatcher = Dispatcher(
             agents=agents,
             exploration_rate=config.orchestrator.exploration_rate,
-            repository=repository,
+            repository=search.repository,
             kelly_sizer=kelly_sizer,
         )
 
-        # Verifier
+        # ── Verifier ──────────────────────────────────────────────
         from claw.verifier import Verifier
         sentinel_cfg = config.sentinel if hasattr(config, "sentinel") else None
         verifier = Verifier(
@@ -256,21 +457,19 @@ class ClawFactory:
             sentinel_config=sentinel_cfg,
         )
 
-        # Health Monitor
+        # ── Health / Budget / Degradation ──────────────────────────
         from claw.orchestrator.health_monitor import HealthMonitor
         health_monitor = HealthMonitor(
-            repository=repository,
+            repository=search.repository,
             config=config.orchestrator,
         )
 
-        # Budget Enforcer
         from claw.budget import BudgetEnforcer
         budget_enforcer = BudgetEnforcer(
-            repository=repository,
+            repository=search.repository,
             config=config,
         )
 
-        # Degradation Manager
         from claw.degradation import DegradationManager
         degradation_manager = DegradationManager(
             health_monitor=health_monitor,
@@ -278,89 +477,24 @@ class ClawFactory:
             all_agent_ids=list(agents.keys()) if agents else None,
         )
 
-        # Error KB
+        # ── Error KB ──────────────────────────────────────────────
         from claw.memory.error_kb import ErrorKB
-        error_kb = ErrorKB(repository=repository)
+        error_kb = ErrorKB(repository=search.repository)
 
-        # Memory Governance
-        from claw.memory.governance import MemoryGovernor
-        governance = MemoryGovernor(
-            repository=repository,
-            config=config.governance,
-            claw_config=config,
-        )
-
-        # Semantic Memory
-        from claw.memory.semantic import SemanticMemory
-        from claw.memory.hybrid_search import HybridSearch
-        hybrid_search = HybridSearch(
-            repository=repository,
-            embedding_engine=embeddings,
-            prism_engine=prism_engine,
-            novelty_retrieval_boost=config.assimilation.novelty_retrieval_boost,
-            potential_retrieval_boost=config.assimilation.potential_retrieval_boost,
-            deep_conf_config=config.deep_conf,
-        )
-        semantic_memory = SemanticMemory(
-            repository=repository,
-            embedding_engine=embeddings,
-            hybrid_search=hybrid_search,
-            prism_engine=prism_engine,
-            governance=governance,
-        )
-
-        # Prompt Evolver
-        from claw.evolution.prompt_evolver import PromptEvolver
-        prompt_evolver = PromptEvolver(
-            repository=repository,
-            semantic_memory=semantic_memory,
+        # ── Feedback / Evolution layer ─────────────────────────────
+        feedback = _build_feedback_stack(
+            config=config,
+            repository=search.repository,
+            llm_client=llm_client,
+            semantic_memory=search.semantic_memory,
+            governance=search.governance,
             error_kb=error_kb,
-            ab_test_kappa=config.evolution.ab_test_kappa,
         )
 
-        # Pattern Learner
-        from claw.evolution.pattern_learner import PatternLearner
-        pattern_learner = PatternLearner(
-            repository=repository,
-            semantic_memory=semantic_memory,
-        )
-
-        # Repo Miner (assimilation_engine wired after creation below)
-        from claw.miner import RepoMiner
-        miner = RepoMiner(
-            repository=repository,
-            llm_client=llm_client,
-            semantic_memory=semantic_memory,
-            config=config,
-            governance=governance,
-        )
-
-        # Self-Consumer
-        from claw.self_consumer import SelfConsumer
-        self_consumer = SelfConsumer(
-            repository=repository,
-            llm_client=llm_client,
-            semantic_memory=semantic_memory,
-            config=config,
-            governance_config=config.governance,
-        )
-
-        # Capability Assimilation Engine
-        from claw.evolution.assimilation import CapabilityAssimilationEngine
-        assimilation_engine = CapabilityAssimilationEngine(
-            repository=repository,
-            llm_client=llm_client,
-            config=config,
-        )
-
-        # Wire assimilation into miner and self-consumer
-        miner.assimilation_engine = assimilation_engine
-        self_consumer.assimilation_engine = assimilation_engine
-
-        # Run startup governance sweep
+        # ── Startup governance sweep ───────────────────────────────
         if config.governance.sweep_on_startup:
             try:
-                sweep_report = await governance.run_full_sweep()
+                sweep_report = await search.governance.run_full_sweep()
                 logger.info(
                     "Startup governance sweep: gc=%d, culled=%d",
                     sweep_report.dead_collected,
@@ -369,29 +503,30 @@ class ClawFactory:
             except Exception as e:
                 logger.warning("Startup governance sweep failed: %s", e)
 
+        # ── Assemble context ───────────────────────────────────────
         ctx = ClawContext(
             config=config,
             engine=engine,
-            repository=repository,
+            repository=search.repository,
             embeddings=embeddings,
             llm_client=llm_client,
             token_tracker=token_tracker,
             security=security,
             agents=agents,
-            prism_engine=prism_engine,
+            prism_engine=search.prism_engine,
             dispatcher=dispatcher,
             verifier=verifier,
             budget_enforcer=budget_enforcer,
             degradation_manager=degradation_manager,
             health_monitor=health_monitor,
             error_kb=error_kb,
-            semantic_memory=semantic_memory,
-            prompt_evolver=prompt_evolver,
-            pattern_learner=pattern_learner,
-            miner=miner,
-            governance=governance,
-            self_consumer=self_consumer,
-            assimilation_engine=assimilation_engine,
+            semantic_memory=search.semantic_memory,
+            prompt_evolver=feedback.prompt_evolver,
+            pattern_learner=feedback.pattern_learner,
+            miner=feedback.miner,
+            governance=search.governance,
+            self_consumer=feedback.self_consumer,
+            assimilation_engine=feedback.assimilation_engine,
         )
 
         agent_names = list(agents.keys()) if agents else ["none"]
@@ -401,6 +536,11 @@ class ClawFactory:
             ", ".join(agent_names),
         )
         return ctx
+
+
+# ---------------------------------------------------------------------------
+# Agent creation (unchanged — used by tests via direct import)
+# ---------------------------------------------------------------------------
 
 
 def _create_agent(

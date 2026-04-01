@@ -27,6 +27,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.3.0",
     "ruff>=0.4.0",
 ]
 ml = [
@@ -66,6 +67,8 @@ claw = ["data/seed/*.jsonl"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+timeout = 60
+timeout_method = "signal"
 
 [tool.ruff]
 line-length = 100
