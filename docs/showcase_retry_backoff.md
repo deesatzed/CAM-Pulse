@@ -19,6 +19,83 @@ The task: *"Add retry logic with exponential backoff to this API client."*
 
 ---
 
+## Did It Work? (The Short Answer)
+
+**Yes. The knowledge base made a measurable difference.**
+
+We gave CAM a simple API client that crashes on any network hiccup. We asked
+it to add retry logic. We ran it twice — once with an empty brain, once with
+knowledge mined from 250+ real codebases.
+
+Here's the scorecard:
+
+| What we checked | Without KB (Run A) | With KB (Run B) | Verdict |
+|---|---|---|---|
+| Does it retry failed requests? | Yes | Yes | Tie |
+| Does it avoid retrying permanent errors (400, 404)? | **No** — retries everything | **Yes** — only retries 429 and 5xx | **B wins** |
+| Does it respect the server's "slow down" signal (429)? | **No** — ignores it | **Yes** — reads the Retry-After header | **B wins** |
+| Is there a maximum wait time between retries? | **No** — grows forever (17+ min at attempt 10) | **Yes** — capped at 30 seconds | **B wins** |
+| Does it prevent all clients from retrying at the same instant? | **No** — all retry together | **Yes** — adds random jitter | **B wins** |
+| Is the retry logic reusable across functions? | **No** — copy-pasted | **Yes** — one shared helper | **B wins** |
+| Does it tell you what happened when all retries fail? | **No** — just re-raises the last error | **Yes** — includes retry count and cause | **B wins** |
+| Does it log each retry attempt? | **No** | **Yes** | **B wins** |
+
+**Score: Run B wins 7 out of 8 checks. Run A only covers the basics.**
+
+The one thing both runs do is retry — that's the easy part. The 7 things
+Run B adds are the hard-won lessons from real production code: don't retry
+errors that will never succeed, respect rate limits, don't wait forever,
+don't stampede the server, don't copy-paste, tell the operator what happened.
+
+Run A produces code that works in a demo. Run B produces code that works
+in production. That's the difference the knowledge base makes.
+
+### Where did Run B learn this?
+
+CAM searched its knowledge base (2,895 patterns mined from real projects)
+and found 5 that matched the task. These patterns came from 4 different
+projects that had already solved retry logic:
+
+1. **MiroFish** — taught: separate retry from business logic, log each attempt
+2. **agents** — taught: handle 429 rate limits, read server wait times
+3. **claw-code** — taught: cap the delay, preserve the final error
+4. **meta-harness** — taught: classify errors into retryable vs permanent
+
+No single pattern taught all 7 improvements. CAM's agent read all 5 patterns
+and combined the best ideas from each. This is the same thing a good
+developer does when they read several Stack Overflow answers before writing
+their solution — except CAM does it automatically in 1.4 seconds.
+
+### What does 0.56 confidence mean?
+
+Think of it as a letter grade:
+
+- **0.80+** = A — "I've seen this exact problem before"
+- **0.60–0.80** = B — "I've seen very similar problems"
+- **0.40–0.60** = C — "I found related patterns that should help"
+- **Below 0.40** = D — "I'm guessing"
+
+Our score of **0.56 (C+)** means: "The knowledge base has patterns that are
+clearly relevant, but they come from different domains (LLM providers,
+scientific APIs) rather than weather APIs specifically." That's fine — retry
+logic works the same way regardless of what API you're calling. The
+*concept* transfers even when the *domain* is different.
+
+A higher score would mean the KB had a pattern from another weather API
+client, which would be a closer match but wouldn't necessarily produce
+better code. The 7 improvements Run B got at 0.56 confidence show that
+moderate-confidence retrieval still delivers significant value.
+
+---
+
+## The Full Test (Read On for Details)
+
+Everything below shows the actual code, the actual patterns retrieved, and
+the actual numbers from the live A/B run. The summary above tells you the
+outcome; the rest shows you how we got there.
+
+---
+
 ## The Target Code (Both Runs Start Here)
 
 ```python
