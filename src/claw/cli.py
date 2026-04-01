@@ -10734,11 +10734,16 @@ def convert(
     max_docs: int = typer.Option(0, "--max-docs", "-n", help="Max documents to import (0 = all)"),
     min_chars: int = typer.Option(50, "--min-chars", help="Skip documents shorter than this"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be imported without building cache"),
+    export_recipe: bool = typer.Option(False, "--export-recipe", help="Export standalone cag_runtime.py + corpus.txt (no CAM dependency)"),
+    export_dir: str = typer.Option("./cag_export", "--export-dir", help="Directory for exported recipe files"),
 ) -> None:
     """Convert an external RAG source into a CAG cache.
 
     Reads documents from Chroma, LanceDB, FAISS, or plain file directories
     and builds a CAG corpus that can be loaded into agent prompts.
+
+    With --export-recipe, also generates a self-contained cag_runtime.py
+    that lets the target repo load and use the cache without CAM installed.
     """
 
     async def _run() -> None:
@@ -10815,6 +10820,34 @@ def convert(
         console.print(f"  Cache dir: {cfg.cag.cache_dir}/{ganglion}/")
         console.print(f"  Built at: {meta['built_at']}")
         console.print("[green]CAG cache built successfully.[/green]")
+
+        # Export recipe if requested
+        if export_recipe:
+            import shutil
+
+            from claw.memory.cag_recipe import generate_recipe
+
+            export_path = Path(export_dir).resolve()
+            export_path.mkdir(parents=True, exist_ok=True)
+
+            # Copy cache files
+            src_corpus = Path(cfg.cag.cache_dir) / ganglion / "corpus.txt"
+            src_meta = Path(cfg.cag.cache_dir) / ganglion / "meta.json"
+            shutil.copy2(str(src_corpus), str(export_path / "corpus.txt"))
+            shutil.copy2(str(src_meta), str(export_path / "meta.json"))
+
+            # Generate standalone runtime
+            recipe_code = generate_recipe(
+                ganglion=ganglion,
+                knowledge_budget=cfg.cag.knowledge_budget_chars,
+            )
+            (export_path / "cag_runtime.py").write_text(recipe_code, encoding="utf-8")
+
+            console.print(f"\nExported to [bold]{export_path}[/bold]:")
+            console.print(f"  cag_runtime.py  — standalone CAG loader (zero dependencies)")
+            console.print(f"  corpus.txt      — pre-built knowledge corpus")
+            console.print(f"  meta.json       — cache metadata")
+
         console.print(f"Use [bold]cam cag status -g {ganglion}[/bold] to verify.")
 
     asyncio.run(_run())
