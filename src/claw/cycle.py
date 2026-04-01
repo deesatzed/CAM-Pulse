@@ -112,6 +112,75 @@ def _is_excluded_path(rel: Path) -> bool:
     return any(part in _SNAPSHOT_EXCLUDE_DIRS for part in rel.parts)
 
 
+# JSON files that agents commonly corrupt (double-escaping backslashes, etc.)
+_CRITICAL_JSON_FILES = frozenset({
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "tsconfig.app.json",
+    "tsconfig.spec.json",
+    "angular.json",
+    ".eslintrc.json",
+    "composer.json",
+})
+
+
+def _validate_and_repair_json(
+    workspace_dir: Optional[str],
+    snapshot: dict[str, bytes],
+) -> list[str]:
+    """Validate critical JSON files after an agent edit; restore corrupted ones.
+
+    Agents often double-escape backslash sequences (e.g. \\' → \\\\') which
+    produces invalid JSON that causes EJSONPARSE cascading failures.  This
+    function checks every JSON file in _CRITICAL_JSON_FILES that exists on
+    disk.  If any fail ``json.loads()``, the original from *snapshot* is
+    written back and the repair is logged.
+
+    Returns a list of file names that were repaired (empty if none).
+    """
+    if not workspace_dir:
+        return []
+
+    root = Path(workspace_dir)
+    repaired: list[str] = []
+
+    for path in root.rglob("*.json"):
+        rel = path.relative_to(root)
+        if rel.name not in _CRITICAL_JSON_FILES:
+            continue
+        if _is_excluded_path(rel):
+            continue
+
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+
+        try:
+            json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            # File is corrupted — try to restore from snapshot
+            rel_str = str(rel)
+            if rel_str in snapshot:
+                try:
+                    path.write_bytes(snapshot[rel_str])
+                    repaired.append(rel_str)
+                    logger.warning(
+                        "Repaired corrupted JSON: %s (restored from snapshot)",
+                        rel_str,
+                    )
+                except OSError as e:
+                    logger.error("Could not repair %s: %s", rel_str, e)
+            else:
+                logger.warning(
+                    "Corrupted JSON detected but no snapshot to restore: %s",
+                    rel_str,
+                )
+
+    return repaired
+
+
 def _snapshot_workspace_content(workspace_dir: Optional[str]) -> dict[str, bytes]:
     """Snapshot workspace file CONTENTS (not just hashes) for restoration.
 
@@ -1229,6 +1298,15 @@ class MicroClaw(ClawCycle):
             _step("act", f"Agent '{agent_id}' working{' (correction)' if attempt > 0 else ''}...")
             result = await self.act((agent_id, task_ctx))
             last_result = result
+
+            # Post-act: validate critical JSON files and auto-repair from snapshot
+            if workspace_dir and content_snapshot:
+                repaired = _validate_and_repair_json(workspace_dir, content_snapshot)
+                if repaired:
+                    logger.warning(
+                        "Auto-repaired %d corrupted JSON file(s) after agent edit: %s",
+                        len(repaired), ", ".join(repaired),
+                    )
 
             _step("verify", "Running verification checks...")
             verification_tuple = await self.verify(result)

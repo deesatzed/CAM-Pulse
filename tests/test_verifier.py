@@ -1256,6 +1256,50 @@ class TestAutoInstallDeps:
             assert "npm install" in result
 
 
+class TestJsonCorruptionDetection:
+    """Tests for EJSONPARSE and JSON corruption patterns in _detect_env_error."""
+
+    def test_ejsonparse_detected(self):
+        output = (
+            "npm ERR! code EJSONPARSE\n"
+            "npm ERR! path /workspace/package.json\n"
+            "npm ERR! JSON.parse Unexpected token \\ in JSON at position 542"
+        )
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, recovery = result
+        assert "EJSONPARSE" in msg or "corrupted" in msg.lower()
+
+    def test_unexpected_token_in_json(self):
+        output = "SyntaxError: Unexpected token \\ in JSON at position 42"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, _ = result
+        assert "json" in msg.lower() or "JSON" in msg
+
+    def test_unexpected_string_in_json(self):
+        output = "SyntaxError: Unexpected string in JSON at position 100"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+
+    def test_invalid_package_json(self):
+        output = "npm ERR! Invalid package.json: Unexpected end of JSON input"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+        msg, _ = result
+        assert "package.json" in msg
+
+    def test_npm_error_variant(self):
+        output = "npm error Invalid package.json: JSONParseError"
+        result = Verifier._detect_env_error(output)
+        assert result is not None
+
+    def test_clean_npm_output_not_flagged(self):
+        output = "npm WARN deprecated glob@7.2.3\nadded 120 packages in 4s"
+        result = Verifier._detect_env_error(output)
+        assert result is None
+
+
 class TestRunTestsEnvironmentRecovery:
     """Integration tests for run_tests with environment failure detection."""
 

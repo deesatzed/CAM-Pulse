@@ -921,6 +921,11 @@ class Verifier:
         (r"EACCES:\s*permission denied", "Permission denied on file operation", None),
         (r"SyntaxError.*invalid syntax", "Python syntax error — possible version mismatch", None),
         (r"error\[E\d+\]:\s*could not compile", "Rust compilation error", None),
+        # JSON corruption — typically caused by agent double-escaping backslashes
+        (r"EJSONPARSE", "package.json is corrupted (EJSONPARSE) — likely agent escape-sequence corruption", None),
+        (r"Unexpected token.*in JSON at position", "JSON file corrupted — parse error", None),
+        (r"SyntaxError: Unexpected (?:token|string) in JSON", "JSON file corrupted — parse error", None),
+        (r"(?:npm ERR!|npm error).*Invalid package\.json", "package.json is invalid", None),
     ]
 
     @staticmethod

@@ -28,6 +28,7 @@ from claw.cycle import (
     _is_correctable_failure,
     _restore_workspace,
     _snapshot_workspace_content,
+    _validate_and_repair_json,
 )
 
 
@@ -616,3 +617,115 @@ class TestVerificationResultTestOutput:
     def test_carries_output(self):
         vr = VerificationResult(test_output="FAILED test_foo - AssertionError")
         assert "FAILED" in vr.test_output
+
+
+class TestValidateAndRepairJson:
+    """Tests for _validate_and_repair_json() — post-agent JSON corruption auto-fix."""
+
+    def test_valid_json_untouched(self, tmp_path):
+        """Valid package.json is not repaired."""
+        pkg = tmp_path / "package.json"
+        content = b'{"name": "test", "version": "1.0.0"}'
+        pkg.write_bytes(content)
+
+        snapshot = {"package.json": content}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert repaired == []
+        assert pkg.read_bytes() == content
+
+    def test_corrupted_json_repaired_from_snapshot(self, tmp_path):
+        """Corrupted package.json is restored from snapshot."""
+        pkg = tmp_path / "package.json"
+        good_content = b'{"name": "test", "scripts": {"dev": "ng serve --ssl --host=localhost"}}'
+        # Agent typically produces trailing garbage that breaks JSON parse
+        corrupted_content = b'{"name": "test", "scripts": {"dev": "ng serve --ssl --host=localhost"} CORRUPTED'
+        pkg.write_bytes(corrupted_content)
+
+        snapshot = {"package.json": good_content}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert repaired == ["package.json"]
+        assert pkg.read_bytes() == good_content
+
+    def test_corrupted_json_no_snapshot_entry(self, tmp_path):
+        """Corrupted JSON with no snapshot entry is logged but not repaired."""
+        pkg = tmp_path / "package.json"
+        corrupted = b'{"broken": }'
+        pkg.write_bytes(corrupted)
+
+        snapshot = {}  # No entry for package.json
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert repaired == []
+        assert pkg.read_bytes() == corrupted  # unchanged
+
+    def test_nested_json_repaired(self, tmp_path):
+        """JSON in a subdirectory is also validated and repaired."""
+        subdir = tmp_path / "frontend"
+        subdir.mkdir()
+        pkg = subdir / "package.json"
+        good = b'{"name": "frontend"}'
+        pkg.write_bytes(b'{invalid json}')
+
+        snapshot = {"frontend/package.json": good}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert "frontend/package.json" in repaired
+        assert pkg.read_bytes() == good
+
+    def test_non_critical_json_ignored(self, tmp_path):
+        """JSON files not in _CRITICAL_JSON_FILES are ignored."""
+        custom = tmp_path / "data.json"
+        custom.write_bytes(b'{broken}')
+
+        snapshot = {"data.json": b'{"valid": true}'}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert repaired == []
+
+    def test_tsconfig_repaired(self, tmp_path):
+        """tsconfig.json is also in the critical set."""
+        ts = tmp_path / "tsconfig.json"
+        good = b'{"compilerOptions": {"strict": true}}'
+        ts.write_bytes(b'{"compilerOptions": {"strict": true')  # truncated
+
+        snapshot = {"tsconfig.json": good}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert "tsconfig.json" in repaired
+        assert ts.read_bytes() == good
+
+    def test_node_modules_json_excluded(self, tmp_path):
+        """JSON inside node_modules is excluded even if corrupted."""
+        nm = tmp_path / "node_modules" / "some-pkg"
+        nm.mkdir(parents=True)
+        pkg = nm / "package.json"
+        pkg.write_bytes(b'{broken}')
+
+        snapshot = {}
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert repaired == []
+
+    def test_empty_workspace_dir(self):
+        """None workspace_dir returns empty."""
+        assert _validate_and_repair_json(None, {}) == []
+
+    def test_multiple_files_repaired(self, tmp_path):
+        """Multiple corrupted files are all repaired."""
+        pkg = tmp_path / "package.json"
+        tsconfig = tmp_path / "tsconfig.json"
+        angular = tmp_path / "angular.json"
+
+        good_pkg = b'{"name": "test"}'
+        good_ts = b'{"compilerOptions": {}}'
+        good_ng = b'{"projects": {}}'
+
+        pkg.write_bytes(b'{bad}')
+        tsconfig.write_bytes(b'{also bad}')
+        angular.write_bytes(b'{very bad}')
+
+        snapshot = {
+            "package.json": good_pkg,
+            "tsconfig.json": good_ts,
+            "angular.json": good_ng,
+        }
+        repaired = _validate_and_repair_json(str(tmp_path), snapshot)
+        assert len(repaired) == 3
+        assert pkg.read_bytes() == good_pkg
+        assert tsconfig.read_bytes() == good_ts
+        assert angular.read_bytes() == good_ng
