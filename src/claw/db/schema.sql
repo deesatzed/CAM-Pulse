@@ -414,3 +414,29 @@ CREATE TABLE IF NOT EXISTS community_import_audit (
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_community_audit_action ON community_import_audit(action);
+
+-- 19. AB_QUALITY_SAMPLES (Per-sample multi-dimensional quality metrics for A/B testing)
+CREATE TABLE IF NOT EXISTS ab_quality_samples (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    variant_label TEXT NOT NULL,
+    agent_id TEXT,
+    d_functional_correctness REAL NOT NULL DEFAULT 0.0,
+    d_structural_compliance REAL NOT NULL DEFAULT 0.0,
+    d_intent_alignment REAL NOT NULL DEFAULT 0.0,
+    d_correction_efficiency REAL NOT NULL DEFAULT 0.0,
+    d_token_economy REAL NOT NULL DEFAULT 0.0,
+    d_expectation_match REAL NOT NULL DEFAULT 0.0,
+    composite_score REAL NOT NULL DEFAULT 0.0,
+    correction_attempts INTEGER NOT NULL DEFAULT 1,
+    escalation_tier INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0.0,
+    success INTEGER NOT NULL DEFAULT 0,
+    error_category TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ab_samples_project ON ab_quality_samples(project_id);
+CREATE INDEX IF NOT EXISTS idx_ab_samples_variant ON ab_quality_samples(variant_label);
+CREATE INDEX IF NOT EXISTS idx_ab_samples_task ON ab_quality_samples(task_id);

@@ -827,6 +827,7 @@ class MicroClaw(ClawCycle):
         self._current_outcome: Optional[TaskOutcome] = None
         self._current_verification: Optional[VerificationResult] = None
         self._ablation_label: Optional[str] = None
+        self._suppress_cag_for_control = False
 
     async def grab(self) -> Optional[Task]:
         """Get the next pending task for the project."""
@@ -1012,10 +1013,13 @@ class MicroClaw(ClawCycle):
                 )
                 if self._ablation_label == "control":
                     logger.info(
-                        "A/B ablation: suppressing knowledge for task %s (control group)",
+                        "A/B ablation: suppressing ALL knowledge for task %s (control group)",
                         task.id,
                     )
                     past_solutions = []
+                    self._suppress_cag_for_control = True
+                else:
+                    self._suppress_cag_for_control = False
             except (ValueError, Exception):
                 self._ablation_label = None  # No ablation test scheduled
 
@@ -1147,10 +1151,24 @@ class MicroClaw(ClawCycle):
             agent_role=agent_id,
         )
 
+        # A/B ablation: suppress CAG corpus for control arm
+        saved_cag_corpus = None
+        if self._suppress_cag_for_control:
+            saved_cag_corpus = getattr(agent, "_cag_corpus", None)
+            if saved_cag_corpus is not None:
+                agent._cag_corpus = ""
+                logger.info("A/B ablation: CAG corpus suppressed for control arm")
+
         try:
             outcome = await agent.run(task_ctx, context=self._current_context_brief)
         except TypeError:
             outcome = await agent.run(task_ctx)
+
+        # A/B ablation: restore CAG corpus after execution
+        if saved_cag_corpus is not None:
+            agent._cag_corpus = saved_cag_corpus
+            logger.info("A/B ablation: CAG corpus restored")
+        self._suppress_cag_for_control = False
         if not can_modify_workspace and can_use_internal_executor:
             applied, apply_error = _apply_structured_file_operations(workspace_dir, outcome.raw_output)
             if not applied and not outcome.failure_reason:
@@ -1719,6 +1737,68 @@ class MicroClaw(ClawCycle):
                 )
             except Exception as e:
                 logger.warning("Failed to record ablation sample: %s", e)
+
+        # Record multi-dimensional quality sample for enriched A/B analysis
+        if self._ablation_label is not None:
+            try:
+                # Compute SWE dimensions using the verifier
+                correction_attempts = getattr(task_ctx, "correction_feedback", None)
+                attempt_count = (correction_attempts.attempt_number + 1) if correction_attempts else 1
+                tokens_used = outcome.tokens_used or 0
+                token_budget = getattr(self.ctx.config.orchestrator, "token_budget", 100000) or 100000
+
+                if self.ctx.verifier is not None:
+                    dims = self.ctx.verifier.compute_swe_dimensions(
+                        verification,
+                        correction_attempts=attempt_count,
+                        tokens_used=tokens_used,
+                        token_budget=token_budget,
+                    )
+                    verification.swe_dimensions = dims
+
+                    # Determine error category for failure cases
+                    error_category = None
+                    if not verification.approved and outcome.failure_reason:
+                        try:
+                            from claw.evolution.rl_escalation import classify_error
+                            error_category = classify_error(
+                                outcome.failure_reason + " " + (outcome.failure_detail or "")
+                            )
+                        except ImportError:
+                            error_category = outcome.failure_reason
+
+                    await self.ctx.repository.record_quality_sample(
+                        project_id=self.project_id,
+                        task_id=task.id,
+                        variant_label=self._ablation_label,
+                        agent_id=agent_id,
+                        d_functional_correctness=dims.functional_correctness,
+                        d_structural_compliance=dims.structural_compliance,
+                        d_intent_alignment=dims.intent_alignment,
+                        d_correction_efficiency=dims.correction_efficiency,
+                        d_token_economy=dims.token_economy,
+                        d_expectation_match=dims.expectation_match,
+                        composite_score=dims.composite_score,
+                        correction_attempts=attempt_count,
+                        escalation_tier=0,
+                        tokens_used=tokens_used,
+                        duration_seconds=outcome.duration_seconds or 0.0,
+                        success=verification.approved,
+                        error_category=error_category,
+                    )
+                    logger.info(
+                        "Recorded quality sample: label=%s composite=%.3f dims=[%.2f,%.2f,%.2f,%.2f,%.2f,%.2f]",
+                        self._ablation_label,
+                        dims.composite_score,
+                        dims.functional_correctness,
+                        dims.structural_compliance,
+                        dims.intent_alignment,
+                        dims.correction_efficiency,
+                        dims.token_economy,
+                        dims.expectation_match,
+                    )
+            except Exception as e:
+                logger.warning("Failed to record quality sample: %s", e)
 
         if task.action_template_id:
             try:

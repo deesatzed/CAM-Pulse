@@ -170,6 +170,7 @@ class Verifier:
         self.min_test_count = min_test_count
         self._sentinel_config = sentinel_config
         self._prompt_loader = PromptLoader()
+        self._last_drift_cosine: Optional[float] = None
 
     # ===================================================================
     # Main entry point
@@ -316,6 +317,10 @@ class Verifier:
         # Compute a quality score (0.0-1.0) based on violations and recommendations
         quality_score = self._compute_quality_score(all_violations, all_recommendations)
 
+        # Capture drift cosine for SWE dimensions, then reset for next call
+        drift_cosine = self._last_drift_cosine
+        self._last_drift_cosine = None
+
         return VerificationResult(
             approved=approved,
             violations=all_violations,
@@ -326,6 +331,7 @@ class Verifier:
             tests_before=tests_before,
             tests_after=tests_after,
             test_output=full_test_output,
+            drift_cosine_score=drift_cosine,
         )
 
     def _assess_expectation_match(
@@ -608,6 +614,7 @@ class Verifier:
         try:
             similarity = await self._compute_alignment(task_description, approach_summary)
             logger.info("Drift alignment score: %.3f (threshold: %.3f)", similarity, self.drift_threshold)
+            self._last_drift_cosine = similarity
 
             if similarity < self.drift_threshold:
                 severity = self._drift_severity(similarity)
@@ -1442,6 +1449,55 @@ class Verifier:
         score -= len(violations) * 0.15
         score -= len(recommendations) * 0.03
         return max(0.0, min(1.0, score))
+
+
+    def compute_swe_dimensions(
+        self,
+        verification: VerificationResult,
+        correction_attempts: int = 1,
+        tokens_used: int = 0,
+        token_budget: int = 100000,
+    ) -> SWEQualityDimensions:
+        """Compute 6-dimensional SWE quality metric from verification results."""
+        from claw.core.models import SWEQualityDimensions
+
+        # D1: Functional correctness
+        if verification.tests_after is not None and verification.tests_after > 0:
+            # Tests exist and ran
+            test_violations = [v for v in verification.violations if v.get("check") == "test_execution"]
+            d1 = 1.0 if not test_violations else 0.0
+        elif verification.approved:
+            d1 = 0.5  # Approved but no tests ran
+        else:
+            d1 = 0.0
+
+        # D2: Structural compliance (existing quality_score logic)
+        d2 = verification.quality_score or 0.0
+
+        # D3: Intent alignment (drift cosine)
+        d3 = self._last_drift_cosine if self._last_drift_cosine is not None else 0.5
+
+        # D4: Correction efficiency
+        d4 = 1.0 / max(correction_attempts, 1)
+
+        # D5: Token economy
+        if token_budget > 0 and tokens_used > 0:
+            d5 = max(0.0, 1.0 - (tokens_used / token_budget))
+        else:
+            d5 = 0.5  # Unknown
+
+        # D6: Expectation match
+        d6 = verification.expectation_match_score if verification.expectation_match_score is not None else 0.5
+
+        dims = SWEQualityDimensions(
+            functional_correctness=d1,
+            structural_compliance=d2,
+            intent_alignment=d3,
+            correction_efficiency=d4,
+            token_economy=d5,
+            expectation_match=d6,
+        )
+        return dims
 
     # ===================================================================
     # Helpers

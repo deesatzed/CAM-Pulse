@@ -1728,6 +1728,47 @@ class Repository:
         )
         return episode_id
 
+    async def record_quality_sample(
+        self,
+        *,
+        project_id: str,
+        task_id: str,
+        variant_label: str,
+        agent_id: Optional[str] = None,
+        d_functional_correctness: float = 0.0,
+        d_structural_compliance: float = 0.0,
+        d_intent_alignment: float = 0.0,
+        d_correction_efficiency: float = 0.0,
+        d_token_economy: float = 0.0,
+        d_expectation_match: float = 0.0,
+        composite_score: float = 0.0,
+        correction_attempts: int = 1,
+        escalation_tier: int = 0,
+        tokens_used: int = 0,
+        duration_seconds: float = 0.0,
+        success: bool = False,
+        error_category: Optional[str] = None,
+    ) -> str:
+        """Record a multi-dimensional quality sample for A/B analysis."""
+        sample_id = str(uuid.uuid4())
+        await self.engine.execute(
+            """INSERT INTO ab_quality_samples
+               (id, project_id, task_id, variant_label, agent_id,
+                d_functional_correctness, d_structural_compliance,
+                d_intent_alignment, d_correction_efficiency,
+                d_token_economy, d_expectation_match,
+                composite_score, correction_attempts, escalation_tier,
+                tokens_used, duration_seconds, success, error_category)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [sample_id, project_id, task_id, variant_label, agent_id,
+             d_functional_correctness, d_structural_compliance,
+             d_intent_alignment, d_correction_efficiency,
+             d_token_economy, d_expectation_match,
+             composite_score, correction_attempts, escalation_tier,
+             tokens_used, duration_seconds, 1 if success else 0, error_category],
+        )
+        return sample_id
+
 
 # ---------------------------------------------------------------------------
 # Row → Model converters

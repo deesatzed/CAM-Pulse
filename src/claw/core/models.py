@@ -379,6 +379,46 @@ class VerificationResult(BaseModel):
     tests_before: Optional[int] = None
     tests_after: Optional[int] = None
     test_output: str = ""
+    swe_dimensions: Optional[SWEQualityDimensions] = None
+    drift_cosine_score: Optional[float] = None
+
+
+class SWEQualityDimensions(BaseModel):
+    """6-dimensional SWE quality metric for A/B comparison.
+
+    Each dimension is 0.0-1.0. Composite score is the weighted geometric mean.
+    Weights: D1=0.30, D2=0.15, D3=0.20, D4=0.15, D5=0.10, D6=0.10
+    """
+    functional_correctness: float = 0.0    # D1: tests pass? 1.0=all, 0.5=some, 0.0=none
+    structural_compliance: float = 0.0     # D2: 1.0 - violation penalty
+    intent_alignment: float = 0.0          # D3: drift cosine similarity
+    correction_efficiency: float = 0.0     # D4: 1.0/attempts_needed
+    token_economy: float = 0.0             # D5: 1.0 - tokens_used/budget
+    expectation_match: float = 0.0         # D6: expectation contract score
+
+    _WEIGHTS = {
+        "functional_correctness": 0.30,
+        "structural_compliance": 0.15,
+        "intent_alignment": 0.20,
+        "correction_efficiency": 0.15,
+        "token_economy": 0.10,
+        "expectation_match": 0.10,
+    }
+
+    @property
+    def composite_score(self) -> float:
+        """Weighted geometric mean of all dimensions.
+
+        Geometric mean penalizes zeroes — code that fails tests
+        gets a low composite regardless of other dimensions.
+        Uses a floor of 0.01 to avoid log(0).
+        """
+        import math
+        log_sum = 0.0
+        for dim_name, weight in self._WEIGHTS.items():
+            val = max(getattr(self, dim_name), 0.01)  # floor to avoid log(0)
+            log_sum += weight * math.log(val)
+        return math.exp(log_sum)
 
 
 class EscalationDiagnosis(BaseModel):
