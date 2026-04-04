@@ -11178,6 +11178,28 @@ def convert(
     asyncio.run(_run())
 
 
+@app.command()
+def dashboard(
+    port: int = typer.Option(8420, help="Port to serve on"),
+    host: str = typer.Option("127.0.0.1", help="Host to bind to"),
+) -> None:
+    """Launch the CAM Brain Dashboard — federated knowledge explorer in your browser."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]uvicorn not installed. Run: pip install uvicorn[/red]")
+        raise typer.Exit(1)
+
+    from claw.web.dashboard_server import app as dash_app
+
+    console.print(f"\n[bold]CAM-PULSE Brain Dashboard[/bold]")
+    console.print(f"  URL: [link]http://{host}:{port}[/link]")
+    console.print(f"  API: [link]http://{host}:{port}/api/docs[/link]")
+    console.print(f"  Press Ctrl+C to stop.\n")
+
+    uvicorn.run(dash_app, host=host, port=port, log_level="warning")
+
+
 def app_main() -> None:
     """Entry point for the installed CLI."""
     app()
