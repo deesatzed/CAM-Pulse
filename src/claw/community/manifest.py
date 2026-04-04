@@ -97,9 +97,52 @@ async def generate_manifest(
     # --- Top categories (sorted by count, top 15) ---
     top_categories = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)[:15]
 
-    # --- Domain keywords (derived from top categories + languages) ---
+    # --- Domain keywords (enriched from categories + languages + methodology vocabulary) ---
     domain_keywords = [cat for cat, _ in top_categories[:10]]
     domain_keywords.extend(lang for lang in list(language_breakdown.keys())[:5])
+    # Add source repo names as domain keywords (lowercase)
+    domain_keywords.extend(r.lower() for r in sorted(source_repos)[:20])
+
+    # Extract top vocabulary from problem_description text (TF-based)
+    try:
+        vocab_rows = await engine.fetch_all(
+            "SELECT problem_description FROM methodologies "
+            "WHERE lifecycle_state NOT IN ('dead', 'dormant') "
+            "AND problem_description IS NOT NULL AND problem_description != '' "
+            "LIMIT 500"
+        )
+        import re as _re
+        _stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+            "on", "with", "at", "by", "from", "as", "into", "through", "during",
+            "before", "after", "above", "below", "between", "under", "again",
+            "over", "further", "then", "once", "here", "there", "when", "where",
+            "why", "how", "all", "each", "every", "both", "few", "more", "most",
+            "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+            "so", "than", "too", "very", "and", "but", "or", "if", "this", "that",
+            "these", "those", "it", "its", "we", "our", "they", "them", "their",
+            "what", "which", "who", "whom", "about", "up", "out", "just", "also",
+            "new", "use", "using", "used", "add", "create", "make", "implement",
+            "need", "want", "like", "get", "set", "code", "function", "class",
+            "method", "data", "file", "system", "based", "provides", "pattern",
+        }
+        term_counts: dict[str, int] = {}
+        for row in vocab_rows:
+            tokens = _re.findall(r"[a-zA-Z0-9_]+", row["problem_description"].lower())
+            for t in tokens:
+                if len(t) >= 3 and t not in _stop_words:
+                    term_counts[t] = term_counts.get(t, 0) + 1
+        # Top 50 terms by frequency (min 3 occurrences)
+        top_terms = sorted(
+            ((t, c) for t, c in term_counts.items() if c >= 3),
+            key=lambda x: -x[1],
+        )[:50]
+        existing = set(domain_keywords)
+        domain_keywords.extend(t for t, _ in top_terms if t not in existing)
+    except Exception as e:
+        logger.debug("Vocabulary extraction skipped: %s", e)
 
     # --- Compute manifest fingerprint ---
     fingerprint_input = f"{total_methodologies}:{json.dumps(lifecycle_dist, sort_keys=True)}:{now_iso}"
