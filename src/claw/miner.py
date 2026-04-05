@@ -582,6 +582,10 @@ class MiningModelSelector:
         for name, cfg in self.config.agents.items():
             if not cfg.enabled or not cfg.model:
                 continue
+            # Local agents use a different endpoint; the mining LLM client
+            # only supports the OpenRouter base_url.
+            if cfg.mode == "local":
+                continue
             if cfg.context_window_tokens == 0:
                 unknown.append((name, cfg))
                 continue
@@ -1576,100 +1580,100 @@ class RepoMiner:
             )
 
         # --- STRATEGY 2: Content reduction ---
-        if attempts < recovery.max_escalation_attempts:
-            attempts += 1
-            reduced_max = int(brain_config.max_bytes * recovery.content_reduction_factor)
-            logger.info(
-                "Mining %s: STRATEGY 2 — reducing content from %dKB to %dKB",
-                repo_name, brain_config.max_bytes // 1024, reduced_max // 1024,
-            )
+        # Always attempt after model escalation exhausts.
+        attempts += 1
+        reduced_max = int(brain_config.max_bytes * recovery.content_reduction_factor)
+        logger.info(
+            "Mining %s: STRATEGY 2 — reducing content from %dKB to %dKB",
+            repo_name, brain_config.max_bytes // 1024, reduced_max // 1024,
+        )
 
-            reduced_content, reduced_count = serialize_repo(
-                repo_path, max_bytes=reduced_max,
-                exclude_files=secret_scan_files, config=self.config,
-            )
-            if reduced_content:
-                template = self._get_prompt_template(brain_config.prompt)
-                reduced_prompt = template.replace("{repo_content}", reduced_content)
-                ctx_lines = self._build_mining_context(domain_info, overlap)
-                if ctx_lines:
-                    reduced_prompt = "\n".join(ctx_lines) + "\n\n" + reduced_prompt
+        reduced_content, reduced_count = serialize_repo(
+            repo_path, max_bytes=reduced_max,
+            exclude_files=secret_scan_files, config=self.config,
+        )
+        if reduced_content:
+            template = self._get_prompt_template(brain_config.prompt)
+            reduced_prompt = template.replace("{repo_content}", reduced_content)
+            ctx_lines = self._build_mining_context(domain_info, overlap)
+            if ctx_lines:
+                reduced_prompt = "\n".join(ctx_lines) + "\n\n" + reduced_prompt
 
-                reduced_est = model_selector.estimate_prompt_tokens(reduced_prompt)
+            reduced_est = model_selector.estimate_prompt_tokens(reduced_prompt)
+            try:
+                best_agent, best_model = await model_selector.select_best_model(
+                    reduced_est,
+                )
+            except ValueError:
+                best_agent, best_model = (
+                    escalation_chain[0] if escalation_chain else ("", "")
+                )
+
+            if best_model:
                 try:
-                    best_agent, best_model = await model_selector.select_best_model(
-                        reduced_est,
+                    resp = await self.llm_client.complete(
+                        messages=[LLMMessage(role="user", content=reduced_prompt)],
+                        model=best_model, temperature=0.3,
+                        max_tokens=token_budget,
                     )
-                except ValueError:
-                    best_agent, best_model = (
-                        escalation_chain[0] if escalation_chain else ("", "")
+                    findings = parse_findings(resp.content, repo_name)
+                    success = bool(findings)
+                    await self._record_mining_outcome(
+                        model=best_model, agent_id=best_agent, brain=brain,
+                        repo_name=repo_name, estimated_tokens=reduced_est,
+                        repo_size_bytes=len(reduced_content.encode()),
+                        file_count=reduced_count,
+                        strategy="content_reduction",
+                        success=success, findings_count=len(findings),
+                        response=resp, start_time=start_time,
                     )
-
-                if best_model:
-                    try:
-                        resp = await self.llm_client.complete(
-                            messages=[LLMMessage(role="user", content=reduced_prompt)],
-                            model=best_model, temperature=0.3,
-                            max_tokens=token_budget,
+                    if success:
+                        logger.info(
+                            "Mining %s: recovered via content reduction "
+                            "(%dKB → %dKB, model=%s)",
+                            repo_name, brain_config.max_bytes // 1024,
+                            reduced_max // 1024, best_model,
                         )
-                        findings = parse_findings(resp.content, repo_name)
-                        success = bool(findings)
-                        await self._record_mining_outcome(
-                            model=best_model, agent_id=best_agent, brain=brain,
-                            repo_name=repo_name, estimated_tokens=reduced_est,
-                            repo_size_bytes=len(reduced_content.encode()),
-                            file_count=reduced_count,
-                            strategy="content_reduction",
-                            success=success, findings_count=len(findings),
-                            response=resp, start_time=start_time,
-                        )
-                        if success:
-                            logger.info(
-                                "Mining %s: recovered via content reduction "
-                                "(%dKB → %dKB, model=%s)",
-                                repo_name, brain_config.max_bytes // 1024,
-                                reduced_max // 1024, best_model,
-                            )
-                            return resp, findings, attempts, "content_reduction"
-                    except Exception as e:
-                        logger.warning(
-                            "Mining %s: content reduction failed: %s",
-                            repo_name, e,
-                        )
-                        await self._record_mining_outcome(
-                            model=best_model, agent_id=best_agent, brain=brain,
-                            repo_name=repo_name, estimated_tokens=reduced_est,
-                            repo_size_bytes=len(reduced_content.encode()),
-                            file_count=reduced_count,
-                            strategy="content_reduction",
-                            success=False, findings_count=0, response=None,
-                            start_time=start_time, error=e,
-                        )
+                        return resp, findings, attempts, "content_reduction"
+                except Exception as e:
+                    logger.warning(
+                        "Mining %s: content reduction failed: %s",
+                        repo_name, e,
+                    )
+                    await self._record_mining_outcome(
+                        model=best_model, agent_id=best_agent, brain=brain,
+                        repo_name=repo_name, estimated_tokens=reduced_est,
+                        repo_size_bytes=len(reduced_content.encode()),
+                        file_count=reduced_count,
+                        strategy="content_reduction",
+                        success=False, findings_count=0, response=None,
+                        start_time=start_time, error=e,
+                    )
 
         # --- STRATEGY 3: Chunk mining ---
-        if attempts < recovery.max_escalation_attempts:
-            attempts += 1
-            logger.info("Mining %s: STRATEGY 3 — chunk mining", repo_name)
+        # Always attempt as last resort.
+        attempts += 1
+        logger.info("Mining %s: STRATEGY 3 — chunk mining", repo_name)
 
-            chunk_findings = await self._mine_in_chunks(
-                repo_content=repo_content,
-                repo_name=repo_name,
-                repo_path=repo_path,
-                brain=brain,
-                brain_config=brain_config,
-                domain_info=domain_info,
-                overlap=overlap,
-                model_selector=model_selector,
-                token_budget=token_budget,
-                file_count=file_count,
-                start_time=start_time,
+        chunk_findings = await self._mine_in_chunks(
+            repo_content=repo_content,
+            repo_name=repo_name,
+            repo_path=repo_path,
+            brain=brain,
+            brain_config=brain_config,
+            domain_info=domain_info,
+            overlap=overlap,
+            model_selector=model_selector,
+            token_budget=token_budget,
+            file_count=file_count,
+            start_time=start_time,
+        )
+        if chunk_findings:
+            logger.info(
+                "Mining %s: recovered via chunk mining — %d findings",
+                repo_name, len(chunk_findings),
             )
-            if chunk_findings:
-                logger.info(
-                    "Mining %s: recovered via chunk mining — %d findings",
-                    repo_name, len(chunk_findings),
-                )
-                return None, chunk_findings, attempts, "chunk_mining"
+            return None, chunk_findings, attempts, "chunk_mining"
 
         logger.error(
             "Mining %s: ALL %d recovery attempts exhausted — 0 findings",
