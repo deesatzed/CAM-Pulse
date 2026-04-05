@@ -1284,7 +1284,7 @@ Depending on the action, it can:
 Syntax:
 
 ```bash
-cam govern [stats|sweep|gc|quota|prune]
+cam govern [stats|sweep|gc|quota|prune|bandit-stats]
 ```
 
 Actions:
@@ -1293,12 +1293,19 @@ Actions:
 - `gc`: garbage collect dead methodologies
 - `quota`: enforce methodology quota
 - `prune`: prune old episodes
+- `bandit-stats`: show RL bandit statistics — top methodology x task_type pairs, win rates, Thompson graduation status
 
 Example use case:
 You want to see whether CAM’s memory database is healthy.
 
 ```bash
 cam govern stats
+```
+
+You want to see which methodologies are winning per task type and whether Thompson sampling has activated.
+
+```bash
+cam govern bandit-stats
 ```
 
 ## `cam setup`

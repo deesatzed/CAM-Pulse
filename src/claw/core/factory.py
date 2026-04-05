@@ -90,6 +90,7 @@ class ClawContext:
     governance: Any = None
     self_consumer: Any = None
     assimilation_engine: Any = None
+    mcp_server: Any = None  # ClawMCPServer — exposed via MCP protocol for external agents
 
     async def close(self) -> None:
         """Cleanly shut down all components."""
@@ -503,6 +504,21 @@ class ClawFactory:
             except Exception as e:
                 logger.warning("Startup governance sweep failed: %s", e)
 
+        # ── MCP server (optional) ─────────────────────────────────
+        mcp_srv = None
+        if config.mcp.enabled:
+            import os
+            from claw.mcp_server import ClawMCPServer
+            auth_token = os.environ.get(config.mcp.auth_token_env)
+            mcp_srv = ClawMCPServer(
+                repository=search.repository,
+                semantic_memory=search.semantic_memory,
+                verifier=verifier,
+                dispatcher=dispatcher,
+                auth_token=auth_token,
+            )
+            logger.info("MCP server created (transport=%s)", config.mcp.transport)
+
         # ── Assemble context ───────────────────────────────────────
         ctx = ClawContext(
             config=config,
@@ -527,6 +543,7 @@ class ClawFactory:
             governance=search.governance,
             self_consumer=feedback.self_consumer,
             assimilation_engine=feedback.assimilation_engine,
+            mcp_server=mcp_srv,
         )
 
         agent_names = list(agents.keys()) if agents else ["none"]

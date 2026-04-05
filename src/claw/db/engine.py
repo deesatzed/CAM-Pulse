@@ -564,6 +564,58 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration 15 applied: created community sharing tables")
 
+        # Migration 16: bandit outcomes table for RL method selection
+        bandit_check = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='methodology_bandit_outcomes'"
+        )
+        if bandit_check and bandit_check["cnt"] == 0:
+            await self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS methodology_bandit_outcomes (
+                    methodology_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+                    task_type TEXT NOT NULL,
+                    successes INTEGER NOT NULL DEFAULT 0,
+                    failures INTEGER NOT NULL DEFAULT 0,
+                    last_updated TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    PRIMARY KEY (methodology_id, task_type)
+                )
+            """)
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bandit_task_type ON methodology_bandit_outcomes(task_type)"
+            )
+            await self.conn.commit()
+            logger.info("Migration 16 applied: created methodology_bandit_outcomes table")
+
+        # Migration 17: mining_outcomes table for RL mining model selection
+        mining_out_check = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='mining_outcomes'"
+        )
+        if mining_out_check and mining_out_check["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS mining_outcomes (
+                    id TEXT PRIMARY KEY,
+                    model_used TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    brain TEXT NOT NULL DEFAULT 'python',
+                    repo_name TEXT NOT NULL,
+                    repo_size_bytes INTEGER NOT NULL DEFAULT 0,
+                    prompt_tokens_estimated INTEGER NOT NULL DEFAULT 0,
+                    strategy TEXT NOT NULL DEFAULT 'primary',
+                    success INTEGER NOT NULL DEFAULT 0,
+                    findings_count INTEGER NOT NULL DEFAULT 0,
+                    tokens_used INTEGER NOT NULL DEFAULT 0,
+                    duration_seconds REAL NOT NULL DEFAULT 0.0,
+                    error_type TEXT,
+                    error_detail TEXT,
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_mining_outcomes_model ON mining_outcomes(model_used);
+                CREATE INDEX IF NOT EXISTS idx_mining_outcomes_strategy ON mining_outcomes(strategy);
+                CREATE INDEX IF NOT EXISTS idx_mining_outcomes_brain ON mining_outcomes(brain);
+                CREATE INDEX IF NOT EXISTS idx_mining_outcomes_size ON mining_outcomes(prompt_tokens_estimated);
+            """)
+            await self.conn.commit()
+            logger.info("Migration 17 applied: created mining_outcomes table")
+
     # ------------------------------------------------------------------
     # Write operations — wrapped with _retry_on_locked for contention
     # ------------------------------------------------------------------

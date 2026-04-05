@@ -509,6 +509,10 @@ class ContextBrief(BaseModel):
     sentinel_feedback: list[dict[str, str]] = Field(default_factory=list)
     retrieved_methodology_ids: list[str] = Field(default_factory=list)
     correction_feedback: Optional[CorrectionFeedback] = None
+    # Bandit-selected primary methodology (highest bandit score)
+    primary_methodology_id: Optional[str] = None
+    # Context methodology IDs (rank 2-3, lighter weight in prompt)
+    context_methodology_ids: list[str] = Field(default_factory=list)
 
 
 class ExecutionState(BaseModel):

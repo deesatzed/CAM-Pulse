@@ -950,3 +950,104 @@ def _truncate_args(args: dict[str, Any], max_len: int = 100) -> str:
             val_str = val_str[:max_len] + "..."
         parts.append(f"{key}={val_str}")
     return ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Stdio entry point — for use as an external MCP server subprocess
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    """Run the CLAW MCP server over stdio transport.
+
+    This is the entry point for external consumers (e.g. DeepScientist) that
+    launch CLAW as a subprocess via ``python -m claw.mcp_server``.
+
+    Environment variables:
+        CLAW_DB_PATH: Path to claw.db (default: data/claw.db)
+        CLAW_CONFIG: Path to claw.toml (default: claw.toml)
+        CLAW_MCP_AUTH_TOKEN: Optional bearer token for authentication
+        GOOGLE_API_KEY: Required for embedding-based semantic search
+    """
+    import asyncio
+    import os
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        stream=sys.stderr,  # MCP uses stdout for protocol; logs go to stderr
+    )
+
+    config_path = os.environ.get("CLAW_CONFIG", "claw.toml")
+    db_path = os.environ.get("CLAW_DB_PATH", "data/claw.db")
+    auth_token = os.environ.get("CLAW_MCP_AUTH_TOKEN")
+
+    async def _run() -> int:
+        from pathlib import Path
+        from claw.core.config import load_config
+        from claw.db.engine import DatabaseEngine
+        from claw.db.embeddings import EmbeddingEngine
+        from claw.db.repository import Repository
+
+        # Load config
+        config = load_config(Path(config_path))
+
+        # Override db_path if env var is set
+        if db_path != "data/claw.db":
+            config.database.db_path = db_path
+
+        # Build minimal dependency graph (no agents, no orchestrator)
+        engine = DatabaseEngine(config.database)
+        await engine.connect()
+        repository = Repository(engine)
+
+        # Embeddings for semantic search
+        embeddings = EmbeddingEngine(config.embeddings)
+
+        # Semantic memory (for claw_query_memory / claw_store_finding)
+        semantic_memory = None
+        try:
+            from claw.memory.hybrid_search import HybridSearch
+            from claw.memory.semantic import SemanticMemory
+            hybrid_search = HybridSearch(
+                repository=repository,
+                embedding_engine=embeddings,
+            )
+            semantic_memory = SemanticMemory(
+                repository=repository,
+                embedding_engine=embeddings,
+                hybrid_search=hybrid_search,
+            )
+        except Exception as e:
+            logger.warning("SemanticMemory unavailable: %s (text-only search)", e)
+
+        # Create MCP server
+        mcp_srv = ClawMCPServer(
+            repository=repository,
+            semantic_memory=semantic_memory,
+            verifier=None,  # No verifier in stdio mode
+            dispatcher=None,  # No dispatcher in stdio mode
+            auth_token=auth_token,
+        )
+
+        # Start over stdio
+        server = start_server(mcp_srv)
+        if server is None:
+            logger.error("MCP SDK not installed. Cannot start stdio server.")
+            return 1
+
+        logger.info("CLAW MCP server starting on stdio transport...")
+        from mcp.server.stdio import stdio_server
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+        return 0
+
+    return asyncio.run(_run())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

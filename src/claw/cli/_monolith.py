@@ -5287,6 +5287,7 @@ def mine(
     max_minutes: int = typer.Option(15, "--max-minutes", help="Wall-clock time guardrail for mining"),
     yield_sort: bool = typer.Option(True, "--yield-sort/--no-yield-sort", help="Sort candidates by expected yield before mining (default: on)"),
     self_assess: bool = typer.Option(False, "--self-assess", help="After mining, classify findings as DUPLICATE/PARTIAL_GAP/NOVEL vs existing CAM knowledge"),
+    brain: Optional[str] = typer.Option(None, "--brain", "-b", help="Mining brain: auto (default), python, typescript, go, rust, misc"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -5300,6 +5301,7 @@ def mine(
     any LLM calls. Use --no-dedup to include all iterations of each project.
     Use --no-yield-sort to mine in alphabetical order instead of by expected yield.
     Use --self-assess to classify findings against existing knowledge after mining.
+    Use --brain to force a specific language brain (auto-detects by default).
     """
     _setup_logging(verbose)
 
@@ -5327,6 +5329,18 @@ def mine(
         console.print("[red]--max-minutes must be at least 1[/red]")
         raise typer.Exit(1)
 
+    # Validate --brain flag
+    from claw.miner import VALID_BRAIN_NAMES
+    brain_value = brain.lower().strip() if brain else None
+    if brain_value == "auto":
+        brain_value = None
+    if brain_value is not None and brain_value not in VALID_BRAIN_NAMES:
+        console.print(
+            f"[red]Invalid brain '{brain_value}'. "
+            f"Valid options: auto, {', '.join(sorted(VALID_BRAIN_NAMES))}[/red]"
+        )
+        raise typer.Exit(1)
+
     if scan_only:
         _mine_scan_only(dir_path, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
         return
@@ -5345,6 +5359,7 @@ def mine(
                 depth, dedup, skip_known, force_rescan, changed_only,
                 yield_sort=yield_sort,
                 self_assess=self_assess,
+                brain=brain_value,
             ),
             timeout=max_minutes * 60,
         ))
@@ -5600,6 +5615,7 @@ async def _mine_async(
     changed_only: bool = False,
     yield_sort: bool = True,
     self_assess: bool = False,
+    brain: Optional[str] = None,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -5646,6 +5662,9 @@ async def _mine_async(
                 )
 
         console.print("[cyan]Mining repositories...[/cyan]")
+        if brain:
+            console.print(f"  Brain override: [bold]{brain}[/bold]")
+
         report = await ctx.miner.mine_directory(
             base_path=dir_path,
             target_project_id=project.id,
@@ -5658,6 +5677,7 @@ async def _mine_async(
             skip_known=skip_known or changed_only,
             force_rescan=force_rescan,
             yield_sort=yield_sort,
+            brain=brain,
         )
 
         # Display results table
@@ -6659,7 +6679,7 @@ def benchmark(
 def govern(
     action: str = typer.Argument(
         "stats",
-        help="Action: stats, sweep, gc, quota, prune",
+        help="Action: stats, sweep, gc, quota, prune, bandit-stats",
     ),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to claw.toml"),
@@ -6667,11 +6687,12 @@ def govern(
     """Memory governance — sweep, stats, GC, quota enforcement, episode pruning.
 
     Actions:
-      stats  — Show methodology counts by state, DB size, quota usage
-      sweep  — Run a full governance sweep (lifecycle + GC + quota + prune)
-      gc     — Garbage-collect dead methodologies only
-      quota  — Enforce methodology quota only
-      prune  — Prune old episodes only
+      stats        — Show methodology counts by state, DB size, quota usage
+      sweep        — Run a full governance sweep (lifecycle + GC + quota + prune)
+      gc           — Garbage-collect dead methodologies only
+      quota        — Enforce methodology quota only
+      prune        — Prune old episodes only
+      bandit-stats — Show RL bandit win/loss statistics per methodology x task_type
     """
     _setup_logging(verbose)
     asyncio.run(_govern_async(action, config))
@@ -6751,9 +6772,47 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
             count = await governor._prune_episodes()
             console.print(f"  Pruned: {count} episodes older than {cfg.governance.episodic_retention_days} days")
 
+        elif action == "bandit-stats":
+            rows = await repository.get_bandit_summary()
+            if not rows:
+                console.print("No bandit outcomes recorded yet.")
+            else:
+                table = Table(title="RL Bandit Statistics")
+                table.add_column("Methodology", style="bold", max_width=20)
+                table.add_column("Task Type", style="cyan")
+                table.add_column("W", justify="right", style="green")
+                table.add_column("L", justify="right", style="red")
+                table.add_column("Total", justify="right")
+                table.add_column("Win Rate", justify="right")
+                table.add_column("Thompson", justify="center")
+                for r in rows:
+                    mid = r["methodology_id"]
+                    if len(mid) > 20:
+                        mid = mid[:17] + "..."
+                    graduated = "yes" if r["thompson_graduated"] else "no"
+                    table.add_row(
+                        mid,
+                        r["task_type"],
+                        str(r["successes"]),
+                        str(r["failures"]),
+                        str(r["total"]),
+                        f"{r['win_rate']:.3f}",
+                        graduated,
+                    )
+                console.print(table)
+
+                total_pairs = len(rows)
+                graduated_count = sum(1 for r in rows if r["thompson_graduated"])
+                total_trials = sum(r["total"] for r in rows)
+                total_wins = sum(r["successes"] for r in rows)
+                overall_wr = total_wins / total_trials if total_trials > 0 else 0.0
+                console.print(f"  Pairs tracked:       {total_pairs}")
+                console.print(f"  Thompson-graduated:  {graduated_count}")
+                console.print(f"  Overall win rate:    {overall_wr:.3f} ({total_wins}/{total_trials})")
+
         else:
             console.print(f"[red]Unknown action: {action}[/red]")
-            console.print("[dim]Valid actions: stats, sweep, gc, quota, prune[/dim]")
+            console.print("[dim]Valid actions: stats, sweep, gc, quota, prune, bandit-stats[/dim]")
 
     finally:
         await engine.close()
@@ -8817,36 +8876,114 @@ async def _kb_insights_async() -> None:
 def search(
     query: str = typer.Argument(..., help="Natural language search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
+    brain: Optional[str] = typer.Option(None, "--brain", "-b", help="Restrict to a specific brain ganglion"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
-    """Search capabilities with natural language (hybrid vector + FTS5)."""
-    asyncio.run(_kb_search_async(query, limit))
+    """Search capabilities across all brain ganglions (smart cross-brain search)."""
+    asyncio.run(_kb_search_async(query, limit, brain_filter=brain))
 
 
-async def _kb_search_async(query: str, limit: int) -> None:
+# Language hints for smart cross-brain query routing.
+_QUERY_LANGUAGE_HINTS: dict[str, str] = {
+    "goroutine": "go", "golang": "go", "go.mod": "go", "chan ": "go",
+    "defer ": "go", "go concurrency": "go", "go interface": "go",
+    "borrow checker": "rust", "ownership": "rust", "cargo": "rust",
+    "tokio": "rust", "lifetime": "rust", "async trait": "rust",
+    "crate": "rust", "unsafe ": "rust",
+    "react": "typescript", "hooks": "typescript", "nextjs": "typescript",
+    "express": "typescript", "typescript": "typescript", "npm": "typescript",
+    "jsx": "typescript", "tsx": "typescript", "webpack": "typescript",
+    "angular": "typescript", "svelte": "typescript",
+    "pytest": "python", "django": "python", "fastapi": "python",
+    "asyncio": "python", "pydantic": "python", "pip ": "python",
+    "flask": "python", "pandas": "python", "numpy": "python",
+}
+
+
+def _detect_query_language(query: str) -> Optional[str]:
+    """Detect language hint from query text for smart routing.
+
+    Returns brain name (e.g. 'go', 'rust') or None if ambiguous.
+    """
+    query_lower = query.lower()
+    detected: set[str] = set()
+    for hint, brain in _QUERY_LANGUAGE_HINTS.items():
+        if hint in query_lower:
+            detected.add(brain)
+    # Only return if unambiguous (single language detected)
+    if len(detected) == 1:
+        return detected.pop()
+    return None
+
+
+async def _kb_search_async(
+    query: str, limit: int, brain_filter: Optional[str] = None,
+) -> None:
+    from claw.core.config import load_config
+    from claw.community.federation import Federation
+
+    cfg = load_config()
     engine, repository = await _kb_engine()
 
     try:
         total = await repository.count_methodologies()
-        if total == 0:
-            console.print("[yellow]No capabilities in knowledge base. Run 'cam mine <dir>' first.[/yellow]")
-            return
 
-        # Try FTS5 text search (always works, no embedding engine required)
+        # --- Primary DB search ---
         text_results = await repository.search_methodologies_text(query, limit=limit)
 
-        if not text_results:
-            console.print(f"[yellow]No results for '{query}'.[/yellow]")
+        # Build combined results: (methodology, score, source_name)
+        combined: list[tuple[Any, float, str]] = []
+        seen_ids: set[str] = set()
+
+        if text_results:
+            for m, bm25 in text_results:
+                combined.append((m, bm25, "primary"))
+                seen_ids.add(m.id)
+
+        # --- Federation cross-brain search ---
+        detected_lang = brain_filter or _detect_query_language(query)
+        try:
+            federation = Federation(cfg.instances)
+            fed_results = await federation.query(
+                query, language=detected_lang, max_total=limit,
+            )
+            for fr in fed_results:
+                if fr.methodology.id not in seen_ids:
+                    combined.append((
+                        fr.methodology,
+                        fr.relevance_score * 10.0,  # Normalize to BM25-ish scale
+                        fr.source_instance,
+                    ))
+                    seen_ids.add(fr.methodology.id)
+        except Exception as e:
+            logger.debug("Federation search failed (non-fatal): %s", e)
+
+        if not combined:
+            if total == 0:
+                console.print("[yellow]No capabilities in knowledge base. Run 'cam mine <dir>' first.[/yellow]")
+            else:
+                console.print(f"[yellow]No results for '{query}'.[/yellow]")
             return
 
-        console.print(f"\n[bold]Search results for:[/bold] [cyan]{query}[/cyan]  ({len(text_results)} matches)\n")
+        # Sort by score descending
+        combined.sort(key=lambda x: x[1], reverse=True)
+        combined = combined[:limit]
+
+        source_hint = ""
+        if detected_lang:
+            source_hint = f"  [dim](routed to {detected_lang} brain)[/dim]"
+        console.print(
+            f"\n[bold]Search results for:[/bold] [cyan]{query}[/cyan]"
+            f"  ({len(combined)} matches){source_hint}\n",
+        )
 
         table = Table(show_lines=True)
         table.add_column("#", style="dim", width=3)
         table.add_column("ID", width=8)
-        table.add_column("Description", max_width=50)
-        table.add_column("Domains", max_width=20)
-        table.add_column("BM25", justify="right", width=8)
+        table.add_column("Description", max_width=45)
+        table.add_column("Source", width=12)
+        table.add_column("Domains", max_width=18)
+        table.add_column("Score", justify="right", width=8)
         table.add_column("Novelty", justify="right", width=8)
         table.add_column("State", width=10)
 
@@ -8855,19 +8992,22 @@ async def _kb_search_async(query: str, limit: int) -> None:
             "declining": "magenta", "dormant": "dim", "dead": "red",
         }
 
-        for i, (m, bm25_rank) in enumerate(text_results, 1):
+        for i, (m, score, source) in enumerate(combined, 1):
             domains = ", ".join((m.capability_data or {}).get("domain", [])[:3])
-            bm25_str = f"{bm25_rank:.2f}"
+            score_str = f"{score:.2f}"
             novelty_str = f"{m.novelty_score:.3f}" if m.novelty_score is not None else "-"
             color = state_colors.get(m.lifecycle_state, "")
             state_str = f"[{color}]{m.lifecycle_state}[/{color}]" if color else m.lifecycle_state
+            source_color = "green" if source == "primary" else "cyan"
+            source_str = f"[{source_color}]{source}[/{source_color}]"
 
             table.add_row(
                 str(i),
                 m.id[:8],
-                m.problem_description[:50],
+                m.problem_description[:45],
+                source_str,
                 domains,
-                bm25_str,
+                score_str,
                 novelty_str,
                 state_str,
             )
@@ -9271,6 +9411,88 @@ async def _kb_synergies_async(limit: int) -> None:
 
     finally:
         await engine.close()
+
+
+@kb_app.command(name="brains")
+def kb_brains(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show brain (language) distribution across all ganglia."""
+    asyncio.run(_kb_brains_async())
+
+
+async def _kb_brains_async() -> None:
+    """Display per-brain methodology counts across primary + sibling ganglia."""
+    from claw.core.config import DatabaseConfig, load_config
+    from claw.db.engine import DatabaseEngine
+
+    cfg = load_config()
+
+    # Collect counts from primary DB
+    brains_data: dict[str, dict[str, Any]] = {}
+
+    async def _count_brains(db_path: str, ganglion_name: str) -> None:
+        try:
+            engine = DatabaseEngine(DatabaseConfig(db_path=db_path))
+            await engine.connect()
+            try:
+                rows = await engine.fetch_all(
+                    "SELECT language, COUNT(*) as cnt FROM methodologies "
+                    "WHERE lifecycle_state != 'dead' GROUP BY language"
+                )
+                for row in rows:
+                    lang = row["language"] or "unknown"
+                    from claw.miner import _LANGUAGE_TO_BRAIN
+                    brain_name = _LANGUAGE_TO_BRAIN.get(lang, "misc")
+                    key = f"{brain_name}:{ganglion_name}"
+                    if key not in brains_data:
+                        brains_data[key] = {
+                            "brain": brain_name,
+                            "ganglion": ganglion_name,
+                            "count": 0,
+                        }
+                    brains_data[key]["count"] += row["cnt"]
+            finally:
+                await engine.close()
+        except Exception as e:
+            console.print(f"  [dim]Skipping {ganglion_name}: {e}[/dim]")
+
+    # Primary DB
+    await _count_brains(cfg.database.db_path, "primary")
+
+    # Sibling ganglia
+    for sib in cfg.instances.siblings:
+        await _count_brains(sib.db_path, sib.name)
+
+    if not brains_data:
+        console.print("[yellow]No methodologies found in any ganglion.[/yellow]")
+        return
+
+    # Aggregate by brain
+    brain_totals: dict[str, int] = {}
+    brain_ganglia: dict[str, list[str]] = {}
+    for _key, data in brains_data.items():
+        b = data["brain"]
+        brain_totals[b] = brain_totals.get(b, 0) + data["count"]
+        if data["count"] > 0:
+            brain_ganglia.setdefault(b, []).append(
+                f"{data['ganglion']} ({data['count']})"
+            )
+
+    table = Table(title="CAM Brain Distribution")
+    table.add_column("Brain", style="bold cyan", width=14)
+    table.add_column("Methodologies", justify="right", style="green", width=15)
+    table.add_column("Ganglia", max_width=50)
+
+    for brain_name in ["python", "typescript", "go", "rust", "misc"]:
+        count = brain_totals.get(brain_name, 0)
+        ganglia_str = ", ".join(brain_ganglia.get(brain_name, ["(none)"]))
+        table.add_row(brain_name, str(count), ganglia_str)
+
+    console.print(table)
+    total = sum(brain_totals.values())
+    console.print(f"\n  Total: [bold]{total:,}[/bold] methodologies across "
+                  f"[bold]{1 + len(cfg.instances.siblings)}[/bold] ganglia")
 
 
 # ---------------------------------------------------------------------------
@@ -11198,6 +11420,94 @@ def dashboard(
     console.print(f"  Press Ctrl+C to stop.\n")
 
     uvicorn.run(dash_app, host=host, port=port, log_level="warning")
+
+
+@app.command(name="mcp")
+def mcp_start(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport mode: stdio or http"),
+    host: str = typer.Option("127.0.0.1", "--host", help="HTTP host (ignored for stdio)"),
+    port: int = typer.Option(3100, "--port", "-p", help="HTTP port (ignored for stdio)"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Start the CLAW MCP server for external agents (e.g. DeepScientist).
+
+    In stdio mode (default), communicates over stdin/stdout using the MCP protocol.
+    External agents launch this as a subprocess.
+
+    In http mode, listens on a network port for MCP connections.
+    """
+    _setup_logging(False)
+    import asyncio
+
+    from claw.core.config import load_config
+    cfg = load_config(Path(config) if config else None)
+
+    async def _run_mcp() -> None:
+        import os
+        from claw.db.engine import DatabaseEngine
+        from claw.db.embeddings import EmbeddingEngine
+        from claw.db.repository import Repository
+        from claw.mcp_server import ClawMCPServer, start_server
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.initialize()
+        repository = Repository(engine)
+        embeddings = EmbeddingEngine(cfg.embeddings)
+
+        # Build semantic memory for KB search
+        semantic_memory = None
+        try:
+            from claw.memory.hybrid_search import HybridSearch
+            from claw.memory.semantic import SemanticMemory
+            hybrid_search = HybridSearch(
+                repository=repository,
+                embedding_engine=embeddings,
+                deep_conf=cfg.deep_conf,
+            )
+            semantic_memory = SemanticMemory(
+                repository=repository,
+                embedding_engine=embeddings,
+                hybrid_search=hybrid_search,
+            )
+        except Exception as e:
+            console.print(f"[yellow]SemanticMemory unavailable: {e}. Text-only search.[/yellow]")
+
+        auth_token = os.environ.get(cfg.mcp.auth_token_env)
+        mcp_srv = ClawMCPServer(
+            repository=repository,
+            semantic_memory=semantic_memory,
+            verifier=None,
+            dispatcher=None,
+            auth_token=auth_token,
+        )
+
+        server = start_server(mcp_srv, host=host, port=port)
+        if server is None:
+            console.print("[red]MCP SDK not installed. Run: pip install mcp[/red]")
+            raise typer.Exit(1)
+
+        if transport == "stdio":
+            console.print("[bold green]CLAW MCP server starting (stdio)...[/bold green]", err=True)
+            console.print(f"  Tools: {[s['name'] for s in mcp_srv.get_tool_schemas()]}", err=True)
+            console.print(f"  KB: {await repository.count_methodologies()} methodologies", err=True)
+            from mcp.server.stdio import stdio_server
+            async with stdio_server() as (read_stream, write_stream):
+                await server.run(
+                    read_stream,
+                    write_stream,
+                    server.create_initialization_options(),
+                )
+        else:
+            console.print(f"[bold green]CLAW MCP server listening on {host}:{port}[/bold green]")
+            console.print(f"  Tools: {[s['name'] for s in mcp_srv.get_tool_schemas()]}")
+            console.print(f"  KB: {await repository.count_methodologies()} methodologies")
+            console.print("  Press Ctrl+C to stop.")
+            # For HTTP mode, the server would need an HTTP transport adapter
+            # For now, stdio is the primary transport for DeepScientist integration
+            console.print("[yellow]HTTP transport not yet implemented. Use --transport stdio[/yellow]")
+            raise typer.Exit(1)
+
+    asyncio.run(_run_mcp())
 
 
 def app_main() -> None:

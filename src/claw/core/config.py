@@ -160,6 +160,7 @@ class AgentConfig(BaseModel):
     max_budget_usd: float = 1.0
     local_base_url: Optional[str] = None  # Override base_url for local mode
     max_tokens: int = 16384  # Token limit for model responses
+    context_window_tokens: int = 0  # Model's total context window. 0 = unknown.
 
 
 class RoutingConfig(BaseModel):
@@ -197,10 +198,82 @@ class EvolutionConfig(BaseModel):
     ab_test_kappa: float = 10.0  # Kelly kappa-shrinkage for adaptive A/B margin
 
 
+class BrainConfig(BaseModel):
+    """Per-language mining brain configuration.
+
+    A brain is a mining lens: it defines the prompt template, serialization
+    limits, and target ganglion for a specific programming language.  The
+    miner's ``detect_repo_language()`` selects the brain; the brain's
+    ``ganglion_name`` determines which ganglion DB stores the findings.
+    """
+    enabled: bool = True
+    max_bytes: int = 921_600              # Serialization cap (default 900 KB)
+    prompt: str = "repo-mine.md"          # Prompt template filename in prompts/
+    priority_extensions: list[str] = []   # Extensions to prioritize in serialization
+    extra_skip_dirs: list[str] = []       # Brain-specific dirs to skip
+    ganglion_name: str = ""               # Target ganglion (empty → primary DB)
+
+
+def _default_brains() -> dict[str, BrainConfig]:
+    """Built-in brain configurations for supported language families."""
+    return {
+        "python": BrainConfig(
+            max_bytes=921_600,
+            prompt="repo-mine.md",
+            ganglion_name="",  # primary DB
+        ),
+        "typescript": BrainConfig(
+            max_bytes=1_536_000,  # 1500 KB — TS projects are larger
+            prompt="repo-mine-typescript.md",
+            priority_extensions=[".ts", ".tsx", ".js", ".jsx"],
+            ganglion_name="typescript",
+        ),
+        "go": BrainConfig(
+            max_bytes=1_228_800,  # 1200 KB
+            prompt="repo-mine-go.md",
+            priority_extensions=[".go"],
+            ganglion_name="go",
+        ),
+        "rust": BrainConfig(
+            max_bytes=1_228_800,  # 1200 KB
+            prompt="repo-mine-rust.md",
+            priority_extensions=[".rs"],
+            ganglion_name="rust",
+        ),
+        "misc": BrainConfig(
+            max_bytes=921_600,
+            prompt="repo-mine-misc.md",
+            ganglion_name="misc",
+        ),
+    }
+
+
+class MiningRecoveryConfig(BaseModel):
+    """Self-recovery configuration for mining LLM calls.
+
+    When the LLM returns null/empty (e.g., context overflow), the miner
+    tries escalation strategies instead of quitting:
+      1. Model escalation — try models with larger context windows
+      2. Content reduction — re-serialize at reduced max_bytes
+      3. Chunk mining — split content, mine each chunk, merge findings
+    """
+    enabled: bool = True
+    max_escalation_attempts: int = 3
+    content_reduction_factor: float = 0.50
+    max_chunks: int = 4
+    escalation_order: list[str] = Field(
+        default_factory=lambda: ["claude", "gemini", "grok"],
+    )
+    token_estimate_chars_per_token: float = 4.0
+    min_context_headroom_pct: float = 0.20
+
+
 class MiningConfig(BaseModel):
     """Mining and serialization configuration."""
     extra_code_extensions: list[str] = []  # e.g. [".cpp", ".rb", ".swift"]
     extra_skip_dirs: list[str] = []        # e.g. ["migrations", "vendor"]
+    brains: dict[str, BrainConfig] = Field(default_factory=_default_brains)
+    recovery: MiningRecoveryConfig = Field(default_factory=MiningRecoveryConfig)
 
 
 class GovernanceConfig(BaseModel):
@@ -427,6 +500,15 @@ class InstanceRegistryConfig(BaseModel):
 SwarmConfig = InstanceRegistryConfig
 
 
+class MCPConfig(BaseModel):
+    """MCP server configuration for exposing CLAW tools externally."""
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 3100
+    transport: str = "stdio"  # "stdio" or "http"
+    auth_token_env: str = "CLAW_MCP_AUTH_TOKEN"
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -459,6 +541,7 @@ class ClawConfig(BaseModel):
     instances: InstanceRegistryConfig = Field(default_factory=InstanceRegistryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     local_llm: LocalLLMConfig = Field(default_factory=LocalLLMConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
 

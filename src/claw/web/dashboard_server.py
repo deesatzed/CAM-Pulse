@@ -20,6 +20,8 @@ from typing import Any, Optional
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from claw.db.repository import _build_safe_fts5_query
+
 logger = logging.getLogger("claw.web.dashboard")
 
 # ---------------------------------------------------------------------------
@@ -190,6 +192,10 @@ async def api_search(
     results: list[dict[str, Any]] = []
 
     # 1. Search primary ganglion via FTS5
+    safe_q = _build_safe_fts5_query(q)
+    if not safe_q:
+        return JSONResponse({"query": q, "results": [], "elapsed_ms": 0})
+
     primary_rows = await repo.engine.fetch_all(
         "SELECT m.id, m.problem_description, m.solution_code, m.methodology_notes, "
         "m.tags, m.language, m.lifecycle_state, m.novelty_score, m.retrieval_count, "
@@ -199,7 +205,7 @@ async def api_search(
         "JOIN methodologies m ON f.rowid = m.rowid "
         "WHERE methodology_fts MATCH ? "
         "ORDER BY rank LIMIT ?",
-        (q, limit),
+        (safe_q, limit),
     )
     for r in primary_rows:
         tags = []

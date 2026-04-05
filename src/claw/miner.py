@@ -22,14 +22,123 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from claw.core.config import ClawConfig
+from claw.core.config import AgentConfig, BrainConfig, ClawConfig, DatabaseConfig
 from claw.core.models import ActionTemplate, Methodology, Project, Task, TaskStatus
+from claw.db.engine import DatabaseEngine
 from claw.db.repository import Repository
 from claw.llm.client import LLMClient, LLMMessage, LLMResponse
 from claw.memory.semantic import SemanticMemory
 from claw.memory.cag_staleness import maybe_mark_cag_stale
 
 logger = logging.getLogger("claw.miner")
+
+
+# ---------------------------------------------------------------------------
+# Ganglion auto-provisioning for language-specific brains
+# ---------------------------------------------------------------------------
+
+async def ensure_language_ganglion(
+    brain_name: str,
+    brain_config: BrainConfig,
+    primary_repository: Repository,
+    primary_semantic: SemanticMemory,
+    config: ClawConfig,
+) -> tuple[Repository, SemanticMemory]:
+    """Get or create the ganglion DB for a language brain.
+
+    For the Python brain (ganglion_name == ""), returns the primary
+    repository and semantic memory unchanged.
+
+    For non-Python brains, auto-provisions a ganglion at
+    ``data/instances/{ganglion_name}/claw.db`` if it doesn't exist,
+    initializes the schema, and returns a connected Repository +
+    SemanticMemory pair targeting that ganglion.
+
+    Args:
+        brain_name: Brain identifier (e.g. "typescript", "go").
+        brain_config: BrainConfig for this brain.
+        primary_repository: The primary (Python) Repository.
+        primary_semantic: The primary SemanticMemory.
+        config: Full ClawConfig (for embedding config, etc.).
+
+    Returns:
+        (Repository, SemanticMemory) targeting the correct ganglion DB.
+    """
+    ganglion_name = brain_config.ganglion_name
+    if not ganglion_name:
+        # Python brain → use primary DB.
+        return primary_repository, primary_semantic
+
+    # Determine ganglion DB path relative to the project root.
+    project_root = Path(config.database.db_path).parent.parent
+    ganglion_dir = project_root / "instances" / ganglion_name
+    ganglion_db_path = ganglion_dir / "claw.db"
+
+    needs_init = not ganglion_db_path.exists()
+
+    # Create engine + connect
+    db_config = DatabaseConfig(db_path=str(ganglion_db_path))
+    engine = DatabaseEngine(db_config)
+    await engine.connect()
+
+    if needs_init:
+        await engine.initialize_schema()
+        logger.info(
+            "Auto-provisioned ganglion '%s' at %s",
+            ganglion_name, ganglion_db_path,
+        )
+
+        # Auto-register as sibling in claw.toml if not already registered.
+        _register_sibling_if_needed(
+            ganglion_name, str(ganglion_db_path.resolve()), config,
+        )
+    else:
+        logger.debug(
+            "Reusing existing ganglion '%s' at %s",
+            ganglion_name, ganglion_db_path,
+        )
+
+    repo = Repository(engine)
+
+    # Build a SemanticMemory for this ganglion.
+    # Reuse the primary's embedding engine (model is shared).
+    from claw.memory.hybrid_search import HybridSearch
+    hybrid = HybridSearch(
+        repository=repo,
+        embedding_engine=primary_semantic.embedding_engine,
+    )
+    sem = SemanticMemory(
+        repository=repo,
+        embedding_engine=primary_semantic.embedding_engine,
+        hybrid_search=hybrid,
+    )
+
+    return repo, sem
+
+
+def _register_sibling_if_needed(
+    name: str, db_path: str, config: ClawConfig,
+) -> None:
+    """Append a [[instances.siblings]] entry to claw.toml if not already there."""
+    # Check if already registered.
+    for sib in config.instances.siblings:
+        if sib.name == name:
+            return
+
+    toml_path = Path("claw.toml")
+    if not toml_path.exists():
+        logger.warning("claw.toml not found — cannot auto-register ganglion '%s'", name)
+        return
+
+    entry = (
+        f'\n[[instances.siblings]]\n'
+        f'name = "{name}"\n'
+        f'db_path = "{db_path}"\n'
+        f'description = "{name.title()} language patterns mined by CAM {name} brain"\n'
+    )
+    with toml_path.open("a") as f:
+        f.write(entry)
+    logger.info("Auto-registered ganglion '%s' in claw.toml", name)
 
 # Extensions to include when serializing a repo for mining.
 _CODE_EXTENSIONS: set[str] = {
@@ -45,6 +154,7 @@ _SKIP_DIRS: set[str] = {
     ".pytest_cache", ".ruff_cache", "egg-info",
     ".next", ".nuxt", "coverage", ".cache",
     "target",  # Rust/Java build output
+    ".history",  # VS Code local history — wastes serialization budget
 }
 
 # Maximum serialized repo size in bytes (900 KB).
@@ -235,6 +345,337 @@ _LANGUAGE_SIGNALS: dict[str, str] = {
     "gemfile": "ruby", "mix.exs": "elixir", "project.clj": "clojure",
 }
 
+# Map detected language strings to brain names (many-to-one).
+_LANGUAGE_TO_BRAIN: dict[str, str] = {
+    "python": "python",
+    "typescript": "typescript",
+    "javascript": "typescript",  # JS repos use the TS brain
+    "go": "go",
+    "rust": "rust",
+    # Everything else → misc
+    "java": "misc", "kotlin": "misc", "ruby": "misc",
+    "elixir": "misc", "clojure": "misc", "unknown": "misc",
+}
+
+# Extension → language for the file-census tiebreaker.
+_EXT_TO_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".js": "javascript", ".jsx": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java", ".kt": "kotlin",
+    ".rb": "ruby", ".ex": "elixir", ".exs": "elixir",
+    ".c": "misc", ".cpp": "misc", ".cc": "misc", ".h": "misc", ".hpp": "misc",
+}
+
+# Valid brain names that the user can pass via --brain.
+VALID_BRAIN_NAMES: set[str] = {"python", "typescript", "go", "rust", "misc"}
+
+# Reverse mapping: brain → set of file extensions that belong to it.
+_BRAIN_EXTENSIONS: dict[str, set[str]] = {}
+for _ext, _lang in _EXT_TO_LANGUAGE.items():
+    _brain = _LANGUAGE_TO_BRAIN.get(_lang, "misc")
+    _BRAIN_EXTENSIONS.setdefault(_brain, set()).add(_ext)
+
+# Minimum thresholds for a language zone to be mined separately.
+_MIN_ZONE_FILES: int = 3
+_MIN_ZONE_PCT: float = 5.0
+
+
+@dataclass
+class LanguageZone:
+    """A language zone detected within a repository."""
+
+    brain: str  # Brain name: "python", "typescript", "go", "rust", "misc"
+    file_count: int  # Number of source files in this zone
+    file_extensions: set[str]  # Extensions in this zone (e.g. {".ts", ".tsx"})
+    pct: float  # Percentage of total code files in repo
+
+
+def detect_all_repo_languages(
+    repo_path: Path,
+    config: ClawConfig | None = None,
+) -> dict[str, LanguageZone]:
+    """Detect ALL languages present in a repository.
+
+    Walks the repo once, counts files per extension, aggregates by brain.
+    Config-file signals (tsconfig.json, go.mod, etc.) ensure their language
+    zone is always included even if file count is low.
+    Skips zones below _MIN_ZONE_FILES or _MIN_ZONE_PCT thresholds
+    (unless the zone has a config-file signal).
+
+    Returns dict keyed by brain name (e.g. {"python": LanguageZone(...), "go": ...}).
+    """
+    if not repo_path.is_dir():
+        return {}
+
+    skip_dirs = _get_skip_dirs(config)
+    code_exts = _get_code_extensions(config)
+
+    # Collect config-file signals + count source files in one pass
+    config_signal_langs: set[str] = set()
+    ext_counts: dict[str, int] = {}
+    for filepath in repo_path.rglob("*"):
+        if not filepath.is_file():
+            continue
+        rel = filepath.relative_to(repo_path)
+        if any(part in skip_dirs for part in rel.parts):
+            continue
+        name_lower = filepath.name.lower()
+        if name_lower in _LANGUAGE_SIGNALS:
+            config_signal_langs.add(_LANGUAGE_SIGNALS[name_lower])
+        suffix = filepath.suffix.lower()
+        if suffix in code_exts and suffix in _EXT_TO_LANGUAGE:
+            ext_counts[suffix] = ext_counts.get(suffix, 0) + 1
+
+    if not ext_counts and not config_signal_langs:
+        return {}
+
+    total_files = max(sum(ext_counts.values()), 1)
+
+    # Aggregate by brain
+    brain_files: dict[str, int] = {}
+    brain_exts: dict[str, set[str]] = {}
+    for ext, count in ext_counts.items():
+        lang = _EXT_TO_LANGUAGE[ext]
+        brain = _LANGUAGE_TO_BRAIN.get(lang, "misc")
+        brain_files[brain] = brain_files.get(brain, 0) + count
+        brain_exts.setdefault(brain, set()).add(ext)
+
+    # Ensure config-signal languages are represented
+    config_signal_brains: set[str] = set()
+    for lang in config_signal_langs:
+        brain = _LANGUAGE_TO_BRAIN.get(lang, "misc")
+        config_signal_brains.add(brain)
+        if brain not in brain_files:
+            brain_files[brain] = 0
+            brain_exts.setdefault(brain, set())
+        # Add known extensions for this brain
+        if brain in _BRAIN_EXTENSIONS:
+            brain_exts[brain] |= _BRAIN_EXTENSIONS[brain]
+
+    # Build zones, applying thresholds.
+    # Config-signal brains bypass thresholds (tsconfig.json = always include TS zone).
+    zones: dict[str, LanguageZone] = {}
+    for brain, count in brain_files.items():
+        pct = (count / total_files) * 100.0
+        has_config_signal = brain in config_signal_brains
+        if has_config_signal or (count >= _MIN_ZONE_FILES and pct >= _MIN_ZONE_PCT):
+            zones[brain] = LanguageZone(
+                brain=brain,
+                file_count=count,
+                file_extensions=brain_exts[brain],
+                pct=round(pct, 1),
+            )
+
+    # If thresholds eliminated everything, include the largest zone anyway
+    if not zones and brain_files:
+        dominant_brain = max(brain_files, key=brain_files.get)  # type: ignore[arg-type]
+        count = brain_files[dominant_brain]
+        zones[dominant_brain] = LanguageZone(
+            brain=dominant_brain,
+            file_count=count,
+            file_extensions=brain_exts[dominant_brain],
+            pct=round((count / total_files) * 100.0, 1),
+        )
+
+    return zones
+
+
+def detect_repo_language(
+    repo_path: Path,
+    config: ClawConfig | None = None,
+) -> str:
+    """Detect the primary language of a repository and return its brain name.
+
+    Thin wrapper over detect_all_repo_languages() — returns the dominant brain.
+    Config-file signals take priority: if tsconfig.json is present, TypeScript
+    wins even when Python has more files (matching the old behavior).
+
+    Returns one of: "python", "typescript", "go", "rust", "misc".
+    """
+    zones = detect_all_repo_languages(repo_path, config)
+    if not zones:
+        return "misc"
+
+    # Config-file signal priority: check for authoritative config files
+    # that should override pure file-count dominance.
+    if not repo_path.is_dir():
+        return "misc"
+    skip_dirs = _get_skip_dirs(config)
+    signal_brains: list[str] = []
+    for filepath in repo_path.iterdir():
+        if filepath.is_file():
+            rel = filepath.relative_to(repo_path)
+            if any(part in skip_dirs for part in rel.parts):
+                continue
+            name_lower = filepath.name.lower()
+            if name_lower in _LANGUAGE_SIGNALS:
+                lang = _LANGUAGE_SIGNALS[name_lower]
+                brain = _LANGUAGE_TO_BRAIN.get(lang, "misc")
+                if brain != "misc" and brain in zones:
+                    signal_brains.append(brain)
+
+    # TypeScript signal trumps all (tsconfig.json is authoritative).
+    if "typescript" in signal_brains:
+        return "typescript"
+    # Other non-misc config signals take priority over file count.
+    for brain in signal_brains:
+        if brain != "misc":
+            return brain
+
+    # Fall back to file-count dominance.
+    dominant = max(zones.values(), key=lambda z: z.file_count)
+    return dominant.brain
+
+
+# ---------------------------------------------------------------------------
+# Context-aware mining model selector with RL learning
+# ---------------------------------------------------------------------------
+
+class MiningModelSelector:
+    """Context-aware model selector for mining with RL learning.
+
+    Responsibilities:
+    1. Estimate prompt token count from serialized content length.
+    2. Filter agents whose context_window_tokens can fit the prompt + headroom.
+    3. Among eligible agents, prefer the one with the best learned success rate.
+    4. On cold start (no data), use the escalation_order from config.
+    5. Provide an ordered escalation chain for retry logic.
+    """
+
+    def __init__(
+        self,
+        config: ClawConfig,
+        repository: Repository | None = None,
+    ) -> None:
+        self.config = config
+        self.repository = repository
+
+    def estimate_prompt_tokens(self, prompt: str) -> int:
+        """Estimate token count from prompt character count.
+
+        Uses configurable chars_per_token (default 4.0). Intentionally
+        conservative — overestimating is safer than underestimating.
+        """
+        cpt = self.config.mining.recovery.token_estimate_chars_per_token
+        return int(len(prompt) / cpt)
+
+    def get_eligible_agents(
+        self, estimated_tokens: int,
+    ) -> list[tuple[str, AgentConfig]]:
+        """Return agents whose context window can fit the prompt.
+
+        Reserves headroom_pct for output tokens. Agents with
+        context_window_tokens=0 (unknown) are included last as fallback.
+
+        Returns list of (agent_name, agent_config) sorted by context
+        window ascending (prefer smallest sufficient model for cost).
+        """
+        headroom = self.config.mining.recovery.min_context_headroom_pct
+        required = int(estimated_tokens / (1.0 - headroom))
+
+        eligible: list[tuple[str, AgentConfig, int]] = []
+        unknown: list[tuple[str, AgentConfig]] = []
+
+        for name, cfg in self.config.agents.items():
+            if not cfg.enabled or not cfg.model:
+                continue
+            if cfg.context_window_tokens == 0:
+                unknown.append((name, cfg))
+                continue
+            if cfg.context_window_tokens >= required:
+                eligible.append((name, cfg, cfg.context_window_tokens))
+
+        eligible.sort(key=lambda x: x[2])
+        result = [(n, c) for n, c, _ in eligible]
+        result.extend(unknown)
+        return result
+
+    def build_escalation_chain(
+        self, estimated_tokens: int,
+    ) -> list[tuple[str, str]]:
+        """Build ordered (agent_name, model_id) escalation chain.
+
+        Priority:
+        1. Agents with sufficient context window (ascending by size)
+        2. Agents from config escalation_order not yet included
+        3. All remaining enabled agents
+        """
+        eligible = self.get_eligible_agents(estimated_tokens)
+        chain: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        for name, cfg in eligible:
+            if name not in seen:
+                chain.append((name, cfg.model))
+                seen.add(name)
+
+        for name in self.config.mining.recovery.escalation_order:
+            if name not in seen:
+                cfg = self.config.agents.get(name)
+                if cfg and cfg.enabled and cfg.model:
+                    chain.append((name, cfg.model))
+                    seen.add(name)
+
+        for name, cfg in self.config.agents.items():
+            if name not in seen and cfg.enabled and cfg.model:
+                chain.append((name, cfg.model))
+                seen.add(name)
+
+        return chain
+
+    async def select_best_model(
+        self, estimated_tokens: int,
+    ) -> tuple[str, str]:
+        """Select best (agent_name, model_id) using RL data.
+
+        If sufficient outcome data exists, returns the model with
+        the highest success rate for this token-size bucket.
+        Otherwise, falls back to the first eligible agent.
+
+        Raises ValueError if no agents are available.
+        """
+        if self.repository:
+            try:
+                best_model = await self.repository.get_best_mining_model_for_size(
+                    estimated_tokens, min_observations=3,
+                )
+                if best_model:
+                    for name, cfg in self.config.agents.items():
+                        if cfg.model == best_model and cfg.enabled:
+                            logger.info(
+                                "RL selected model %s (agent=%s) for ~%dK tokens",
+                                best_model, name, estimated_tokens // 1000,
+                            )
+                            return name, best_model
+            except Exception as e:
+                logger.debug("RL model selection failed, using fallback: %s", e)
+
+        chain = self.build_escalation_chain(estimated_tokens)
+        if not chain:
+            raise ValueError("No model configured in any agent. Set a model in claw.toml.")
+
+        name, model = chain[0]
+        logger.info(
+            "Selected model %s (agent=%s) for ~%dK tokens (no RL data)",
+            model, name, estimated_tokens // 1000,
+        )
+        return name, model
+
+
+@dataclass
+class PolyglotMiningResult:
+    """Per-brain breakdown within a multi-pass polyglot mining result."""
+
+    brain: str
+    findings_count: int = 0
+    methodology_ids: list[str] = field(default_factory=list)
+    tokens_used: int = 0
+    duration_seconds: float = 0.0
+    error: str | None = None
+
 
 @dataclass
 class RepoMiningResult:
@@ -251,6 +692,9 @@ class RepoMiningResult:
     skip_reason: Optional[str] = None
     methodology_ids: list[str] = field(default_factory=list)
     action_template_ids: list[str] = field(default_factory=list)
+    recovery_attempts: int = 0
+    recovery_strategy: str = ""
+    brain_breakdown: list[PolyglotMiningResult] = field(default_factory=list)
 
 
 @dataclass
@@ -453,6 +897,7 @@ def serialize_repo(
     max_bytes: int = _MAX_REPO_BYTES,
     exclude_files: set[str] | None = None,
     config: ClawConfig | None = None,
+    language_filter: set[str] | None = None,
 ) -> tuple[str, int]:
     """Read all source files in a directory and concatenate with file headers.
 
@@ -468,10 +913,18 @@ def serialize_repo(
         max_bytes: Maximum serialized size in bytes.
         exclude_files: Set of relative file paths to skip (from secret scanner).
         config: Optional ClawConfig for extra extensions/skip dirs.
+        language_filter: If set, only include files whose extension is in this
+            set. README, config, and documentation files (.md, .toml, .yaml,
+            .yml, .json) are always included for project context.
 
     Returns:
         Tuple of (serialized content, number of files read).
     """
+    # Extensions always included regardless of language_filter (project context).
+    _CONTEXT_EXTENSIONS: set[str] = {
+        ".md", ".toml", ".yaml", ".yml", ".json", ".cfg", ".ini", ".txt",
+    }
+
     root = Path(repo_path)
     if not root.is_dir():
         logger.warning("Repo path is not a directory: %s", repo_path)
@@ -489,8 +942,20 @@ def serialize_repo(
         rel = filepath.relative_to(root)
         if any(part in skip_dirs for part in rel.parts):
             continue
-        if filepath.suffix.lower() not in code_exts:
+        suffix = filepath.suffix.lower()
+        if suffix not in code_exts:
             continue
+        # Language filter: skip source files not in the target language,
+        # but always keep context files (README, config, docs).
+        if language_filter is not None:
+            name_lower = filepath.name.lower()
+            is_context = (
+                suffix in _CONTEXT_EXTENSIONS
+                or name_lower in _README_NAMES
+                or name_lower in _CONFIG_NAMES
+            )
+            if not is_context and suffix not in language_filter:
+                continue
         if ignore_patterns and _is_mineignored(str(rel), ignore_patterns):
             continue
         eligible.append((_file_priority(rel), rel, filepath))
@@ -769,7 +1234,7 @@ class RepoMiner:
         self.config = config
         self.governance = governance
         self.assimilation_engine = assimilation_engine
-        self._prompt_template: Optional[str] = None
+        self._prompt_cache: dict[str, str] = {}
         self.scan_ledger = RepoScanLedger(
             scan_ledger_path or _default_scan_ledger_path(config)
         )
@@ -963,14 +1428,18 @@ class RepoMiner:
             "license_type": getattr(self, "_current_mine_metadata", {}).get("license_type", ""),
         }
 
-    def _get_prompt_template(self) -> str:
-        """Load the mining prompt template from prompts/repo-mine.md."""
-        if self._prompt_template is None:
-            prompt_path = Path(__file__).parent.parent.parent / "prompts" / "repo-mine.md"
+    def _get_prompt_template(self, prompt_name: str = "repo-mine.md") -> str:
+        """Load a mining prompt template from the prompts/ directory.
+
+        Caches by filename so multiple brains can each load their own
+        prompt without redundant disk reads.
+        """
+        if prompt_name not in self._prompt_cache:
+            prompt_path = Path(__file__).parent.parent.parent / "prompts" / prompt_name
             if not prompt_path.exists():
                 raise FileNotFoundError(f"Mining prompt not found: {prompt_path}")
-            self._prompt_template = prompt_path.read_text(encoding="utf-8")
-        return self._prompt_template
+            self._prompt_cache[prompt_name] = prompt_path.read_text(encoding="utf-8")
+        return self._prompt_cache[prompt_name]
 
     def _get_mining_model(self) -> str:
         """Get the model to use for mining from config.
@@ -983,6 +1452,428 @@ class RepoMiner:
             if agent_cfg and agent_cfg.enabled and agent_cfg.model:
                 return agent_cfg.model
         raise ValueError("No model configured in any agent. Set a model in claw.toml.")
+
+    # ------------------------------------------------------------------
+    # Self-recovery mining loop
+    # ------------------------------------------------------------------
+
+    async def _mine_with_recovery(
+        self,
+        *,
+        prompt: str,
+        token_budget: int,
+        model_selector: MiningModelSelector,
+        estimated_tokens: int,
+        repo_name: str,
+        repo_path: str | Path,
+        repo_content: str,
+        file_count: int,
+        brain: str,
+        brain_config: BrainConfig,
+        domain_info: dict[str, Any],
+        overlap: Any,
+        secret_scan_files: set[str] | None,
+        start_time: float,
+    ) -> tuple[LLMResponse | None, list[MiningFinding], int, str]:
+        """Mine with automatic self-recovery on null/empty LLM responses.
+
+        Recovery strategies (tried in order):
+          1. MODEL ESCALATION: Try models with larger context windows.
+          2. CONTENT REDUCTION: Re-serialize at 50% of max_bytes, retry.
+          3. CHUNK MINING: Split content, mine each chunk, merge findings.
+
+        Returns:
+            (response, findings, recovery_attempts, winning_strategy)
+        """
+        recovery = self.config.mining.recovery
+
+        if not recovery.enabled:
+            agent_name, model = await model_selector.select_best_model(estimated_tokens)
+            try:
+                resp = await self.llm_client.complete(
+                    messages=[LLMMessage(role="user", content=prompt)],
+                    model=model, temperature=0.3, max_tokens=token_budget,
+                )
+                findings = parse_findings(resp.content, repo_name)
+                await self._record_mining_outcome(
+                    model=model, agent_id=agent_name, brain=brain,
+                    repo_name=repo_name, estimated_tokens=estimated_tokens,
+                    repo_size_bytes=len(repo_content.encode()),
+                    file_count=file_count, strategy="primary",
+                    success=bool(findings), findings_count=len(findings),
+                    response=resp, start_time=start_time,
+                )
+                return resp, findings, 0, "primary"
+            except Exception as e:
+                await self._record_mining_outcome(
+                    model=model, agent_id=agent_name, brain=brain,
+                    repo_name=repo_name, estimated_tokens=estimated_tokens,
+                    repo_size_bytes=len(repo_content.encode()),
+                    file_count=file_count, strategy="primary",
+                    success=False, findings_count=0, response=None,
+                    start_time=start_time, error=e,
+                )
+                return None, [], 0, "primary"
+
+        escalation_chain = model_selector.build_escalation_chain(estimated_tokens)
+        attempts = 0
+
+        # --- STRATEGY 1: Model escalation ---
+        for agent_name, model in escalation_chain:
+            if attempts >= recovery.max_escalation_attempts:
+                break
+
+            attempts += 1
+            strategy = "primary" if attempts == 1 else "model_escalation"
+            logger.info(
+                "Mining %s: attempt %d/%d, model=%s (agent=%s, strategy=%s)",
+                repo_name, attempts, recovery.max_escalation_attempts,
+                model, agent_name, strategy,
+            )
+
+            try:
+                resp = await self.llm_client.complete(
+                    messages=[LLMMessage(role="user", content=prompt)],
+                    model=model, temperature=0.3, max_tokens=token_budget,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Mining %s: model %s threw %s — escalating",
+                    repo_name, model, type(e).__name__,
+                )
+                await self._record_mining_outcome(
+                    model=model, agent_id=agent_name, brain=brain,
+                    repo_name=repo_name, estimated_tokens=estimated_tokens,
+                    repo_size_bytes=len(repo_content.encode()),
+                    file_count=file_count, strategy=strategy,
+                    success=False, findings_count=0, response=None,
+                    start_time=start_time, error=e,
+                )
+                continue
+
+            findings = parse_findings(resp.content, repo_name)
+            success = bool(findings)
+            await self._record_mining_outcome(
+                model=model, agent_id=agent_name, brain=brain,
+                repo_name=repo_name, estimated_tokens=estimated_tokens,
+                repo_size_bytes=len(repo_content.encode()),
+                file_count=file_count, strategy=strategy,
+                success=success, findings_count=len(findings),
+                response=resp, start_time=start_time,
+            )
+
+            if success:
+                if attempts > 1:
+                    logger.info(
+                        "Mining %s: recovered after %d attempts with model %s",
+                        repo_name, attempts, model,
+                    )
+                return resp, findings, attempts - 1, strategy
+
+            logger.warning(
+                "Mining %s: model %s returned 0 findings — escalating",
+                repo_name, model,
+            )
+
+        # --- STRATEGY 2: Content reduction ---
+        if attempts < recovery.max_escalation_attempts:
+            attempts += 1
+            reduced_max = int(brain_config.max_bytes * recovery.content_reduction_factor)
+            logger.info(
+                "Mining %s: STRATEGY 2 — reducing content from %dKB to %dKB",
+                repo_name, brain_config.max_bytes // 1024, reduced_max // 1024,
+            )
+
+            reduced_content, reduced_count = serialize_repo(
+                repo_path, max_bytes=reduced_max,
+                exclude_files=secret_scan_files, config=self.config,
+            )
+            if reduced_content:
+                template = self._get_prompt_template(brain_config.prompt)
+                reduced_prompt = template.replace("{repo_content}", reduced_content)
+                ctx_lines = self._build_mining_context(domain_info, overlap)
+                if ctx_lines:
+                    reduced_prompt = "\n".join(ctx_lines) + "\n\n" + reduced_prompt
+
+                reduced_est = model_selector.estimate_prompt_tokens(reduced_prompt)
+                try:
+                    best_agent, best_model = await model_selector.select_best_model(
+                        reduced_est,
+                    )
+                except ValueError:
+                    best_agent, best_model = (
+                        escalation_chain[0] if escalation_chain else ("", "")
+                    )
+
+                if best_model:
+                    try:
+                        resp = await self.llm_client.complete(
+                            messages=[LLMMessage(role="user", content=reduced_prompt)],
+                            model=best_model, temperature=0.3,
+                            max_tokens=token_budget,
+                        )
+                        findings = parse_findings(resp.content, repo_name)
+                        success = bool(findings)
+                        await self._record_mining_outcome(
+                            model=best_model, agent_id=best_agent, brain=brain,
+                            repo_name=repo_name, estimated_tokens=reduced_est,
+                            repo_size_bytes=len(reduced_content.encode()),
+                            file_count=reduced_count,
+                            strategy="content_reduction",
+                            success=success, findings_count=len(findings),
+                            response=resp, start_time=start_time,
+                        )
+                        if success:
+                            logger.info(
+                                "Mining %s: recovered via content reduction "
+                                "(%dKB → %dKB, model=%s)",
+                                repo_name, brain_config.max_bytes // 1024,
+                                reduced_max // 1024, best_model,
+                            )
+                            return resp, findings, attempts, "content_reduction"
+                    except Exception as e:
+                        logger.warning(
+                            "Mining %s: content reduction failed: %s",
+                            repo_name, e,
+                        )
+                        await self._record_mining_outcome(
+                            model=best_model, agent_id=best_agent, brain=brain,
+                            repo_name=repo_name, estimated_tokens=reduced_est,
+                            repo_size_bytes=len(reduced_content.encode()),
+                            file_count=reduced_count,
+                            strategy="content_reduction",
+                            success=False, findings_count=0, response=None,
+                            start_time=start_time, error=e,
+                        )
+
+        # --- STRATEGY 3: Chunk mining ---
+        if attempts < recovery.max_escalation_attempts:
+            attempts += 1
+            logger.info("Mining %s: STRATEGY 3 — chunk mining", repo_name)
+
+            chunk_findings = await self._mine_in_chunks(
+                repo_content=repo_content,
+                repo_name=repo_name,
+                repo_path=repo_path,
+                brain=brain,
+                brain_config=brain_config,
+                domain_info=domain_info,
+                overlap=overlap,
+                model_selector=model_selector,
+                token_budget=token_budget,
+                file_count=file_count,
+                start_time=start_time,
+            )
+            if chunk_findings:
+                logger.info(
+                    "Mining %s: recovered via chunk mining — %d findings",
+                    repo_name, len(chunk_findings),
+                )
+                return None, chunk_findings, attempts, "chunk_mining"
+
+        logger.error(
+            "Mining %s: ALL %d recovery attempts exhausted — 0 findings",
+            repo_name, attempts,
+        )
+        return None, [], attempts, ""
+
+    async def _mine_in_chunks(
+        self,
+        *,
+        repo_content: str,
+        repo_name: str,
+        repo_path: str | Path,
+        brain: str,
+        brain_config: BrainConfig,
+        domain_info: dict[str, Any],
+        overlap: Any,
+        model_selector: MiningModelSelector,
+        token_budget: int,
+        file_count: int,
+        start_time: float,
+    ) -> list[MiningFinding]:
+        """Split repo content into chunks, mine each, merge findings."""
+        recovery = self.config.mining.recovery
+
+        # Split at file boundaries
+        file_sections = re.split(r'(?=--- FILE: )', repo_content)
+        file_sections = [s for s in file_sections if s.strip()]
+        if not file_sections:
+            return []
+
+        # Determine chunk size from first eligible model
+        chain = model_selector.build_escalation_chain(0)
+        if not chain:
+            return []
+
+        agent_name, model = chain[0]
+        agent_cfg = self.config.agents.get(agent_name)
+        max_chunk_chars = 200_000  # ~50K tokens default
+        if agent_cfg and agent_cfg.context_window_tokens > 0:
+            headroom = recovery.min_context_headroom_pct
+            available = int(agent_cfg.context_window_tokens * (1.0 - headroom))
+            available = max(available - 2000, 10000)
+            max_chunk_chars = int(
+                available * recovery.token_estimate_chars_per_token,
+            )
+
+        # Build chunks from file sections
+        chunks: list[str] = []
+        current_chunk: list[str] = []
+        current_size = 0
+
+        for section in file_sections:
+            section_size = len(section)
+            if current_size + section_size > max_chunk_chars and current_chunk:
+                chunks.append("".join(current_chunk))
+                current_chunk = []
+                current_size = 0
+            current_chunk.append(section)
+            current_size += section_size
+
+        if current_chunk:
+            chunks.append("".join(current_chunk))
+
+        chunks = chunks[:recovery.max_chunks]
+        logger.info(
+            "Mining %s: split into %d chunks (max_chars=%dK per chunk)",
+            repo_name, len(chunks), max_chunk_chars // 1000,
+        )
+
+        # Mine each chunk
+        all_findings: list[MiningFinding] = []
+        template = self._get_prompt_template(brain_config.prompt)
+        ctx_lines = self._build_mining_context(domain_info, overlap)
+
+        for i, chunk in enumerate(chunks):
+            chunk_prompt = template.replace("{repo_content}", chunk)
+            if ctx_lines:
+                chunk_prompt = "\n".join(ctx_lines) + "\n\n" + chunk_prompt
+            chunk_prompt = (
+                f"# CHUNK {i+1}/{len(chunks)}: Partial view of the repo.\n"
+                f"# Focus on patterns visible in THIS chunk.\n\n"
+                + chunk_prompt
+            )
+
+            est = model_selector.estimate_prompt_tokens(chunk_prompt)
+            try:
+                best_agent, best_model = await model_selector.select_best_model(est)
+            except ValueError:
+                break
+
+            try:
+                resp = await self.llm_client.complete(
+                    messages=[LLMMessage(role="user", content=chunk_prompt)],
+                    model=best_model, temperature=0.3, max_tokens=token_budget,
+                )
+                chunk_findings = parse_findings(resp.content, repo_name)
+                await self._record_mining_outcome(
+                    model=best_model, agent_id=best_agent, brain=brain,
+                    repo_name=repo_name, estimated_tokens=est,
+                    repo_size_bytes=len(chunk.encode()),
+                    file_count=file_count, strategy="chunk_mining",
+                    success=bool(chunk_findings),
+                    findings_count=len(chunk_findings),
+                    response=resp, start_time=start_time,
+                )
+                all_findings.extend(chunk_findings)
+                logger.info(
+                    "Mining %s chunk %d/%d: %d findings (model=%s)",
+                    repo_name, i + 1, len(chunks),
+                    len(chunk_findings), best_model,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Mining %s chunk %d/%d failed: %s",
+                    repo_name, i + 1, len(chunks), e,
+                )
+
+        deduped = self._deduplicate_chunk_findings(all_findings)
+        return deduped[:_MAX_FINDINGS_PER_REPO]
+
+    @staticmethod
+    def _deduplicate_chunk_findings(
+        findings: list[MiningFinding],
+    ) -> list[MiningFinding]:
+        """Deduplicate findings from multiple chunks by title similarity."""
+        if not findings:
+            return []
+
+        findings.sort(key=lambda f: f.relevance_score, reverse=True)
+        deduped: list[MiningFinding] = []
+        seen_titles: set[str] = set()
+
+        for finding in findings:
+            normalized = finding.title.lower().strip()
+            if normalized in seen_titles:
+                continue
+            title_words = set(normalized.split())
+            is_dup = False
+            for seen in seen_titles:
+                seen_words = set(seen.split())
+                if title_words and seen_words:
+                    overlap = len(title_words & seen_words) / max(
+                        len(title_words), len(seen_words),
+                    )
+                    if overlap > 0.6:
+                        is_dup = True
+                        break
+            if not is_dup:
+                deduped.append(finding)
+                seen_titles.add(normalized)
+
+        return deduped
+
+    async def _record_mining_outcome(
+        self,
+        *,
+        model: str,
+        agent_id: str,
+        brain: str,
+        repo_name: str,
+        estimated_tokens: int,
+        repo_size_bytes: int,
+        file_count: int,
+        strategy: str,
+        success: bool,
+        findings_count: int,
+        response: LLMResponse | None,
+        start_time: float,
+        error: Exception | None = None,
+    ) -> None:
+        """Record a mining outcome for RL learning. Fire-and-forget."""
+        try:
+            duration = time.monotonic() - start_time
+            tokens_used = response.tokens_used if response else 0
+            error_type = type(error).__name__ if error else None
+            error_detail = str(error)[:500] if error else None
+
+            await self.repository.record_mining_outcome(
+                model_used=model,
+                agent_id=agent_id,
+                brain=brain,
+                repo_name=repo_name,
+                repo_size_bytes=repo_size_bytes,
+                prompt_tokens_estimated=estimated_tokens,
+                strategy=strategy,
+                success=success,
+                findings_count=findings_count,
+                tokens_used=tokens_used,
+                duration_seconds=duration,
+                error_type=error_type,
+                error_detail=error_detail,
+            )
+
+            # Also update agent_scores for Dispatcher RL learning
+            await self.repository.update_agent_score(
+                agent_id=agent_id,
+                task_type="mining",
+                success=success,
+                duration_seconds=duration,
+                quality_score=1.0 if success else 0.0,
+            )
+        except Exception as e:
+            logger.debug("Failed to record mining outcome: %s", e)
 
     async def mine_directory(
         self,
@@ -997,6 +1888,7 @@ class RepoMiner:
         skip_known: bool = True,
         force_rescan: bool = False,
         yield_sort: bool = True,
+        brain: str | None = None,
     ) -> MiningReport:
         """Discover repos in a directory and mine each.
 
@@ -1075,7 +1967,7 @@ class RepoMiner:
             repo_path = candidate.path
             repo_name = candidate.name
             try:
-                result = await self.mine_repo(repo_path, repo_name, target_project_id)
+                result = await self.mine_repo(repo_path, repo_name, target_project_id, brain=brain)
                 report.repo_results.append(result)
                 report.repos_scanned += 1
                 report.total_findings += len(result.findings)
@@ -1111,7 +2003,53 @@ class RepoMiner:
         report.total_duration_seconds = time.monotonic() - start
         if report.total_findings > 0:
             maybe_mark_cag_stale(self.config)
+            # Refresh manifests for any non-primary ganglia that received findings
+            await self._refresh_ganglion_manifests(report)
         return report
+
+    async def _refresh_ganglion_manifests(self, report: MiningReport) -> None:
+        """Refresh brain manifests for ganglia that received new findings."""
+        try:
+            from claw.community.manifest import save_manifest
+
+            ganglions_touched: set[str] = set()
+            for result in report.repo_results:
+                # Use brain_breakdown (polyglot) if available, else detect
+                if result.brain_breakdown:
+                    for bp in result.brain_breakdown:
+                        if bp.methodology_ids:
+                            brain_cfg = self.config.mining.brains.get(bp.brain)
+                            if brain_cfg and brain_cfg.ganglion_name:
+                                ganglions_touched.add(brain_cfg.ganglion_name)
+                elif result.findings:
+                    brain_name = detect_repo_language(
+                        Path(result.repo_path), self.config,
+                    )
+                    brain_cfg = self.config.mining.brains.get(brain_name)
+                    if brain_cfg and brain_cfg.ganglion_name:
+                        ganglions_touched.add(brain_cfg.ganglion_name)
+
+            project_root = Path(self.config.database.db_path).parent.parent
+            for ganglion_name in ganglions_touched:
+                ganglion_db = project_root / "instances" / ganglion_name / "claw.db"
+                if ganglion_db.exists():
+                    db_config = DatabaseConfig(db_path=str(ganglion_db))
+                    engine = DatabaseEngine(db_config)
+                    await engine.connect()
+                    try:
+                        manifest_path = (
+                            project_root / "instances" / ganglion_name / "brain_manifest.json"
+                        )
+                        await save_manifest(
+                            engine, manifest_path,
+                            ganglion_name,
+                            f"{ganglion_name.title()} language patterns mined by CAM {ganglion_name} brain",
+                        )
+                        logger.info("Refreshed manifest for ganglion '%s'", ganglion_name)
+                    finally:
+                        await engine.close()
+        except Exception as e:
+            logger.warning("Failed to refresh ganglion manifests: %s", e)
 
     async def mine_repo(
         self,
@@ -1120,6 +2058,7 @@ class RepoMiner:
         target_project_id: str,
         metadata: dict[str, str] | None = None,
         secret_scan_files: set[str] | None = None,
+        brain: str | None = None,
     ) -> RepoMiningResult:
         """Mine a single repository for patterns and features.
 
@@ -1131,6 +2070,8 @@ class RepoMiner:
                 (e.g., license_type from the assimilation pipeline).
             secret_scan_files: Set of relative file paths to exclude from
                 serialization (flagged by pre-mine secret scanner).
+            brain: Brain name override (e.g. "typescript", "go").
+                When None, auto-detects from repo contents.
 
         Returns:
             RepoMiningResult with findings and metadata.
@@ -1139,9 +2080,206 @@ class RepoMiner:
         start = time.monotonic()
         repo_path = Path(repo_path)
 
-        # Serialize repo content (Gate 2: exclude files with secrets)
+        # --- Brain selection and polyglot detection ---
+        if brain is not None and brain != "auto":
+            # Explicit brain override → single-brain path
+            return await self._mine_single_brain(
+                repo_path=repo_path, repo_name=repo_name,
+                target_project_id=target_project_id,
+                brain=brain, secret_scan_files=secret_scan_files,
+                start=start,
+            )
+
+        # Auto-detect all language zones
+        zones = detect_all_repo_languages(repo_path, self.config)
+        if not zones:
+            return RepoMiningResult(
+                repo_name=repo_name, repo_path=str(repo_path),
+                error="No recognizable source files found",
+            )
+
+        if len(zones) == 1:
+            # Single-language repo → standard single-brain path
+            single_brain = next(iter(zones.keys()))
+            return await self._mine_single_brain(
+                repo_path=repo_path, repo_name=repo_name,
+                target_project_id=target_project_id,
+                brain=single_brain, secret_scan_files=secret_scan_files,
+                start=start,
+            )
+
+        # --- POLYGLOT MULTI-PASS MINING ---
+        logger.info(
+            "Polyglot repo %s detected: %s",
+            repo_name,
+            ", ".join(f"{b}({z.file_count} files, {z.pct}%%)" for b, z in
+                      sorted(zones.items(), key=lambda x: -x[1].file_count)),
+        )
+
+        all_findings: list[MiningFinding] = []
+        all_methodology_ids: list[str] = []
+        all_action_template_ids: list[str] = []
+        brain_breakdown: list[PolyglotMiningResult] = []
+        total_files = 0
+        total_tokens = 0
+
+        # Mine each zone with its brain (largest zone first)
+        for zone_brain, zone in sorted(zones.items(), key=lambda x: -x[1].file_count):
+            zone_start = time.monotonic()
+            brain_config = self.config.mining.brains.get(
+                zone_brain,
+                self.config.mining.brains.get("misc", BrainConfig()),
+            )
+            if not brain_config.enabled:
+                logger.info("Skipping disabled brain %s for %s", zone_brain, repo_name)
+                continue
+
+            logger.info(
+                "Mining %s zone=%s (%d files, %.1f%%)",
+                repo_name, zone_brain, zone.file_count, zone.pct,
+            )
+
+            # Language-filtered serialization
+            repo_content, file_count = serialize_repo(
+                repo_path,
+                max_bytes=brain_config.max_bytes,
+                exclude_files=secret_scan_files,
+                config=self.config,
+                language_filter=zone.file_extensions,
+            )
+            if not repo_content:
+                brain_breakdown.append(PolyglotMiningResult(
+                    brain=zone_brain, error="No content after serialization",
+                ))
+                continue
+
+            total_files += file_count
+
+            # Pass 1: Domain classification
+            domain_info = self._classify_repo_domain(repo_content, file_count)
+
+            # Pass 2: Knowledge overlap
+            overlap = await self._assess_knowledge_overlap(repo_name, domain_info)
+
+            # Pass 3: LLM mining with recovery
+            template = self._get_prompt_template(brain_config.prompt)
+            prompt = template.replace("{repo_content}", repo_content)
+            context_lines = self._build_mining_context(domain_info, overlap)
+            if context_lines:
+                prompt = "\n".join(context_lines) + "\n\n" + prompt
+
+            token_budget = {
+                "small": 4096, "medium": 6144, "large": 8192,
+            }.get(domain_info["complexity"], 6144)
+
+            model_selector = MiningModelSelector(self.config, self.repository)
+            estimated_tokens = model_selector.estimate_prompt_tokens(prompt)
+
+            response, findings, recovery_attempts, recovery_strategy = (
+                await self._mine_with_recovery(
+                    prompt=prompt, token_budget=token_budget,
+                    model_selector=model_selector,
+                    estimated_tokens=estimated_tokens,
+                    repo_name=repo_name, repo_path=repo_path,
+                    repo_content=repo_content, file_count=file_count,
+                    brain=zone_brain, brain_config=brain_config,
+                    domain_info=domain_info, overlap=overlap,
+                    secret_scan_files=secret_scan_files, start_time=zone_start,
+                )
+            )
+
+            if findings:
+                self._attach_symbol_provenance(findings, repo_path)
+
+                # Store in brain's ganglion
+                target_repo, target_sem = await ensure_language_ganglion(
+                    zone_brain, brain_config,
+                    self.repository, self.semantic_memory, self.config,
+                )
+
+                zone_meth_ids: list[str] = []
+                for finding in findings:
+                    try:
+                        mid = await self.store_finding(
+                            finding, target_project_id,
+                            run_assimilation=False, brain=zone_brain,
+                            target_repository=target_repo,
+                            target_semantic_memory=target_sem,
+                        )
+                        if mid:
+                            zone_meth_ids.append(mid)
+                        if finding.action_template_id:
+                            all_action_template_ids.append(finding.action_template_id)
+                    except Exception as e:
+                        logger.warning("Failed to store finding '%s': %s", finding.title, e)
+
+                all_findings.extend(findings)
+                all_methodology_ids.extend(zone_meth_ids)
+                tokens_used = response.tokens_used if response else 0
+                total_tokens += tokens_used
+
+                brain_breakdown.append(PolyglotMiningResult(
+                    brain=zone_brain,
+                    findings_count=len(findings),
+                    methodology_ids=zone_meth_ids,
+                    tokens_used=tokens_used,
+                    duration_seconds=time.monotonic() - zone_start,
+                ))
+            else:
+                brain_breakdown.append(PolyglotMiningResult(
+                    brain=zone_brain,
+                    error=f"0 findings (recovery={recovery_attempts})",
+                    duration_seconds=time.monotonic() - zone_start,
+                ))
+
+        if all_methodology_ids and self.assimilation_engine is not None:
+            await self._assimilate_methodologies(all_methodology_ids)
+
+        duration = time.monotonic() - start
+        breakdown_summary = ", ".join(
+            f"{bp.brain}:{bp.findings_count}" for bp in brain_breakdown
+        )
+        logger.info(
+            "Polyglot mining complete for %s: %d total findings [%s] in %.1fs",
+            repo_name, len(all_findings), breakdown_summary, duration,
+        )
+
+        return RepoMiningResult(
+            repo_name=repo_name,
+            repo_path=str(repo_path),
+            findings=all_findings,
+            files_analyzed=total_files,
+            tokens_used=total_tokens,
+            duration_seconds=duration,
+            methodology_ids=all_methodology_ids,
+            action_template_ids=all_action_template_ids,
+            brain_breakdown=brain_breakdown,
+        )
+
+    async def _mine_single_brain(
+        self,
+        *,
+        repo_path: Path,
+        repo_name: str,
+        target_project_id: str,
+        brain: str,
+        secret_scan_files: set[str] | None,
+        start: float,
+    ) -> RepoMiningResult:
+        """Mine a repo with a single brain (original code path)."""
+        brain_config = self.config.mining.brains.get(
+            brain,
+            self.config.mining.brains.get("misc", BrainConfig()),
+        )
+        logger.info("Brain selected for %s: %s (max_bytes=%d, prompt=%s)",
+                     repo_name, brain, brain_config.max_bytes, brain_config.prompt)
+
+        # Serialize repo content with brain-specific limit
         repo_content, file_count = serialize_repo(
-            repo_path, exclude_files=secret_scan_files, config=self.config
+            repo_path,
+            max_bytes=brain_config.max_bytes,
+            exclude_files=secret_scan_files,
+            config=self.config,
         )
         if not repo_content:
             return RepoMiningResult(
@@ -1151,8 +2289,9 @@ class RepoMiner:
             )
 
         logger.info(
-            "Serialized %s: %d files, %d bytes",
+            "Serialized %s: %d files, %d bytes (brain=%s, limit=%dKB)",
             repo_name, file_count, len(repo_content.encode()),
+            brain, brain_config.max_bytes // 1024,
         )
 
         # === PASS 1: Domain Classification (rule-based, free) ===
@@ -1174,8 +2313,8 @@ class RepoMiner:
             overlap.suggested_focus,
         )
 
-        # === PASS 3: Focused Deep-Dive Mining (LLM call, domain-aware) ===
-        template = self._get_prompt_template()
+        # === PASS 3: Focused Deep-Dive Mining (LLM call, brain-aware) ===
+        template = self._get_prompt_template(brain_config.prompt)
         prompt = template.replace("{repo_content}", repo_content)
 
         # Build structured context from Pass 1 + Pass 2
@@ -1184,38 +2323,64 @@ class RepoMiner:
             prompt = "\n".join(context_lines) + "\n\n" + prompt
 
         # Adaptive token budget based on repo complexity
-        # Small repos still need enough tokens to extract 6-8 findings
-        # with full metadata (title, description, sketch, symbols).
         token_budget = {
             "small": 4096,
             "medium": 6144,
             "large": 8192,
         }.get(domain_info["complexity"], 6144)
 
-        model = self._get_mining_model()
-        try:
-            response: LLMResponse = await self.llm_client.complete(
-                messages=[LLMMessage(role="user", content=prompt)],
-                model=model,
-                temperature=0.3,
-                max_tokens=token_budget,
+        # --- Self-recovering LLM call with model escalation ---
+        model_selector = MiningModelSelector(self.config, self.repository)
+        estimated_tokens = model_selector.estimate_prompt_tokens(prompt)
+        logger.info(
+            "Estimated prompt tokens for %s: ~%dK (brain=%s)",
+            repo_name, estimated_tokens // 1000, brain,
+        )
+
+        response, findings, recovery_attempts, recovery_strategy = (
+            await self._mine_with_recovery(
+                prompt=prompt,
+                token_budget=token_budget,
+                model_selector=model_selector,
+                estimated_tokens=estimated_tokens,
+                repo_name=repo_name,
+                repo_path=repo_path,
+                repo_content=repo_content,
+                file_count=file_count,
+                brain=brain,
+                brain_config=brain_config,
+                domain_info=domain_info,
+                overlap=overlap,
+                secret_scan_files=secret_scan_files,
+                start_time=start,
             )
-        except Exception as e:
+        )
+
+        if not findings:
             duration = time.monotonic() - start
             return RepoMiningResult(
                 repo_name=repo_name,
                 repo_path=str(repo_path),
                 files_analyzed=file_count,
                 duration_seconds=duration,
-                error=f"LLM call failed: {e}",
+                error="All recovery strategies exhausted — 0 findings",
+                recovery_attempts=recovery_attempts,
+                recovery_strategy=recovery_strategy,
             )
 
-        # Parse findings
-        findings = parse_findings(response.content, repo_name)
         self._attach_symbol_provenance(findings, Path(repo_path))
-        logger.info("Extracted %d findings from %s", len(findings), repo_name)
+        logger.info(
+            "Extracted %d findings from %s (brain=%s, recovery=%d, strategy=%s)",
+            len(findings), repo_name, brain, recovery_attempts, recovery_strategy,
+        )
 
-        # Store each finding in semantic memory
+        # --- Ganglion routing: get or create target ganglion ---
+        target_repo, target_sem = await ensure_language_ganglion(
+            brain, brain_config,
+            self.repository, self.semantic_memory, self.config,
+        )
+
+        # Store each finding in the brain's ganglion
         methodology_ids: list[str] = []
         action_template_ids: list[str] = []
         for finding in findings:
@@ -1224,6 +2389,9 @@ class RepoMiner:
                     finding,
                     target_project_id,
                     run_assimilation=False,
+                    brain=brain,
+                    target_repository=target_repo,
+                    target_semantic_memory=target_sem,
                 )
                 if methodology_id:
                     methodology_ids.append(methodology_id)
@@ -1241,8 +2409,8 @@ class RepoMiner:
             repo_path=str(repo_path),
             findings=findings,
             files_analyzed=file_count,
-            tokens_used=response.tokens_used,
-            cost_usd=0.0,  # Cost tracked by token_tracker separately
+            tokens_used=response.tokens_used if response else 0,
+            cost_usd=0.0,
             duration_seconds=duration,
             methodology_ids=methodology_ids,
             action_template_ids=action_template_ids,
@@ -1254,6 +2422,9 @@ class RepoMiner:
         target_project_id: str,
         *,
         run_assimilation: bool = True,
+        brain: str | None = None,
+        target_repository: Repository | None = None,
+        target_semantic_memory: SemanticMemory | None = None,
     ) -> Optional[str]:
         """Store a mining finding in semantic memory as a Methodology.
 
@@ -1262,6 +2433,9 @@ class RepoMiner:
         Args:
             finding: The extracted finding.
             target_project_id: Project to associate with (unused in methodology but tracked via tags).
+            brain: Brain name for tagging (e.g. "typescript").
+            target_repository: Optional ganglion-specific Repository.
+            target_semantic_memory: Optional ganglion-specific SemanticMemory.
 
         Returns:
             The methodology ID, or None if blocked by quality gate or dedup.
@@ -1294,8 +2468,13 @@ class RepoMiner:
             f"source:{finding.source_repo}",
             f"category:{finding.category}",
         ]
+        if brain:
+            tags.append(f"brain:{brain}")
 
-        methodology = await self.semantic_memory.save_solution(
+        sem = target_semantic_memory or self.semantic_memory
+        repo = target_repository or self.repository
+
+        methodology = await sem.save_solution(
             problem_description=problem_desc,
             solution_code=solution,
             methodology_notes=finding.augmentation_notes,
@@ -1306,7 +2485,7 @@ class RepoMiner:
             files_affected=finding.source_files,
         )
 
-        await self.repository.update_methodology_capability_data(
+        await repo.update_methodology_capability_data(
             methodology.id,
             self._seed_capability_data_from_finding(finding),
         )
@@ -1327,7 +2506,7 @@ class RepoMiner:
                 source_repo=finding.source_repo,
                 confidence=finding.relevance_score,
             )
-            await self.repository.create_action_template(action_template)
+            await repo.create_action_template(action_template)
             finding.action_template_id = action_template.id
             logger.debug(
                 "Created action template %s for finding '%s'",

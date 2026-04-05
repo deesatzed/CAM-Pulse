@@ -1287,14 +1287,24 @@ class AgentInterface(ABC):
                 knowledge_chars = 0
                 pointer_threshold = 1500  # Methodologies larger than this get pointers
 
+                # Determine primary methodology ID from context brief
+                _primary_mid = getattr(context, "primary_methodology_id", None) if context else None
+                _context_mids = set(getattr(context, "context_methodology_ids", []) if context else [])
+
                 for methodology in past_solutions:
                     if knowledge_chars >= max_knowledge_chars:
                         break
                     section_lines: list[str] = []
                     # Problem description — what this pattern solves
                     desc = getattr(methodology, "problem_description", "") or ""
+                    mid_check = getattr(methodology, "id", None)
                     if desc:
-                        section_lines.append(f"### Pattern: {desc[:200]}")
+                        if mid_check and mid_check == _primary_mid:
+                            section_lines.append(f"### [PRIMARY] Recommended Pattern: {desc[:200]}")
+                        elif mid_check and mid_check in _context_mids:
+                            section_lines.append(f"### [CONTEXT] Alternative Pattern: {desc[:200]}")
+                        else:
+                            section_lines.append(f"### Pattern: {desc[:200]}")
                     # Source provenance
                     tags = getattr(methodology, "tags", []) or []
                     source_tags = [t for t in tags if t.startswith("source:")]

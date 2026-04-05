@@ -876,45 +876,144 @@ class MicroClaw(ClawCycle):
         past_solutions: list[Any] = []
         retrieval_confidence = 0.0
         retrieval_conflicts: list[str] = []
+        primary_methodology_id: str | None = None
+        context_methodology_ids: list[str] = []
         if self.ctx.semantic_memory is not None:
             try:
                 similar, signals = await self.ctx.semantic_memory.find_similar_with_signals(
-                    task.description, limit=3
+                    task.description, limit=7
                 )
                 retrieval_confidence = float(signals.get("retrieval_confidence", 0.0) or 0.0)
                 retrieval_conflicts = [str(item) for item in signals.get("conflicts", []) or []]
-                if similar:
-                    for s in similar:
-                        if s.methodology:
-                            if s.methodology not in past_solutions:
-                                past_solutions.append(s.methodology)
-                            if s.methodology.methodology_notes:
-                                hints.append(
-                                    f"Similar past solution: {s.methodology.methodology_notes}"
-                                )
-                            await self.ctx.semantic_memory.record_retrieval(s.methodology.id)
+
+                # --- Forbidden-on-retry: exclude methods that failed ≥2 times for this task ---
+                forbidden_method_ids: set[str] = set()
+                try:
+                    fail_counts = await self.ctx.repository.get_task_content_failure_counts(task.id)
+                    forbidden_method_ids = {mid for mid, cnt in fail_counts.items() if cnt >= 2}
+                    if forbidden_method_ids:
+                        logger.info(
+                            "Forbidden-on-retry: excluding %d methodologies for task %s",
+                            len(forbidden_method_ids), task.id,
+                        )
+                except Exception:
+                    pass  # Non-critical, proceed without filtering
+
+                # Filter out forbidden and below relevance floor (0.3)
+                RELEVANCE_FLOOR = 0.3
+                eligible = [
+                    s for s in (similar or [])
+                    if s.methodology
+                    and s.methodology.id not in forbidden_method_ids
+                    and getattr(s, "combined_score", 0.0) >= RELEVANCE_FLOOR
+                ]
+
+                # --- Bandit selection: rank by epsilon-greedy / Thompson ---
+                if eligible:
+                    try:
+                        from claw.memory.bandit import (
+                            MethodologyBandit,
+                            build_bandit_candidates,
+                        )
+                        task_type = task.task_type or "general"
+                        candidates = await build_bandit_candidates(
+                            eligible, self.ctx.repository, task_type
+                        )
+                        bandit = MethodologyBandit()
+                        selected = bandit.select(candidates, task_type)
+                        ranked = bandit.rank_all(candidates)
+
+                        if selected:
+                            primary_methodology_id = selected.methodology_id
+
+                        # Map methodology_id → search result for easy lookup
+                        result_by_id = {
+                            s.methodology.id: s for s in eligible if s.methodology
+                        }
+
+                        # Build past_solutions: primary first, then context (rank 2-3)
+                        seen_ids: set[str] = set()
+                        if selected and selected.methodology_id in result_by_id:
+                            sr = result_by_id[selected.methodology_id]
+                            past_solutions.append(sr.methodology)
+                            seen_ids.add(selected.methodology_id)
+                            hints.append(
+                                f"[PRIMARY] Recommended approach: {sr.methodology.methodology_notes}"
+                                if sr.methodology.methodology_notes else ""
+                            )
+                            await self.ctx.semantic_memory.record_retrieval(sr.methodology.id)
                             await self.ctx.repository.log_methodology_usage(
                                 MethodologyUsageEntry(
                                     task_id=task.id,
-                                    methodology_id=s.methodology.id,
+                                    methodology_id=sr.methodology.id,
                                     project_id=self.project_id,
                                     stage="retrieved_presented",
-                                    relevance_score=getattr(s, "combined_score", None),
-                                    notes="Retrieved from semantic memory and presented to agent",
+                                    relevance_score=getattr(sr, "combined_score", None),
+                                    notes="Bandit-selected primary methodology",
                                 )
                             )
-                        # Graph-enhanced: follow synergy edges for complementary capabilities
-                        if s.methodology and self.ctx.assimilation_engine is not None:
-                            try:
-                                complements = await self.ctx.repository.get_complementary_capabilities(
-                                    s.methodology.id
-                                )
-                                for comp in complements[:2]:
+
+                        # Add context methods (next 2 ranked, not the primary)
+                        for rc in ranked:
+                            if rc.methodology_id in seen_ids:
+                                continue
+                            if len(context_methodology_ids) >= 2:
+                                break
+                            if rc.methodology_id in result_by_id:
+                                sr = result_by_id[rc.methodology_id]
+                                past_solutions.append(sr.methodology)
+                                context_methodology_ids.append(rc.methodology_id)
+                                seen_ids.add(rc.methodology_id)
+                                if sr.methodology.methodology_notes:
                                     hints.append(
-                                        f"Complementary capability: {comp.problem_description[:200]}"
+                                        f"[CONTEXT] Alternative approach: {sr.methodology.methodology_notes}"
                                     )
-                            except Exception:
-                                pass  # Non-critical enhancement
+                                await self.ctx.semantic_memory.record_retrieval(sr.methodology.id)
+                                await self.ctx.repository.log_methodology_usage(
+                                    MethodologyUsageEntry(
+                                        task_id=task.id,
+                                        methodology_id=sr.methodology.id,
+                                        project_id=self.project_id,
+                                        stage="retrieved_presented",
+                                        relevance_score=getattr(sr, "combined_score", None),
+                                        notes="Bandit-ranked context methodology",
+                                    )
+                                )
+                    except Exception as e:
+                        logger.warning("Bandit selection failed, falling back: %s", e)
+                        # Fallback: use first 3 eligible results as before
+                        for s in eligible[:3]:
+                            if s.methodology and s.methodology not in past_solutions:
+                                past_solutions.append(s.methodology)
+                                if s.methodology.methodology_notes:
+                                    hints.append(
+                                        f"Similar past solution: {s.methodology.methodology_notes}"
+                                    )
+                                await self.ctx.semantic_memory.record_retrieval(s.methodology.id)
+                                await self.ctx.repository.log_methodology_usage(
+                                    MethodologyUsageEntry(
+                                        task_id=task.id,
+                                        methodology_id=s.methodology.id,
+                                        project_id=self.project_id,
+                                        stage="retrieved_presented",
+                                        relevance_score=getattr(s, "combined_score", None),
+                                        notes="Fallback retrieval (bandit unavailable)",
+                                    )
+                                )
+
+                # Graph-enhanced: follow synergy edges for complementary capabilities
+                for s in (eligible[:3] if eligible else []):
+                    if s.methodology and self.ctx.assimilation_engine is not None:
+                        try:
+                            complements = await self.ctx.repository.get_complementary_capabilities(
+                                s.methodology.id
+                            )
+                            for comp in complements[:2]:
+                                hints.append(
+                                    f"Complementary capability: {comp.problem_description[:200]}"
+                                )
+                        except Exception:
+                            pass  # Non-critical enhancement
             except Exception as e:
                 logger.warning(
                     "Semantic memory lookup failed for task %s: %s", task.id, e
@@ -1037,6 +1136,8 @@ class MicroClaw(ClawCycle):
             retrieval_confidence=retrieval_confidence,
             retrieval_conflicts=retrieval_conflicts,
             retrieved_methodology_ids=[m.id for m in past_solutions],
+            primary_methodology_id=primary_methodology_id,
+            context_methodology_ids=context_methodology_ids,
         )
 
         logger.info(
@@ -1582,6 +1683,16 @@ class MicroClaw(ClawCycle):
                             e,
                         )
 
+            # Bandit: record success for used methodologies
+            task_type = task.task_type or "general"
+            for methodology_id, _rel in used_methodologies:
+                try:
+                    await self.ctx.repository.record_bandit_outcome(
+                        methodology_id, task_type, success=True
+                    )
+                except Exception:
+                    pass  # Non-critical
+
             logger.info("Learned: task %s completed by %s", task.title, agent_id)
 
         else:
@@ -1703,6 +1814,17 @@ class MicroClaw(ClawCycle):
                             methodology_id,
                             e,
                         )
+
+            # Bandit: record failure for content failures only (not infra)
+            if not is_infrastructure_failure:
+                task_type = task.task_type or "general"
+                for methodology_id, _rel in used_methodologies:
+                    try:
+                        await self.ctx.repository.record_bandit_outcome(
+                            methodology_id, task_type, success=False
+                        )
+                    except Exception:
+                        pass  # Non-critical
 
             logger.info(
                 "Learned: task %s failed by %s (error: %s)",

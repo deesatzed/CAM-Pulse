@@ -138,6 +138,15 @@ mining_min_description_length = 20
 extra_code_extensions = [".cpp", ".c", ".h", ".rb", ".swift", ".kt", ".scala", ".lua", ".r", ".jl"]
 extra_skip_dirs = ["migrations", "vendor", "third_party", "generated", ".terraform", "Pods"]
 
+[mining.recovery]
+enabled = true
+max_escalation_attempts = 3
+content_reduction_factor = 0.50
+max_chunks = 4
+escalation_order = ["claude", "gemini", "grok"]
+token_estimate_chars_per_token = 4.0
+min_context_headroom_pct = 0.20
+
 [assimilation]
 enabled = true
 synergy_candidate_limit = 20
@@ -176,6 +185,7 @@ model = "openai/gpt-5.4-mini"
 max_concurrent = 2
 timeout = 600
 max_budget_usd = 5.0
+context_window_tokens = 128000
 
 [agents.codex]
 enabled = true
@@ -185,6 +195,7 @@ model = "z-ai/glm-5-turbo"
 max_concurrent = 4
 timeout = 300
 max_budget_usd = 1.0
+context_window_tokens = 128000
 
 [agents.gemini]
 enabled = true
@@ -194,6 +205,7 @@ model = "minimax/minimax-m2.7"
 max_concurrent = 2
 timeout = 600
 max_budget_usd = 1.0
+context_window_tokens = 1000000
 
 [agents.grok]
 enabled = true
@@ -203,6 +215,7 @@ model = "x-ai/grok-4.20-beta"
 max_concurrent = 2
 timeout = 300
 max_budget_usd = 1.0
+context_window_tokens = 2000000
 
 # ---------------------------------------------------------------------------
 # Local LLM Agent — local inference via Atomic-Chat, mlx-server, or Ollama
@@ -224,6 +237,7 @@ max_concurrent = 1
 timeout = 300
 max_budget_usd = 0.0
 max_tokens = 16384
+context_window_tokens = 32768
 
 # ---------------------------------------------------------------------------
 # CAM-PULSE: Perpetual Unified Learning Swarm Engine
@@ -327,6 +341,16 @@ novelty_weight = 0.10
 provenance_weight = 0.10
 verification_weight = 0.15
 min_critical_threshold = 0.15    # Suppress results where critical factors below this
+
+# ---------------------------------------------------------------------------
+# MCP — Expose CLAW as an MCP server for external agents (e.g. DeepScientist)
+# ---------------------------------------------------------------------------
+[mcp]
+enabled = true
+host = "127.0.0.1"
+port = 3100
+transport = "stdio"            # "stdio" for subprocess, "http" for network
+auth_token_env = "CLAW_MCP_AUTH_TOKEN"  # optional auth; empty = no auth
 
 # ---------------------------------------------------------------------------
 # Logging — structured JSON logging for observability
@@ -536,3 +560,8 @@ description = "Drive scanning, repo discovery, dedup, archival, code organizatio
 name = "agentic-memory"
 db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/data/instances/agentic-memory/claw.db"
 description = "Specialist ganglion for agentic memory, RAG, knowledge retrieval, and multi-agent patterns"
+
+[[instances.siblings]]
+name = "typescript"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/typescript/claw.db"
+description = "Typescript language patterns mined by CAM typescript brain"

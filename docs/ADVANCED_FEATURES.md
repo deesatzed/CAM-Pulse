@@ -252,6 +252,43 @@ synergy_score_threshold = 0.7       # Min score to create a synergy link
 
 ---
 
+## RL Method Tournament (Bandit Selection)
+
+### What It Does
+
+Replaces the old single-shot methodology retrieval with an RL-based tournament. Instead of always picking the same top 3 methods, the bandit learns which methodology works best for each task type and iterates through methods on retry.
+
+### How It Works
+
+- **Epsilon-greedy**: 90% of the time, pick the highest-scoring methodology (exploit). 10% of the time, pick randomly from the eligible set (explore).
+- **Thompson graduation**: After 5+ observations per (methodology, task_type), switch from epsilon-greedy to Beta posterior sampling — draws from Beta(successes+1, failures+1) to balance exploration and exploitation based on actual outcome data.
+- **Cold start protection**: Methodologies with <3 total outcomes get 20% exploration probability (higher than normal 10%), ensuring new methods get tested.
+- **Forbidden-on-retry**: If a methodology contributes to 2+ content failures for a specific task, it is excluded from future retrieval for that task. Infrastructure failures (timeout, HTTP, API key) do not count.
+- **Single-method-per-attempt**: The bandit selects 1 primary methodology (highest bandit score) and 2 context methods. The agent sees `[PRIMARY] Recommended Pattern` vs `[CONTEXT] Alternative Pattern`.
+- **Relevance floor**: If no methodology scores above 0.3, KB is skipped entirely rather than forcing low-quality methods.
+
+### Where It Runs
+
+Wired directly into `cycle.py`:
+- `evaluate()`: retrieves 7 candidates, filters forbidden, runs bandit selection, partitions primary/context
+- `learn()`: records bandit outcomes (success/failure) per (methodology, task_type) on every completed task
+
+### Monitoring
+
+```bash
+cam govern bandit-stats
+```
+
+Shows top methodology x task_type pairs, win rates, and Thompson graduation status.
+
+### Key Files
+
+- `src/claw/memory/bandit.py` — `MethodologyBandit` class, `BanditCandidate`, `build_bandit_candidates()`
+- `src/claw/db/schema.sql` — `methodology_bandit_outcomes` table
+- `src/claw/db/repository.py` — `record_bandit_outcome()`, `get_bandit_stats()`, `get_bandit_stats_batch()`, `get_task_content_failure_counts()`
+
+---
+
 ## Feature Dependencies
 
 | Feature | Requires | Optional Enhancement |
@@ -265,6 +302,7 @@ synergy_score_threshold = 0.7       # Min score to create a synergy link
 | Pattern learning | Runs during self-enhancement | Semantic memory enables promotion |
 | deepConf | Always active | Adjustable weights via `[deep_conf]` |
 | Stigmergic links | Semantic memory active | Strengthens with usage |
+| RL bandit selection | Always active | Graduates to Thompson with usage data |
 
 ---
 

@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**3,290 tests** | **4,112 methodologies across 3 ganglia** | **398 source repos** | **11 languages** | **4 agent backends** | **KB +33.6% quality (p&lt;0.05)** | **Federation +5.3% coverage (p=0.000005)** | **$0 — MIT licensed**
+**3,330 tests** | **2,994 methodologies** | **329 source repos** | **11 languages** | **4 agent backends** | **KB +33.6% quality (p&lt;0.05)** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -51,7 +51,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 3,290 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 3,330 tests passing. Zero skips with API keys configured.
 
 On first startup, CAM automatically loads **31 curated seed methodologies** covering its own algorithms (yield-priority mining, Kelly routing, EMA fitness, lifecycle management, correction loop, and more). No configuration needed — `cam govern stats` triggers seeding if the database is empty.
 
@@ -118,9 +118,9 @@ Every module traces back to a specific mined methodology. This isn't code genera
 
 ---
 
-## Proof: Knowledge Impact — Three Independent A/B Tests
+## Proof: Knowledge Impact — Two Independent A/B Tests
 
-Does CAM's knowledge base actually make agent output better? We ran **three independent experiments** — code quality, full-stack SWE, and federated search — and the answer is unambiguous: **yes, and the effect is large**.
+Does CAM's knowledge base actually make agent output better? We ran **two independent experiments** — code quality and full-stack SWE — and the answer is unambiguous: **yes, and the effect is large**.
 
 ### Experiment 1: Retry Logic (Qualitative, April 2026)
 
@@ -173,29 +173,6 @@ Two independent experiments. Two different task domains (retry logic, full-stack
 
 Full writeup: [docs/showcase_retry_backoff.md](docs/showcase_retry_backoff.md) | [docs/SKYDATE_KB_SHOWPIECE.md](docs/SKYDATE_KB_SHOWPIECE.md)
 
-### Experiment 3: Federation Brain (Statistical, April 2026)
-
-**Question:** Does querying multiple ganglia find knowledge invisible to a single instance?
-
-**Design:** 40 real queries run in paired mode — control (primary only) vs variant (primary + 2 siblings). 4,112 methodologies across 3 ganglia.
-
-| Metric | Control (1 ganglion) | Variant (3 ganglia) | Significance |
-|---|:---:|:---:|:---:|
-| **Queries with additional results** | — | **24/40 (60%)** | Wilcoxon p = 0.000005 |
-| **Unique sibling results** | 0 | **105** | r = 1.000 (large) |
-| **Result count lift** | — | **+5.3%** | — |
-| **Latency overhead** | — | **+1.7 ms** | Negligible |
-| **drive-ops hit rate** | — | 18/40 (45%) | — |
-| **agentic-memory hit rate** | — | 17/40 (42%) | — |
-
-**Key discovery:** Enriched manifests (vocabulary from methodology text) are essential — the same infrastructure went from 10% to 60% query coverage after manifest enrichment.
-
-Full writeup: [docs/FEDERATION_BRAIN_SHOWPIECE.md](docs/FEDERATION_BRAIN_SHOWPIECE.md)
-
-### What This Proves
-
-Three independent experiments. Three different dimensions (code quality, full-stack SWE, federated search). Same conclusion: **CAM's knowledge infrastructure produces measurably better outcomes than starting from zero.** KB injection improves agent output (+33.6% quality, p < 0.05). Federation expands knowledge reach (+105 unique results, p = 0.000005). Together they form a self-reinforcing loop: mine → store → federate → retrieve → build → verify.
-
 ---
 
 ## CAM Brain: Federated Knowledge at Scale
@@ -203,14 +180,14 @@ Three independent experiments. Three different dimensions (code quality, full-st
 CAM doesn't keep everything in one database. It operates as a **federated brain** — multiple specialist knowledge nodes (ganglia) that share knowledge through read-only cross-queries.
 
 ```
-CAM Brain (4,112 methodologies)
-├── Primary Ganglion — 2,938 methodologies from 324 GitHub/HuggingFace repos
+CAM Brain
+├── Primary Ganglion — 2,994 methodologies from 329 GitHub/HuggingFace repos
 ├── Drive-Ops Ganglion — 1,046 methodologies from 63 local repos (1.5TB drive)
 └── Agentic-Memory Ganglion — 128 methodologies from 11 agent/RAG repos
     └── Connected via CAM Swarm (read-only FTS5 cross-queries + enriched manifests)
 ```
 
-**Proven result**: Federation adds 105 unique results invisible to single-ganglion search (p = 0.000005), with only 1.7ms latency overhead. Enriched manifests — vocabulary extracted from actual methodology text — are the key: they increased federation coverage from 10% to 60% of queries.
+Federation is internal tooling for cross-ganglion search. Each ganglion publishes a brain manifest summarizing its expertise; during builds, if local confidence is low, the swarm automatically queries sibling ganglia.
 
 ### How It Works
 
@@ -305,7 +282,7 @@ CAM was given a single instruction: build "TaskPulse", an async task queue track
 | Source | Count | Role |
 |--------|------:|------|
 | PULSE methodology patterns | 3 | Injected directly into agent prompt as `## Retrieved Knowledge` |
-| Semantic memory + federation hints | 12 | Evaluation context from cross-ganglion queries |
+| Semantic memory hints | 12 | Evaluation context from semantic search |
 
 **Build execution:**
 
@@ -1032,7 +1009,7 @@ cam security status
 
 ---
 
-## 15 Proven Showpieces
+## 18 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
@@ -1053,6 +1030,9 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 | 13 | **Bayesian Kelly Agent Routing** | Sukhov (2026) position-sizing for intelligent agent selection with kappa-shrinkage |
 | 14 | **Adaptive A/B Test Margins** | Sample-size-aware win thresholds — no premature conclusions from thin data |
 | 15 | **Uncertainty-Aware Fitness** | Agent reliability discounts methodology rankings — trustworthy sources rank higher |
+| 16 | **KB Quality A/B** | KB-equipped wins 7/8 quality checks on retry logic. Production-grade vs demo-grade. |
+| 17 | **SkyDate SWE A/B** | Blind statistical test: +33.6% composite quality, 100% vs 67% success rate, p<0.05 on 3/6 dimensions. |
+| 18 | **RL Method Tournament** | Epsilon-greedy bandit + Thompson sampling selects best methodology per task type. Forbidden-on-retry forces iteration. 40 tests. |
 
 Run any showpiece:
 ```bash
@@ -1071,7 +1051,7 @@ Run any showpiece:
 src/claw/
   cli.py              # Typer CLI — 80+ commands across 10 subapps (10,300+ lines)
   miner.py            # 3-pass mining pipeline + _repair_json()
-  cycle.py            # 4-level orchestration + inner correction loop + federation integration
+  cycle.py            # 4-level orchestration + inner correction loop + RL bandit method selection
   verifier.py         # 7 checks + MetricExpectation enforcement (coverage, test count, file count)
   reconstruct.py      # Self-enhancement: clone → enhance → validate → swap
   validation_gate.py  # 7-gate validation (syntax, config, import, DB, CLI, pytest, diff)
@@ -1098,6 +1078,7 @@ src/claw/
     hub.py            # HuggingFace dataset push/pull operations
   memory/
     hybrid_search.py  # BM25 text + cosine vector + deepConf 6-factor confidence scoring
+    bandit.py         # RL method tournament: epsilon-greedy + Thompson sampling selection
     semantic.py       # Semantic memory, co-retrieval stigmergic links, outcome feedback
     fitness.py        # 6-dimensional fitness scoring + history logging
     lifecycle.py      # Gause competitive exclusion state machine
@@ -1147,6 +1128,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 3.9**: Knowledge Infrastructure — License-aware mining, A/B knowledge ablation, fitness history, community sharing (7-gate validated), CAM Swarm ganglion federation with brain manifests, pre-assimilation secret scanning (TruffleHog + regex) | **Complete** |
 | **Phase 4**: Drive-Ops — 1.5TB ganglion mining marathon, content-hash dedup, brain federation proven at scale | **Complete** |
 | **Phase 4.5**: Self-Awareness — Seed knowledge system (31 curated methodologies ship with install), yield-priority mining (5-factor scoring), `_approve_record()` FTS5+embedding fix, `origin:seed` lifecycle protection | **Complete** |
+| **Phase 4.75**: RL Method Tournament — Epsilon-greedy bandit + Thompson sampling selection, forbidden-on-retry iteration, FTS5 hybrid search fix (AND→OR), `cam govern bandit-stats` CLI | **Complete** |
 | **Phase 5**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
 | **Phase 6**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 

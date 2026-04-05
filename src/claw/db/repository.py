@@ -35,13 +35,14 @@ def _build_safe_fts5_query(query: str) -> str:
     """Convert free-form text into a safe FTS5 MATCH query.
 
     SQLite FTS treats `token:` as a column-qualified search, which breaks on
-    natural-language strings like `Creation mode: new`. We downgrade queries to
-    a quoted token AND expression so punctuation cannot be misread as syntax.
-    """
+    natural-language strings like `Creation mode: new`. We sanitise tokens and
+    join with OR so that any keyword match surfaces results (AND was too
+    restrictive for multi-token queries and returned zero hits)."""
+
     tokens = re.findall(r"[A-Za-z0-9_]+", query.lower())
     if not tokens:
         return ""
-    return " AND ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 class Repository:
@@ -1668,6 +1669,101 @@ class Repository:
             )
 
     # -------------------------------------------------------------------
+    # Mining Outcomes (RL model selection for mining pipeline)
+    # -------------------------------------------------------------------
+
+    async def record_mining_outcome(
+        self,
+        *,
+        model_used: str,
+        agent_id: str,
+        brain: str,
+        repo_name: str,
+        repo_size_bytes: int,
+        prompt_tokens_estimated: int,
+        strategy: str,
+        success: bool,
+        findings_count: int,
+        tokens_used: int,
+        duration_seconds: float,
+        error_type: str | None = None,
+        error_detail: str | None = None,
+    ) -> str:
+        """Record a mining attempt outcome for RL learning."""
+        outcome_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        await self.engine.execute(
+            """INSERT INTO mining_outcomes
+               (id, model_used, agent_id, brain, repo_name,
+                repo_size_bytes, prompt_tokens_estimated, strategy,
+                success, findings_count, tokens_used, duration_seconds,
+                error_type, error_detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                outcome_id, model_used, agent_id, brain, repo_name,
+                repo_size_bytes, prompt_tokens_estimated, strategy,
+                1 if success else 0, findings_count, tokens_used,
+                duration_seconds, error_type, error_detail, now,
+            ],
+        )
+        return outcome_id
+
+    async def get_mining_model_stats(
+        self, min_observations: int = 3
+    ) -> list[dict[str, Any]]:
+        """Get per-model mining success rates grouped by size bucket.
+
+        Size buckets: small (<50K tokens), medium (50K-200K), large (>200K).
+        """
+        rows = await self.engine.fetch_all(
+            """SELECT
+                 model_used,
+                 CASE
+                   WHEN prompt_tokens_estimated < 50000 THEN 'small'
+                   WHEN prompt_tokens_estimated < 200000 THEN 'medium'
+                   ELSE 'large'
+                 END as size_bucket,
+                 COUNT(*) as total,
+                 SUM(success) as successes,
+                 AVG(CASE WHEN success = 1 THEN findings_count ELSE NULL END) as avg_findings,
+                 AVG(duration_seconds) as avg_duration_seconds
+               FROM mining_outcomes
+               GROUP BY model_used, size_bucket
+               HAVING total >= ?
+               ORDER BY model_used, size_bucket""",
+            [min_observations],
+        )
+        return [dict(r) for r in rows]
+
+    async def get_best_mining_model_for_size(
+        self, estimated_tokens: int, min_observations: int = 3
+    ) -> str | None:
+        """Return the model with highest success rate for this token-size bucket.
+
+        Returns None if insufficient data (cold start).
+        """
+        if estimated_tokens < 50000:
+            condition = "prompt_tokens_estimated < 50000"
+        elif estimated_tokens < 200000:
+            condition = "prompt_tokens_estimated BETWEEN 50000 AND 200000"
+        else:
+            condition = "prompt_tokens_estimated > 200000"
+
+        row = await self.engine.fetch_one(
+            f"""SELECT model_used,
+                      CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
+                      COUNT(*) as total
+               FROM mining_outcomes
+               WHERE {condition}
+               GROUP BY model_used
+               HAVING total >= ?
+               ORDER BY success_rate DESC, total DESC
+               LIMIT 1""",
+            [min_observations],
+        )
+        return row["model_used"] if row else None
+
+    # -------------------------------------------------------------------
     # CLAW-specific: Prompt Variants
     # -------------------------------------------------------------------
 
@@ -1768,6 +1864,88 @@ class Repository:
              tokens_used, duration_seconds, 1 if success else 0, error_category],
         )
         return sample_id
+
+    # ------------------------------------------------------------------
+    # Bandit: RL method selection stats
+    # ------------------------------------------------------------------
+
+    async def record_bandit_outcome(
+        self, methodology_id: str, task_type: str, success: bool
+    ) -> None:
+        """Upsert a bandit outcome for (methodology, task_type)."""
+        col = "successes" if success else "failures"
+        await self.engine.execute(
+            f"""INSERT INTO methodology_bandit_outcomes
+                (methodology_id, task_type, {col}, last_updated)
+                VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                ON CONFLICT(methodology_id, task_type) DO UPDATE SET
+                    {col} = {col} + 1,
+                    last_updated = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            """,
+            [methodology_id, task_type],
+        )
+
+    async def get_bandit_stats(
+        self, methodology_id: str, task_type: str
+    ) -> tuple[int, int]:
+        """Return (successes, failures) for a methodology × task_type pair."""
+        row = await self.engine.fetch_one(
+            "SELECT successes, failures FROM methodology_bandit_outcomes "
+            "WHERE methodology_id = ? AND task_type = ?",
+            [methodology_id, task_type],
+        )
+        if row:
+            return (row["successes"], row["failures"])
+        return (0, 0)
+
+    async def get_bandit_stats_batch(
+        self, methodology_ids: list[str], task_type: str
+    ) -> dict[str, tuple[int, int]]:
+        """Batch fetch bandit stats for multiple methodologies."""
+        if not methodology_ids:
+            return {}
+        placeholders = ",".join("?" for _ in methodology_ids)
+        rows = await self.engine.fetch_all(
+            f"SELECT methodology_id, successes, failures "
+            f"FROM methodology_bandit_outcomes "
+            f"WHERE methodology_id IN ({placeholders}) AND task_type = ?",
+            [*methodology_ids, task_type],
+        )
+        return {r["methodology_id"]: (r["successes"], r["failures"]) for r in rows}
+
+    async def get_task_content_failure_counts(
+        self, task_id: str
+    ) -> dict[str, int]:
+        """Get content-failure counts per methodology for a task.
+
+        Only counts failures where the stage is 'outcome_attributed' and
+        success=0 (content failures, not infrastructure).
+        """
+        rows = await self.engine.fetch_all(
+            """SELECT methodology_id, COUNT(*) as fail_count
+               FROM methodology_usage_log
+               WHERE task_id = ? AND stage = 'outcome_attributed' AND success = 0
+               GROUP BY methodology_id""",
+            [task_id],
+        )
+        return {r["methodology_id"]: r["fail_count"] for r in rows}
+
+    async def get_bandit_summary(self) -> list[dict]:
+        """Get bandit stats summary: top methodology x task_type pairs."""
+        rows = await self.engine.fetch_all(
+            """SELECT methodology_id, task_type, successes, failures,
+                      (successes + failures) as total,
+                      CASE WHEN (successes + failures) > 0
+                           THEN ROUND(CAST(successes AS REAL) / (successes + failures), 3)
+                           ELSE 0.0 END as win_rate,
+                      CASE WHEN (successes + failures) >= 5 THEN 1 ELSE 0 END as thompson_graduated,
+                      last_updated
+               FROM methodology_bandit_outcomes
+               ORDER BY (successes + failures) DESC
+               LIMIT 50"""
+        )
+        return [dict(r) for r in rows]
+
 
 
 # ---------------------------------------------------------------------------

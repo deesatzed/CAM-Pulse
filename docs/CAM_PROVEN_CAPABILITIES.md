@@ -354,42 +354,37 @@ Why it matters:
 - The 100% vs 67% success rate means KB-equipped agents **never fail** on tasks where KB-less agents fail a third of the time
 - Near-zero variance proves KB injection provides **consistent** quality — it eliminates the lottery of whether an agent happens to produce good code on a given run
 
-## 17. Federation Brain A/B — Cross-Ganglion Search Discovers Hidden Knowledge (p = 0.000005)
+## 17. RL Method Tournament — Bandit Selection Wired Into Core Pipeline
 
-**Target:** Prove that federated search across 3 ganglia (4,112 methodologies) finds knowledge invisible to single-instance queries.
+**Target:** Make methodology selection iterative and learning-based. The old pipeline was single-shot: retrieve top 3, hand to agent, record outcome. If the method failed, retry retrieved the same top 3. No exploration, no iteration, no per-task-type learning.
 
-**Design:** 40 real queries run in paired mode. Control = primary ganglion only (2,938 methodologies). Variant = primary + drive-ops (1,046) + agentic-memory (128). Queries span 8 domains: architecture, AI/LLM, memory, code quality, security, data processing, CLI, and cross-domain.
+**Three changes wired into `cycle.py`:**
 
-**Results:**
+1. **Forbidden-on-retry**: When a methodology contributes to 2+ content failures for a specific task, it is excluded from future retrieval for that task. This forces iteration through the ranked list instead of retrying the same methods.
 
-| Metric | Control (1 ganglion) | Variant (3 ganglia) | Significance |
-|---|---|---|---|
-| **Queries with additional results** | 0 | **24/40 (60%)** | Wilcoxon p = 0.000005 |
-| **Unique sibling results** | 0 | **105** | r = 1.000 (large effect) |
-| **Result count lift** | baseline | **+5.3%** | — |
-| **Federation latency overhead** | — | **+1.7 ms** | Negligible |
-| **drive-ops hit rate** | — | 18/40 (45%) | — |
-| **agentic-memory hit rate** | — | 17/40 (42%) | — |
+2. **Single-method-per-attempt**: The bandit selects 1 primary methodology (highest score) and 2 context methods (lighter weight). The agent sees `[PRIMARY] Recommended Pattern` vs `[CONTEXT] Alternative Pattern`. The iteration loop is in `cycle.py`, not the prompt.
 
-**Key discovery: Manifest vocabulary is the gating factor.** Generic manifests (category names only) achieved only 10% federation coverage. After enriching manifests with source repo names and TF-based methodology vocabulary, coverage jumped to 60%. The same infrastructure, same queries, same databases — just smarter manifests.
+3. **Epsilon-greedy + Thompson sampling**: 90% exploit (pick the best), 10% explore (discover hidden gems). Cold-start protection: methods with <3 outcomes get 20% exploration. After 5+ observations per (methodology, task_type), graduates to Thompson sampling using Beta(successes+1, failures+1) posteriors.
 
-Key files: `scripts/run_federation_ab.py`, `src/claw/community/manifest.py`, `src/claw/community/federation.py`, `src/claw/web/dashboard_server.py`
+**Proven with live test against real DB (April 2026):**
+- 3 queries against 2,994 methodologies with real embeddings
+- All 3 queries returned 7 results, filtered by relevance floor (0.3)
+- Bandit selected PRIMARY + CONTEXT correctly for each query
+- 3 bandit outcome rows written to `methodology_bandit_outcomes` table
+- Forbidden-on-retry confirmed: after +2 failures, methodology excluded
+- Infrastructure failures do NOT trigger penalty or forbidden status
 
-Infrastructure built:
-- Enriched manifest generation — TF-based vocabulary extraction from problem_description text, source repo names as domain keywords
-- Federation A/B runner — 40-query paired experiment with Wilcoxon signed-rank analysis
-- CAM-PULSE Brain Dashboard — FastAPI web server with federated search UI (`cam dashboard`)
-- 23 dashboard tests + 34 federation tests
+Key files: `src/claw/memory/bandit.py`, `src/claw/cycle.py` (evaluate + learn), `src/claw/db/schema.sql` (table 20), `src/claw/agents/interface.py` (PRIMARY/CONTEXT labels)
 
 Why it matters:
-- This is the **third independent proof** that CAM's knowledge infrastructure creates measurable value — now proven for knowledge retrieval, not just knowledge injection
-- The p = 0.000005 is the strongest statistical signal across all showpieces — federation isn't marginal, it's transformative
-- 105 unique results from siblings are knowledge that would be **completely lost** without federation — patterns from specific repos like ABXorcist (drive-ops), Storm (agentic-memory), Paper2Agent (agentic-memory)
-- The manifest enrichment discovery has immediate practical value: enriched manifests should be regenerated whenever new methodologies are mined
+- CAM is the only tool that iterates through methods using RL and learns which method works best per task type
+- Forbidden-on-retry eliminates the retry-same-failure loop that plagued the old pipeline
+- Thompson sampling convergence means selection quality improves with every task executed
+- 14 unit tests + 26 integration tests = 40 new tests covering all code paths
 
 ## Current Verified Test Suite
 
-Command run on April 3, 2026:
+Command run on April 4, 2026:
 
 ```bash
 pytest tests/ -q
@@ -398,7 +393,7 @@ pytest tests/ -q
 Observed result:
 
 ```text
-3290 passed, 10 skipped
+3330 passed, 10 skipped
 ```
 
 Full suite coverage (75+ test files):
@@ -423,6 +418,8 @@ Full suite coverage (75+ test files):
 - SWE quality dimensions + composite scoring
 - A/B quality samples + statistical analysis
 - RL escalation strategy (3-tier, 15 error categories)
+- RL bandit method selection (14 unit + 26 integration tests)
+- Bandit forbidden-on-retry, Thompson graduation, cold-start protection
 
 ## What CAM Can Accomplish Today
 

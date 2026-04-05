@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Federation A/B Experiment — Showpiece #18.
+"""Federation A/B Experiment — Internal Tooling.
 
 Runs real queries against the CAM Brain in two modes:
   - Control: primary ganglion only (federation disabled)
@@ -177,7 +177,7 @@ async def _search_federated(
 async def run_experiment():
     """Execute the full federation A/B experiment."""
     print("=" * 70)
-    print("CAM Federation A/B Experiment — Showpiece #18")
+    print("CAM Federation A/B Experiment — Internal Tooling")
     print("=" * 70)
     print()
 

@@ -440,3 +440,37 @@ CREATE TABLE IF NOT EXISTS ab_quality_samples (
 CREATE INDEX IF NOT EXISTS idx_ab_samples_project ON ab_quality_samples(project_id);
 CREATE INDEX IF NOT EXISTS idx_ab_samples_variant ON ab_quality_samples(variant_label);
 CREATE INDEX IF NOT EXISTS idx_ab_samples_task ON ab_quality_samples(task_id);
+
+-- 20. METHODOLOGY_BANDIT_OUTCOMES (RL bandit stats per methodology × task_type)
+CREATE TABLE IF NOT EXISTS methodology_bandit_outcomes (
+    methodology_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+    task_type TEXT NOT NULL,
+    successes INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_updated TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (methodology_id, task_type)
+);
+CREATE INDEX IF NOT EXISTS idx_bandit_task_type ON methodology_bandit_outcomes(task_type);
+
+-- 21. MINING_OUTCOMES (RL tracking for mining model selection)
+CREATE TABLE IF NOT EXISTS mining_outcomes (
+    id TEXT PRIMARY KEY,
+    model_used TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    brain TEXT NOT NULL DEFAULT 'python',
+    repo_name TEXT NOT NULL,
+    repo_size_bytes INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens_estimated INTEGER NOT NULL DEFAULT 0,
+    strategy TEXT NOT NULL DEFAULT 'primary',
+    success INTEGER NOT NULL DEFAULT 0,
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0.0,
+    error_type TEXT,
+    error_detail TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mining_outcomes_model ON mining_outcomes(model_used);
+CREATE INDEX IF NOT EXISTS idx_mining_outcomes_strategy ON mining_outcomes(strategy);
+CREATE INDEX IF NOT EXISTS idx_mining_outcomes_brain ON mining_outcomes(brain);
+CREATE INDEX IF NOT EXISTS idx_mining_outcomes_size ON mining_outcomes(prompt_tokens_estimated);
