@@ -315,6 +315,7 @@ class AgentInterface(ABC):
     # operations where having the complete knowledge base in context
     # yields better coverage than selective retrieval.
     CAG_ELIGIBLE_TASK_TYPES: frozenset[str] = frozenset({
+        # Mining/batch types
         "mining_extraction",
         "bulk_classification",
         "pattern_extraction",
@@ -322,6 +323,11 @@ class AgentInterface(ABC):
         "mining",
         "novelty_detection",
         "synergy_discovery",
+        # Planner-generated types that benefit from full knowledge context
+        "architecture",
+        "analysis",
+        "refactoring",
+        "security",
     })
 
     def __init__(self, agent_id: str, name: str):
@@ -346,6 +352,7 @@ class AgentInterface(ABC):
         self._token_budget: int = 100_000
         self._kv_cache_manager: Optional[Any] = None  # KVCacheManager when enabled
         self._fallback_models: list[str] = []  # SDK fallback model chain from config.llm
+        self._brain_topology_text: str = ""  # Brain awareness for agent prompts
 
     def set_cag_corpus(self, corpus: str, knowledge_budget_chars: int = 16000) -> None:
         """Set the CAG corpus for knowledge injection.
@@ -384,6 +391,18 @@ class AgentInterface(ABC):
             manager: A KVCacheManager instance.
         """
         self._kv_cache_manager = manager
+
+    def set_brain_topology(self, topology_text: str) -> None:
+        """Set brain topology text for awareness injection into prompts.
+
+        When set, task prompts will include an "Available Knowledge Sources"
+        section describing all brains (primary + ganglia), their specializations,
+        and methodology counts.
+
+        Args:
+            topology_text: Deterministic summary from BrainTopology.build_summary_text().
+        """
+        self._brain_topology_text = topology_text
 
     def set_fallback_models(self, models: list[str]) -> None:
         """Set the SDK fallback model chain for OpenRouter execution.
@@ -1251,6 +1270,11 @@ class AgentInterface(ABC):
                 "\nFix the specific issues above. The workspace has been restored to its "
                 "pre-attempt state. Re-implement with corrections applied."
             )
+
+        # --- Brain topology awareness ---
+        if self._brain_topology_text:
+            parts.append("\n## Available Knowledge Sources")
+            parts.append(self._brain_topology_text)
 
         # --- Knowledge injection ---
         # CAG path: if a CAG corpus is loaded and the task type is eligible,

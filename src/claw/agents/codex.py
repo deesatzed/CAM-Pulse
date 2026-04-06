@@ -414,6 +414,10 @@ class CodexAgent(AgentInterface):
         if context and hasattr(context, "project_rules") and context.project_rules:
             parts.append(f"\n## Project Rules\n{context.project_rules}")
 
+        if self._brain_topology_text:
+            parts.append("\n## Available Knowledge Sources")
+            parts.append(self._brain_topology_text)
+
         return "\n".join(parts)
 
 

@@ -527,3 +527,70 @@ class ExecutionState(BaseModel):
     complexity_tier: Optional[ComplexityTier] = None
     quality_score: Optional[float] = None
     agent_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Cross-brain analysis models
+# ---------------------------------------------------------------------------
+
+class UniversalPattern(BaseModel):
+    """A pattern found across 2+ brain ganglia."""
+    pattern_name: str = ""
+    implementations: dict[str, str] = Field(default_factory=dict)
+    evidence_ids: dict[str, list[str]] = Field(default_factory=dict)
+    domain_overlap: float = 0.0
+    source_categories: list[str] = Field(default_factory=list)
+
+
+class UniqueInnovation(BaseModel):
+    """A methodology unique to a single brain with no equivalent elsewhere."""
+    brain: str = ""
+    methodology_id: str = ""
+    problem_summary: str = ""
+    solution_summary: str = ""
+    why_unique: str = ""
+    category: str = ""
+
+
+class TransferableInsight(BaseModel):
+    """A pattern from one brain that could benefit another."""
+    source_brain: str = ""
+    target_brain: str = ""
+    source_methodology_id: str = ""
+    rationale: str = ""
+    pattern_name: str = ""
+
+
+class CompositionLayer(BaseModel):
+    """A layer in a multi-brain composed architecture."""
+    layer_number: int = 0
+    layer_name: str = ""
+    contributing_brain: str = ""
+    methodology_id: str = ""
+    methodology_summary: str = ""
+
+
+class CrossBrainMetrics(BaseModel):
+    """Metrics from a cross-brain analysis run."""
+    query: str = ""
+    brains_queried: int = 0
+    brains_with_results: int = 0
+    total_results: int = 0
+    cross_brain_coverage: float = 0.0
+    universal_pattern_count: int = 0
+    novelty_count: int = 0
+    unique_innovations_per_brain: dict[str, int] = Field(default_factory=dict)
+    trace_count: int = 0
+
+
+class CrossLanguageReport(BaseModel):
+    """Full report from a cross-language analysis."""
+    query: str = ""
+    domains_queried: list[str] = Field(default_factory=list)
+    universal_patterns: list[UniversalPattern] = Field(default_factory=list)
+    unique_innovations: list[UniqueInnovation] = Field(default_factory=list)
+    transferable_insights: list[TransferableInsight] = Field(default_factory=list)
+    composition_layers: list[CompositionLayer] = Field(default_factory=list)
+    metrics: CrossBrainMetrics = Field(default_factory=CrossBrainMetrics)
+    raw_results_by_brain: dict[str, list[str]] = Field(default_factory=dict)
+    generated_at: datetime = Field(default_factory=_now)

@@ -267,7 +267,7 @@ class TestAgentKVCacheIntegration:
         agent = _make_agent()
         agent.set_cag_corpus("corpus data")
 
-        ctx = _make_task_context("analysis")
+        ctx = _make_task_context("debugging")
         prompt_skip = agent._build_openrouter_prompt(ctx, skip_cag=True)
         prompt_normal = agent._build_openrouter_prompt(ctx, skip_cag=False)
 

@@ -64,10 +64,10 @@ class TestResolveCagContextMiningTask:
 # Test: _resolve_cag_context returns None for analysis task
 # ---------------------------------------------------------------------------
 
-class TestResolveCagContextAnalysisTask:
-    def test_resolve_cag_context_returns_none_for_analysis_task(self):
-        """analysis task type must NOT receive CAG corpus (not in eligible set)."""
-        ctx = _make_task_context("analysis")
+class TestResolveCagContextNonEligibleTask:
+    def test_resolve_cag_context_returns_none_for_non_eligible_task(self):
+        """Non-eligible task type (e.g. 'debugging') must NOT receive CAG corpus."""
+        ctx = _make_task_context("debugging")
         corpus = "=== CAG Corpus ===\nMethodology A"
 
         result = AgentInterface._resolve_cag_context(ctx, cag_corpus=corpus)
@@ -180,12 +180,12 @@ class TestAllCagEligibleTaskTypes:
 
 class TestNonEligibleTaskTypes:
     @pytest.mark.parametrize("task_type", [
-        "analysis",
-        "refactoring",
         "bug_fix",
         "code_review",
         "testing",
         "documentation",
+        "debugging",
+        "deployment",
         "",
     ])
     def test_non_eligible_task_type_returns_none(self, task_type: str):
@@ -244,7 +244,7 @@ class TestCagCorpusInPrompt:
         corpus_text = "=== SHOULD NOT APPEAR ==="
         agent.set_cag_corpus(corpus_text)
 
-        ctx = _make_task_context("analysis", title="Analyze code", description="Review code quality")
+        ctx = _make_task_context("debugging", title="Debug code", description="Find root cause")
         prompt = agent._build_openrouter_prompt(ctx)
 
         assert "SHOULD NOT APPEAR" not in prompt

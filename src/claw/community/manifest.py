@@ -253,3 +253,115 @@ def score_manifest_relevance(
     maturity_score = min(total / 200, 1.0) * 0.5 + min(viable_plus / 50, 1.0) * 0.5
 
     return keyword_score * 0.6 + lang_score * 0.2 + maturity_score * 0.2
+
+
+class BrainTopology:
+    """Aggregates brain manifests into a topology summary for agent prompts.
+
+    Produces a stable, deterministic string suitable for:
+    - Agent task prompts (brain awareness section)
+    - KV cache system message prefix
+    - RLMHT trace system prompts (dynamic brain list)
+
+    The summary is byte-identical for the same set of manifests, enabling
+    KV cache hits. Regenerate only when brain topology changes (new mining).
+    """
+
+    def __init__(self, instance_config: Any, primary_db_path: str = ""):
+        self._instance_config = instance_config
+        self._primary_db_path = primary_db_path
+        self._brain_summaries: list[dict[str, Any]] = []
+        self._total_methodologies: int = 0
+        self._loaded: bool = False
+
+    def load(self) -> None:
+        """Load all manifests and build topology. Sync, no DB queries."""
+        self._brain_summaries = []
+        self._total_methodologies = 0
+
+        # Primary DB manifest
+        primary_manifest_path = Path(
+            getattr(self._instance_config, "manifest_path", "data/brain_manifest.json")
+        )
+        if not primary_manifest_path.is_absolute() and self._primary_db_path:
+            # Resolve relative to workspace root (parent of data/)
+            ws = Path(self._primary_db_path).parent.parent
+            primary_manifest_path = ws / primary_manifest_path
+        primary_manifest = load_manifest(primary_manifest_path)
+        if primary_manifest:
+            self._brain_summaries.append({
+                "name": getattr(self._instance_config, "instance_name", "general") or "general",
+                "description": getattr(self._instance_config, "instance_description", ""),
+                "total": primary_manifest.get("total_methodologies", 0),
+                "top_categories": sorted(primary_manifest.get("top_categories", {}).keys()),
+                "languages": sorted(primary_manifest.get("language_breakdown", {}).keys()),
+                "source": "primary",
+            })
+            self._total_methodologies += primary_manifest.get("total_methodologies", 0)
+
+        # Sibling brain manifests
+        for sibling in getattr(self._instance_config, "siblings", []):
+            sibling_db = getattr(sibling, "db_path", "")
+            if not sibling_db:
+                continue
+            manifest_path = Path(sibling_db).parent / "brain_manifest.json"
+            manifest = load_manifest(manifest_path)
+            if manifest:
+                self._brain_summaries.append({
+                    "name": getattr(sibling, "name", "unknown"),
+                    "description": getattr(sibling, "description", ""),
+                    "total": manifest.get("total_methodologies", 0),
+                    "top_categories": sorted(manifest.get("top_categories", {}).keys()),
+                    "languages": sorted(manifest.get("language_breakdown", {}).keys()),
+                    "source": "ganglion",
+                })
+                self._total_methodologies += manifest.get("total_methodologies", 0)
+
+        self._loaded = True
+
+    def build_summary_text(self) -> str:
+        """Build a deterministic text summary for prompt injection.
+
+        Returns a stable string sorted by brain name for KV cache stability.
+        """
+        if not self._loaded:
+            self.load()
+        if not self._brain_summaries:
+            return ""
+
+        lines = [
+            f"Available Knowledge Sources ({self._total_methodologies} total "
+            f"methodologies across {len(self._brain_summaries)} brains):"
+        ]
+        for brain in sorted(self._brain_summaries, key=lambda b: b["name"]):
+            cats = ", ".join(brain["top_categories"][:5]) if brain["top_categories"] else "general"
+            langs = ", ".join(brain["languages"][:3]) if brain["languages"] else "multi-language"
+            source_label = "[primary]" if brain["source"] == "primary" else "[ganglion]"
+            lines.append(
+                f"  - {brain['name']} {source_label}: {brain['total']} methodologies"
+                f" | Focus: {cats} | Languages: {langs}"
+            )
+            if brain["description"]:
+                lines.append(f"    {brain['description']}")
+        return "\n".join(lines)
+
+    def build_brain_list(self) -> str:
+        """Build a compact brain list for RLMHT trace system prompts."""
+        if not self._loaded:
+            self.load()
+        names = sorted(b["name"] for b in self._brain_summaries)
+        return ", ".join(names) if names else "no brains loaded"
+
+    @property
+    def brain_names(self) -> list[str]:
+        """Sorted list of brain names."""
+        if not self._loaded:
+            self.load()
+        return sorted(b["name"] for b in self._brain_summaries)
+
+    @property
+    def total_methodologies(self) -> int:
+        """Grand total of methodologies across all brains."""
+        if not self._loaded:
+            self.load()
+        return self._total_methodologies

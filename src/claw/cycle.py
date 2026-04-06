@@ -1027,7 +1027,8 @@ class MicroClaw(ClawCycle):
         ):
             try:
                 from claw.community.federation import Federation
-                federation = Federation(self.ctx.config.instances)
+                primary_db = str(Path(self.ctx.config.database.db_path).resolve())
+                federation = Federation(self.ctx.config.instances, primary_db_path=primary_db)
                 fed_results = await federation.query(
                     task.description,
                     language=getattr(task, "language", None),

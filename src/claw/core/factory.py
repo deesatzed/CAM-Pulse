@@ -239,7 +239,18 @@ async def _build_cag_stack(
             )
             corpus_for_kv = cag_retriever.get_corpus(ganglion)
         if corpus_for_kv:
-            kv_mgr.build_system_message(corpus_for_kv, config.cag.knowledge_budget_chars)
+            # Build brain topology for KV cache system message
+            _topo_text = ""
+            if hasattr(config, "instances") and config.instances.enabled:
+                try:
+                    from claw.community.manifest import BrainTopology as _BT
+                    _pdb = str(Path(config.database.db_path).resolve())
+                    _topo = _BT(config.instances, primary_db_path=_pdb)
+                    _topo.load()
+                    _topo_text = _topo.build_summary_text()
+                except Exception:
+                    pass
+            kv_mgr.build_system_message(corpus_for_kv, config.cag.knowledge_budget_chars, brain_topology=_topo_text)
             for agent in agents.values():
                 agent.set_kv_cache_manager(kv_mgr)
             logger.info(
@@ -423,6 +434,24 @@ class ClawFactory:
 
         # ── CAG layer (corpus, budget, KV cache) ──────────────────
         cag = await _build_cag_stack(config, agents)
+
+        # ── Brain topology awareness ────────────────────────────────
+        if hasattr(config, "instances") and config.instances.enabled:
+            try:
+                from claw.community.manifest import BrainTopology
+                primary_db = str(Path(config.database.db_path).resolve())
+                topo = BrainTopology(config.instances, primary_db_path=primary_db)
+                topo.load()
+                topology_text = topo.build_summary_text()
+                if topology_text:
+                    for agent in agents.values():
+                        agent.set_brain_topology(topology_text)
+                    logger.info(
+                        "Brain topology injected into %d agents: %d brains, %d total methodologies",
+                        len(agents), len(topo.brain_names), topo.total_methodologies,
+                    )
+            except Exception as e:
+                logger.warning("Brain topology injection failed (non-fatal): %s", e)
 
         # ── Dispatcher (with optional Kelly sizer) ─────────────────
         from claw.dispatcher import Dispatcher

@@ -11510,6 +11510,105 @@ def mcp_start(
     asyncio.run(_run_mcp())
 
 
+
+@app.command()
+def federate(
+    query: str = typer.Argument(help="Query to search across all brains"),
+    output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    trace: bool = typer.Option(False, "--trace", help="Generate RLMHT training traces"),
+    domains: str = typer.Option("", help="Comma-separated domain filter"),
+    config: str = typer.Option("claw.toml", "--config", help="Path to claw.toml"),
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+):
+    """Cross-brain pattern synthesis — query all CAM Brain ganglia."""
+    import asyncio
+    from pathlib import Path as _Path
+
+    _setup_logging(verbose)
+
+    if output_json and not verbose:
+        import logging as _logging
+        _logging.getLogger("claw").setLevel(_logging.WARNING)
+
+    from claw.core.config import load_config
+
+    cfg = load_config(_Path(config))
+
+    if not cfg.instances.enabled:
+        typer.echo("Federation is disabled in config (instances.enabled = false)")
+        raise typer.Exit(1)
+
+    if not cfg.instances.siblings:
+        typer.echo("No sibling ganglia configured. Add [[instances.siblings]] to claw.toml")
+        raise typer.Exit(1)
+
+    async def _run():
+        from claw.community.cross_language import CrossLanguageAnalyzer
+
+        primary_db = str(_Path(cfg.database.db_path).resolve())
+        analyzer = CrossLanguageAnalyzer(cfg.instances, primary_db_path=primary_db)
+
+        domain_list = [d.strip() for d in domains.split(",") if d.strip()] if domains else None
+        report = await analyzer.analyze(query, domains=domain_list)
+
+        if trace:
+            from claw.training.trace_extractor import FederationTraceExtractor
+            from claw.community.manifest import BrainTopology
+            topo = BrainTopology(cfg.instances, primary_db_path=primary_db)
+            topo.load()
+            extractor = FederationTraceExtractor(brain_names=topo.brain_names)
+            trace_path, trace_count = extractor.write_traces(report)
+            if not output_json:
+                typer.echo(f"Traces written: {trace_count} to {trace_path}")
+
+        if output_json:
+            typer.echo(report.model_dump_json(indent=2))
+        else:
+            typer.echo(f"\n{chr(61)*60}")
+            typer.echo(f"  Cross-Brain Pattern Atlas")
+            typer.echo(f"{chr(61)*60}")
+            typer.echo(f"  Query: {report.query}")
+            typer.echo(f"  Domains: {', '.join(report.domains_queried) if report.domains_queried else 'all'}")
+            typer.echo()
+
+            if report.universal_patterns:
+                typer.echo("  UNIVERSAL PATTERNS (found in 2+ brains):")
+                for p in report.universal_patterns:
+                    langs = ", ".join(p.implementations.keys())
+                    typer.echo(f"    - {p.pattern_name} [{langs}] (overlap: {p.domain_overlap:.2f})")
+                typer.echo()
+
+            if report.unique_innovations:
+                typer.echo("  UNIQUE INNOVATIONS:")
+                for u in report.unique_innovations:
+                    typer.echo(f"    - [{u.brain}] {u.problem_summary}")
+                typer.echo()
+
+            if report.transferable_insights:
+                typer.echo("  TRANSFERABLE INSIGHTS:")
+                for t in report.transferable_insights:
+                    typer.echo(f"    - {t.source_brain} -> {t.target_brain}: {t.pattern_name}")
+                typer.echo()
+
+            if report.composition_layers:
+                typer.echo("  COMPOSITION LAYERS:")
+                for layer in report.composition_layers:
+                    typer.echo(f"    L{layer.layer_number}: {layer.layer_name} ({layer.contributing_brain})")
+                typer.echo()
+
+            typer.echo("  METRICS:")
+            m = report.metrics
+            typer.echo(f"    Brains queried: {m.brains_queried}")
+            typer.echo(f"    Brains with results: {m.brains_with_results}")
+            typer.echo(f"    Total results: {m.total_results}")
+            typer.echo(f"    Coverage: {m.cross_brain_coverage:.0%}")
+            typer.echo(f"    Universal patterns: {m.universal_pattern_count}")
+            typer.echo(f"    Novelty count: {m.novelty_count}")
+            typer.echo(f"{chr(61)*60}")
+
+    asyncio.run(_run())
+
+
 def app_main() -> None:
     """Entry point for the installed CLI."""
     app()

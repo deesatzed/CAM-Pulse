@@ -454,6 +454,10 @@ class GeminiAgent(AgentInterface):
         if context and hasattr(context, "project_rules") and context.project_rules:
             parts.append(f"\n## Project Rules\n{context.project_rules}")
 
+        if self._brain_topology_text:
+            parts.append("\n## Available Knowledge Sources")
+            parts.append(self._brain_topology_text)
+
         # Leverage Gemini's large context: include full repo serialization
         workspace = self.workspace_dir
         if not workspace and hasattr(task.task, "description"):

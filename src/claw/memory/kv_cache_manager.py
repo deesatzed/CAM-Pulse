@@ -109,7 +109,9 @@ class KVCacheManager:
         self._corpus_hash: str = ""
         self._stats = KVCacheStats()
 
-    def build_system_message(self, corpus: str, knowledge_budget: int) -> str:
+    def build_system_message(
+        self, corpus: str, knowledge_budget: int, brain_topology: str = "",
+    ) -> str:
         """Build a stable system message from the CAG corpus.
 
         The system message is designed to be byte-identical across requests
@@ -120,17 +122,30 @@ class KVCacheManager:
         Args:
             corpus: The serialized CAG methodology corpus text.
             knowledge_budget: Max chars of corpus to include.
+            brain_topology: Deterministic brain topology summary text.
+                When provided, inserted between preamble and corpus.
 
         Returns:
             The formatted system message string.
         """
         truncated = corpus[:knowledge_budget] if len(corpus) > knowledge_budget else corpus
-        corpus_hash = hashlib.md5(truncated.encode()).hexdigest()[:12]
+        # Hash includes topology so cache invalidates when brain topology changes
+        hash_input = (brain_topology + truncated) if brain_topology else truncated
+        corpus_hash = hashlib.md5(hash_input.encode()).hexdigest()[:12]
+
+        topology_section = ""
+        if brain_topology:
+            topology_section = (
+                "\n=== BRAIN TOPOLOGY ===\n"
+                f"{brain_topology}\n"
+                "=== END BRAIN TOPOLOGY ===\n"
+            )
 
         self._system_message = (
             "You are a knowledge-grounded AI agent. Below is your complete "
             "methodology knowledge base. Use these patterns as authoritative "
-            "guidance for all tasks. Do not hallucinate beyond this knowledge.\n\n"
+            "guidance for all tasks. Do not hallucinate beyond this knowledge.\n"
+            f"{topology_section}\n"
             "=== KNOWLEDGE BASE START ===\n"
             f"{truncated}\n"
             "=== KNOWLEDGE BASE END ==="

@@ -2,7 +2,7 @@
 
 ### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
 
-**3,330 tests** | **2,994 methodologies** | **329 source repos** | **11 languages** | **4 agent backends** | **KB +33.6% quality (p&lt;0.05)** | **$0 — MIT licensed**
+**3,577 tests** | **3,182 methodologies** | **329 source repos** | **11 languages** | **4 agent backends** | **KB +33.6% quality (p&lt;0.05)** | **$0 — MIT licensed**
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -1009,7 +1009,7 @@ cam security status
 
 ---
 
-## 18 Proven Showpieces
+## 19 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
@@ -1033,6 +1033,7 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 | 16 | **KB Quality A/B** | KB-equipped wins 7/8 quality checks on retry logic. Production-grade vs demo-grade. |
 | 17 | **SkyDate SWE A/B** | Blind statistical test: +33.6% composite quality, 100% vs 67% success rate, p<0.05 on 3/6 dimensions. |
 | 18 | **RL Method Tournament** | Epsilon-greedy bandit + Thompson sampling selects best methodology per task type. Forbidden-on-retry forces iteration. 40 tests. |
+| 19 | **Cross-Brain Pattern Atlas** | "defense-in-depth security" → 40 results from 4 brains, 2 universal patterns across languages, 108 transferable insights, 8-layer composition. Real query, real DBs, zero mock. |
 
 Run any showpiece:
 ```bash
@@ -1070,7 +1071,8 @@ src/claw/
   security/
     scanner.py        # TruffleHog + regex fallback secret scanner (Gate 1 + Gate 2)
   community/
-    manifest.py       # Brain manifest generation + relevance scoring
+    manifest.py       # Brain manifest generation + relevance scoring + BrainTopology
+    cross_language.py # Cross-brain analysis: universal patterns, unique innovations, composition
     federation.py     # CAM Swarm — cross-ganglion FTS5 search with read-only queries
     packer.py         # Export methodologies to JSONL with provenance + hash integrity
     validator.py      # 7-gate import validation (schema, safety, dedup, lifecycle reset)
@@ -1079,6 +1081,7 @@ src/claw/
   memory/
     hybrid_search.py  # BM25 text + cosine vector + deepConf 6-factor confidence scoring
     bandit.py         # RL method tournament: epsilon-greedy + Thompson sampling selection
+    kv_cache_manager.py # KV cache prefix caching with brain topology awareness
     semantic.py       # Semantic memory, co-retrieval stigmergic links, outcome feedback
     fitness.py        # 6-dimensional fitness scoring + history logging
     lifecycle.py      # Gause competitive exclusion state machine
@@ -1087,6 +1090,8 @@ src/claw/
   evolution/
     assimilation.py   # Methodology lifecycle management + synergy discovery
     prompt_evolver.py # Bayesian A/B testing + deterministic prompt mutations
+  training/
+    trace_extractor.py # RLMHT trace generation: routing, grouping, composition ChatML
 ```
 
 **Database**: SQLite with `sqlite-vec` extension for vector similarity search. WAL mode for concurrent reads. Stores methodologies, embeddings (384-dim), provenance, lifecycle state, fitness history, community imports, usage logs, scan history, and discovery records. 15 migrations applied automatically.

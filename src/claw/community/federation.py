@@ -135,12 +135,15 @@ class Federation:
     relevant siblings via read-only FTS5 search.
     """
 
-    def __init__(self, instance_config: Any):
+    def __init__(self, instance_config: Any, primary_db_path: str = ""):
         """
         Args:
             instance_config: An InstanceRegistryConfig object.
+            primary_db_path: Path to the primary claw.db. When provided,
+                federation also searches the primary DB alongside siblings.
         """
         self.config = instance_config
+        self.primary_db_path = primary_db_path
 
     async def query(
         self,
@@ -163,7 +166,9 @@ class Federation:
         Returns:
             Sorted list of FederationResult (best first).
         """
-        if not self.config.enabled or not self.config.siblings:
+        if not self.config.enabled:
+            return []
+        if not self.config.siblings and not self.primary_db_path:
             return []
 
         keywords = _extract_keywords(task_description)
@@ -217,6 +222,23 @@ class Federation:
                     "Failed to query sibling %s (%s): %s",
                     sibling.name, sibling.db_path, e,
                 )
+
+        # Query primary DB if provided
+        if self.primary_db_path and len(all_results) < max_total:
+            try:
+                remaining = max_total - len(all_results)
+                primary_results = await self._query_by_path(
+                    self.primary_db_path,
+                    getattr(self.config, "instance_name", "general") or "general",
+                    keywords, language, limit=remaining,
+                )
+                for r in primary_results:
+                    if r.methodology.id not in seen_ids:
+                        r.relevance_score = 1.0  # Primary DB is always maximally relevant
+                        all_results.append(r)
+                        seen_ids.add(r.methodology.id)
+            except Exception as e:
+                logger.warning("Failed to query primary DB: %s", e)
 
         # Sort by relevance * fts_rank
         all_results.sort(
@@ -334,6 +356,102 @@ class Federation:
         logger.info(
             "Queried sibling %s: %d results for %d keywords",
             sibling.name, len(results), len(keywords),
+        )
+        return results
+
+    async def _query_by_path(
+        self,
+        db_path_str: str,
+        source_name: str,
+        keywords: list[str],
+        language: Optional[str],
+        limit: int = 3,
+    ) -> list[FederationResult]:
+        """Query a DB by path (used for primary DB). Same logic as _query_sibling."""
+        db_path = Path(db_path_str)
+        if not db_path.exists():
+            return []
+
+        fts_query = _build_safe_fts5_query(keywords)
+        if not fts_query:
+            return []
+
+        results: list[FederationResult] = []
+
+        async with aiosqlite.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = aiosqlite.Row
+
+            rows = await conn.execute_fetchall(
+                """SELECT methodology_id, rank
+                   FROM methodology_fts
+                   WHERE methodology_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                [fts_query, limit * 2],
+            )
+
+            for row in rows:
+                if len(results) >= limit:
+                    break
+                mid = row["methodology_id"] if isinstance(row, dict) else row[0]
+                fts_rank = abs(float(row["rank"] if isinstance(row, dict) else row[1]))
+
+                meth_row = await conn.execute_fetchall(
+                    "SELECT * FROM methodologies WHERE id = ?", [mid]
+                )
+                if not meth_row:
+                    continue
+
+                meth_dict = dict(meth_row[0])
+
+                if language and meth_dict.get("language"):
+                    if meth_dict["language"].lower() != language.lower():
+                        continue
+
+                state = meth_dict.get("lifecycle_state", "")
+                if state in ("dead", "dormant"):
+                    continue
+
+                json_list_fields = ("tags", "tech_stack", "files_affected", "parent_ids")
+                json_dict_fields = ("capability_data", "fitness_vector", "prism_data")
+                for field in json_list_fields:
+                    val = meth_dict.get(field)
+                    if isinstance(val, str):
+                        try:
+                            meth_dict[field] = json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            meth_dict[field] = []
+                    elif val is None:
+                        meth_dict[field] = []
+                for field in json_dict_fields:
+                    val = meth_dict.get(field)
+                    if isinstance(val, str):
+                        try:
+                            meth_dict[field] = json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            meth_dict[field] = {}
+                    elif val is None:
+                        meth_dict[field] = {}
+
+                if not meth_dict.get("created_at"):
+                    meth_dict["created_at"] = "2026-01-01T00:00:00Z"
+
+                try:
+                    methodology = Methodology(**meth_dict)
+                except Exception as e:
+                    logger.debug("Failed to parse methodology %s from %s: %s", mid, source_name, e)
+                    continue
+
+                results.append(FederationResult(
+                    methodology=methodology,
+                    source_instance=source_name,
+                    source_db_path=str(db_path),
+                    fts_rank=fts_rank,
+                ))
+
+        logger.info(
+            "Queried primary DB %s: %d results for %d keywords",
+            source_name, len(results), len(keywords),
         )
         return results
 
