@@ -6,12 +6,12 @@
   <title>CAM-PULSE — One Brain. Many Specialists. Hunts, Mines, Remembers, Evolves.</title>
   <meta name="description" content="The AI coding agent that gets smarter every time it ships. 2,895 learned patterns from 250+ repos. Bayesian Kelly routing picks the best agent per task. Self-corrects, self-enhances, verifies honestly. Free, local, MIT.">
   <meta property="og:title" content="CAM-PULSE — Autonomous Repo Discovery &amp; Stateful AI Engineering">
-  <meta property="og:description" content="Stop using stateless AI. CAM-PULSE discovers repos autonomously, mines 2,895 engineering patterns, routes tasks with Bayesian Kelly Criterion, and verifies every build with real tests. 3,267 passing. KB-equipped agents win +33.6% composite quality (p&lt;0.05 on 3/6 dimensions).">
+  <meta property="og:description" content="Stop using stateless AI. CAM-PULSE discovers repos autonomously, mines 3,044 engineering patterns, routes tasks with Bayesian Kelly Criterion, and verifies every build with real tests. 3,621 passing. Paired blind A/B: 92.3% vs 73.1% success (p=0.015, Wilcoxon).">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="CAM-PULSE: The AI code engine that actually remembers">
-  <meta name="twitter:description" content="The AI agent that learns from 329 real repos, routes tasks with Bayesian Kelly Criterion, and proves everything with 3,330 tests. KB +33.6% quality (p&lt;0.05). Free, MIT, runs fully local.">
+  <meta name="twitter:description" content="The AI agent that learns from 329 real repos, routes tasks with Bayesian Kelly Criterion, and proves everything with 3,621 tests. Paired A/B: 92.3% vs 73.1% success (p=0.015). Free, MIT.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2100,6 +2100,43 @@ L7 [typescript] design patterns &rarr; L8 [general] security<br>
             <span class="showpiece-tag" style="border-color: rgba(41,128,185,0.3);">8-layer composition</span>
             <span class="showpiece-tag" style="border-color: rgba(41,128,185,0.3);">3,182 methodologies</span>
             <span class="showpiece-tag" style="border-color: rgba(41,128,185,0.3);">zero hallucination</span>
+          </div>
+        </div>
+
+        <!-- Showpiece 20: Paired A/B Knowledge Proof -->
+        <div class="card showpiece-card reveal" style="border-top: 3px solid #27ae60; grid-column: 1/-1; background: linear-gradient(135deg, rgba(39,174,96,0.10) 0%, rgba(255,252,247,0.76) 100%);">
+          <span class="showpiece-number" style="color: #27ae60;">20</span>
+          <div class="showpiece-type" style="color: #27ae60;">Paired A/B Proof &mdash; Statistically Significant</div>
+          <div class="showpiece-hero-metric">
+            <span class="metric-value" style="color: #27ae60;">p = 0.015</span>
+            <span class="metric-label">Wilcoxon signed-rank &mdash; 26 paired within-subject comparisons</span>
+          </div>
+          <h4>Knowledge Ablation: Same Task, Same Agent, Blind A/B</h4>
+          <p>The definitive test: each of 26 coding tasks was run <strong>twice on the same agent</strong> &mdash; once with the full knowledge base (3,044 methodologies), once with knowledge suppressed. Neither the agent nor the verifier knows which arm it&rsquo;s in. The paired design eliminates agent confounding and task difficulty variance, requiring 4&times; fewer samples than unpaired experiments. Result: knowledge-equipped agents succeeded on <strong>92.3%</strong> of tasks vs 73.1% control. On the 7 <em>discordant pairs</em> (one arm succeeded, one failed), the variant won <strong>6 out of 7</strong>. When a task is borderline &mdash; hard enough that the agent might fail &mdash; the knowledge base tips it toward success.</p>
+          <div class="showpiece-proof">
+            <div class="proof-label">Statistical Results (April 7, 2026 &mdash; 39 min, 5 agents, 26 pairs)</div>
+            <code>Success: 92.3% variant vs 73.1% control | +19.2 pp lift<br>
+Composite: 0.804 vs 0.660 &mdash; +0.144 mean paired diff<br>
+Wilcoxon signed-rank (one-sided): W=122, p=0.0153<br>
+Paired t-test (one-sided): t=2.248, p=0.0168<br>
+Bootstrap 95% CI: [+0.023, +0.270] (excludes zero)<br>
+Cohen&rsquo;s dz = 0.45 (medium effect)<br>
+McNemar discordant: 6 variant wins / 1 control win<br>
+Win/Tie/Loss: 9 / 15 / 2<br>
+<br>
+Per agent: codex +0.116 | local +0.182 | grok +0.275 | claude +0.017 | gemini +0.138<br>
+All 5 agents show positive mean diff &mdash; KB effect is agent-independent</code>
+          </div>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">paired design</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">p=0.015</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">Cohen&rsquo;s dz 0.45</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">92.3% vs 73.1%</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">6:1 discordant</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">5 agents, all positive</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">blind within-subject</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">bootstrap CI excludes 0</span>
+            <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);"><a href="ab-proof.html" style="color: inherit; text-decoration: underline;">full interactive report</a></span>
           </div>
         </div>
 

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("claw.evolution.prompt_evolver")
 
 # Minimum samples required per variant before an A/B test can be evaluated.
-MIN_SAMPLES = 20
+MIN_SAMPLES = 200
 
 # Bayesian priors for Beta distribution comparison.
 _PRIOR_ALPHA = 1.0

@@ -249,11 +249,14 @@ class Verifier:
                     else:
                         all_violations.append({
                             "check": "test_execution",
-                            "detail": f"Tests failed in workspace: {test_output[:500]}",
+                            "detail": f"Tests failed in workspace: {test_output[:2000]}",
                         })
             except Exception as e:
                 logger.warning("Test execution failed: %s", e)
-                all_recommendations.append(f"Test execution could not be completed: {e}")
+                all_violations.append({
+                    "check": "test_execution",
+                    "detail": f"Test runner could not execute: {str(e)[:500]}",
+                })
 
         # Check minimum test count requirement
         if tests_after is not None and len(all_violations) == 0:

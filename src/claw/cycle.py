@@ -16,6 +16,7 @@ operating at four nested scales:
 from __future__ import annotations
 
 import ast
+import difflib
 import hashlib
 import json
 import logging
@@ -84,6 +85,110 @@ def _compute_workspace_change(before: dict[str, str], after: dict[str, str]) -> 
         else:
             lines.append(f"*** {path}")
     return files_changed, "\n".join(lines)
+
+
+def _compute_content_diff(
+    before: dict[str, bytes],
+    workspace_dir: str,
+    max_chars: int = 6000,
+) -> str:
+    """Compute a unified diff between snapshot content and current workspace.
+
+    Returns a human-readable diff string showing exactly what the agent wrote,
+    suitable for injection into correction feedback.  Capped at *max_chars* to
+    avoid blowing up the prompt.
+    """
+    root = Path(workspace_dir)
+    if not root.is_dir():
+        return ""
+
+    # Gather current workspace content
+    after: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if _is_excluded_path(rel):
+            continue
+        try:
+            after[str(rel)] = path.read_bytes()
+        except OSError:
+            continue
+
+    all_paths = sorted(set(before) | set(after))
+    parts: list[str] = []
+    total = 0
+
+    for rel in all_paths:
+        old_bytes = before.get(rel, b"")
+        new_bytes = after.get(rel, b"")
+        if old_bytes == new_bytes:
+            continue
+
+        # Decode as text (skip binary)
+        try:
+            old_text = old_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+            new_text = new_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+        except Exception:
+            parts.append(f"--- {rel} (binary, skipped)\n")
+            continue
+
+        diff_lines = list(difflib.unified_diff(
+            old_text, new_text,
+            fromfile=f"a/{rel}", tofile=f"b/{rel}",
+            lineterm="",
+        ))
+        if not diff_lines:
+            continue
+
+        chunk = "\n".join(diff_lines)
+        if total + len(chunk) > max_chars:
+            parts.append(f"... (diff truncated at {max_chars} chars)")
+            break
+        parts.append(chunk)
+        total += len(chunk)
+
+    return "\n".join(parts)
+
+
+def _read_failing_test_files(
+    test_output: str,
+    workspace_dir: str,
+    max_chars: int = 4000,
+) -> str:
+    """Extract test file paths from pytest output and read their content.
+
+    Agents need to see the test they're supposed to make pass, not just the
+    error message.  Parses paths like ``tests/test_foo.py::test_bar`` from
+    pytest output.
+    """
+    root = Path(workspace_dir)
+    # Match pytest node ids: path.py::test_name or FAILED path.py::test_name
+    pattern = re.compile(r"([\w/._-]+\.py)::")
+    seen: set[str] = set()
+    parts: list[str] = []
+    total = 0
+
+    for m in pattern.finditer(test_output):
+        rel = m.group(1)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        fpath = root / rel
+        if not fpath.is_file():
+            continue
+        try:
+            content = fpath.read_text(errors="replace")
+        except OSError:
+            continue
+        header = f"\n--- {rel} ---\n"
+        if total + len(header) + len(content) > max_chars:
+            parts.append(f"--- {rel} (skipped, would exceed {max_chars} char cap) ---")
+            break
+        parts.append(header + content)
+        total += len(header) + len(content)
+
+    return "".join(parts)
 
 
 # Directories excluded from workspace snapshot/restore. These are either
@@ -311,7 +416,15 @@ def _is_correctable_failure(
             return False
         return True
 
-    # If not approved but no violations and no failure_reason, unclear — don't retry
+    # Not approved but no violations: the verifier couldn't classify the failure
+    # (e.g. tests didn't run, no test output captured, or silent failure).
+    # This IS correctable — the agent should see the test output / lack thereof
+    # and try a different approach.  Previously this returned False, causing ~31%
+    # of samples to get only one attempt.
+    if not verification.approved:
+        return True
+
+    # Approved with no issues — nothing to correct
     return False
 
 
@@ -1379,6 +1492,15 @@ class MicroClaw(ClawCycle):
                     attempt + 1, max_attempts, task_ctx.task.id,
                 )
 
+                # Compute real code diff BEFORE restoring (agent's code is still on disk)
+                code_diff = ""
+                failing_tests = ""
+                if workspace_dir and content_snapshot:
+                    code_diff = _compute_content_diff(content_snapshot, workspace_dir)
+                    test_output = last_verification.test_output if last_verification else ""
+                    if test_output:
+                        failing_tests = _read_failing_test_files(test_output, workspace_dir)
+
                 # Restore workspace to pre-attempt state
                 if workspace_dir and content_snapshot:
                     _restore_workspace(workspace_dir, content_snapshot)
@@ -1390,6 +1512,8 @@ class MicroClaw(ClawCycle):
                     violations=last_verification.violations if last_verification else [],
                     test_output=last_verification.test_output if last_verification else "",
                     diff=last_result[2].diff if last_result else "",
+                    code_diff=code_diff,
+                    failing_test_content=failing_tests,
                     quality_score=last_verification.quality_score or 0.0 if last_verification else 0.0,
                     failure_reason=last_result[2].failure_reason if last_result else None,
                     failure_detail=last_result[2].failure_detail if last_result else None,

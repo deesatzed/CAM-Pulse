@@ -478,6 +478,8 @@ class CorrectionFeedback(BaseModel):
     violations: list[dict[str, str]] = Field(default_factory=list)
     test_output: str = ""
     diff: str = ""
+    code_diff: str = ""          # Unified diff showing what the agent actually wrote
+    failing_test_content: str = ""  # Content of the test file(s) the agent must pass
     quality_score: float = 0.0
     failure_reason: Optional[str] = None
     failure_detail: Optional[str] = None
@@ -568,6 +570,15 @@ class CompositionLayer(BaseModel):
     contributing_brain: str = ""
     methodology_id: str = ""
     methodology_summary: str = ""
+
+
+class CoverageMatrix(BaseModel):
+    """Category x brain coverage matrix for gap analysis."""
+    matrix: dict[str, dict[str, int]] = Field(default_factory=dict)
+    sparse_cells: list[tuple[str, str]] = Field(default_factory=list)
+    empty_cells: list[tuple[str, str]] = Field(default_factory=list)
+    total_by_category: dict[str, int] = Field(default_factory=dict)
+    total_by_brain: dict[str, int] = Field(default_factory=dict)
 
 
 class CrossBrainMetrics(BaseModel):

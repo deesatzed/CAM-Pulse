@@ -134,10 +134,16 @@ class TestIsCorrectableFailure:
         verification = VerificationResult(approved=False)
         assert _is_correctable_failure(outcome, verification) is False
 
-    def test_approved_with_no_violations_not_correctable(self):
-        """Approved results should not have violations."""
+    def test_not_approved_no_violations_is_correctable(self):
+        """Not approved but no violations = unclassified failure — should retry."""
         outcome = TaskOutcome()
         verification = VerificationResult(approved=False, violations=[])
+        assert _is_correctable_failure(outcome, verification) is True
+
+    def test_approved_no_violations_not_correctable(self):
+        """Approved with no violations — nothing to correct."""
+        outcome = TaskOutcome()
+        verification = VerificationResult(approved=True, violations=[])
         assert _is_correctable_failure(outcome, verification) is False
 
     def test_environment_setup_violation_not_correctable(self):

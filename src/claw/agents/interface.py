@@ -1246,8 +1246,9 @@ class AgentInterface(ABC):
         if correction is not None:
             parts.append(f"\n## Correction Required (attempt {correction.attempt_number + 1})")
             parts.append(
-                "Your previous attempt was rejected by the verification system. "
-                "You MUST fix the issues listed below. Do NOT repeat the same approach."
+                "Your previous attempt was rejected. Study the diff of what you "
+                "wrote, the test output, and the test file content below. "
+                "Identify the ROOT CAUSE of the failure and take a DIFFERENT approach."
             )
             if correction.violations:
                 parts.append("\n### Violations Found")
@@ -1255,11 +1256,19 @@ class AgentInterface(ABC):
                     check = v.get("check", "unknown")
                     detail = v.get("detail", "no detail")
                     parts.append(f"- **{check}**: {detail}")
+            if correction.code_diff:
+                parts.append("\n### Your Previous Code Changes (what you wrote that failed)")
+                parts.append(f"```diff\n{correction.code_diff[:6000]}\n```")
+            if correction.failing_test_content:
+                parts.append("\n### Test File(s) You Must Pass")
+                parts.append(
+                    "Read these carefully — your code must satisfy these exact assertions:"
+                )
+                parts.append(f"```python\n{correction.failing_test_content[:4000]}\n```")
             if correction.test_output:
                 parts.append("\n### Test Output (from failed run)")
-                # Truncate to avoid blowing up the prompt
-                test_text = correction.test_output[:3000]
-                if len(correction.test_output) > 3000:
+                test_text = correction.test_output[:4000]
+                if len(correction.test_output) > 4000:
                     test_text += "\n... (truncated)"
                 parts.append(f"```\n{test_text}\n```")
             if correction.failure_reason:
@@ -1267,8 +1276,9 @@ class AgentInterface(ABC):
                 if correction.failure_detail:
                     parts.append(correction.failure_detail[:1000])
             parts.append(
-                "\nFix the specific issues above. The workspace has been restored to its "
-                "pre-attempt state. Re-implement with corrections applied."
+                "\nThe workspace has been restored to its pre-attempt state. "
+                "Re-implement with a DIFFERENT approach that addresses the "
+                "specific failure above."
             )
 
         # --- Brain topology awareness ---
