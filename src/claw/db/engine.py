@@ -616,6 +616,25 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration 17 applied: created mining_outcomes table")
 
+        # Migration 18: coverage_snapshots table for gap analysis
+        cov_check = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='coverage_snapshots'"
+        )
+        if cov_check and cov_check["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS coverage_snapshots (
+                    id TEXT PRIMARY KEY,
+                    snapshot_data TEXT NOT NULL,
+                    sparse_cells TEXT NOT NULL DEFAULT '[]',
+                    total_methodologies INTEGER NOT NULL,
+                    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_coverage_snapshots_created
+                    ON coverage_snapshots(created_at DESC);
+            """)
+            await self.conn.commit()
+            logger.info("Migration 18 applied: created coverage_snapshots table")
+
     # ------------------------------------------------------------------
     # Write operations — wrapped with _retry_on_locked for contention
     # ------------------------------------------------------------------

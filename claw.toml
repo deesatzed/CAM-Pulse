@@ -353,6 +353,13 @@ transport = "stdio"            # "stdio" for subprocess, "http" for network
 auth_token_env = "CLAW_MCP_AUTH_TOKEN"  # optional auth; empty = no auth
 
 # ---------------------------------------------------------------------------
+# Gap Analyzer — category x brain coverage matrix and repo prioritization
+# ---------------------------------------------------------------------------
+[gap_analyzer]
+enabled = true
+sparse_cell_threshold = 3   # category x brain cells below this count = sparse
+
+# ---------------------------------------------------------------------------
 # Logging — structured JSON logging for observability
 # ---------------------------------------------------------------------------
 [logging]
@@ -565,3 +572,13 @@ description = "Specialist ganglion for agentic memory, RAG, knowledge retrieval,
 name = "typescript"
 db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/typescript/claw.db"
 description = "Typescript language patterns mined by CAM typescript brain"
+
+[[instances.siblings]]
+name = "rust"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/rust/claw.db"
+description = "Rust language patterns: WASM, safety, CLI, systems programming"
+
+[[instances.siblings]]
+name = "go"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/go/claw.db"
+description = "Go language patterns: concurrency, CLI, networking, cloud infrastructure"

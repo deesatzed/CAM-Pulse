@@ -509,6 +509,16 @@ class MCPConfig(BaseModel):
     auth_token_env: str = "CLAW_MCP_AUTH_TOKEN"
 
 
+class GapAnalyzerConfig(BaseModel):
+    """Knowledge gap analysis configuration.
+
+    Controls the coverage matrix computation, sparse cell detection,
+    and repo prioritization for gap-filling mining runs.
+    """
+    enabled: bool = True
+    sparse_cell_threshold: int = 3  # category x brain cells below this = sparse
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -542,6 +552,7 @@ class ClawConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     local_llm: LocalLLMConfig = Field(default_factory=LocalLLMConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    gap_analyzer: GapAnalyzerConfig = Field(default_factory=GapAnalyzerConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
 

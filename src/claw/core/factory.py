@@ -77,6 +77,7 @@ class ClawContext:
     security: SecurityPolicy
     agents: dict[str, AgentInterface] = field(default_factory=dict)
     prism_engine: Any = None
+    gap_analyzer: Any = None  # GapAnalyzer — coverage matrix, gap scoring
     dispatcher: Any = None
     verifier: Any = None
     budget_enforcer: Any = None
@@ -548,6 +549,22 @@ class ClawFactory:
             )
             logger.info("MCP server created (transport=%s)", config.mcp.transport)
 
+        # ── Gap Analyzer (optional) ────────────────────────────────
+        gap_analyzer_inst = None
+        if config.gap_analyzer.enabled and config.instances.enabled:
+            try:
+                from claw.community.gap_analyzer import GapAnalyzer
+                primary_db = str(Path(config.database.db_path).resolve())
+                gap_analyzer_inst = GapAnalyzer(
+                    repository=search.repository,
+                    instances_config=config.instances,
+                    primary_db_path=primary_db,
+                    gap_config=config.gap_analyzer,
+                )
+                logger.info("GapAnalyzer enabled: threshold=%d", config.gap_analyzer.sparse_cell_threshold)
+            except Exception as e:
+                logger.warning("GapAnalyzer creation failed (non-fatal): %s", e)
+
         # ── Assemble context ───────────────────────────────────────
         ctx = ClawContext(
             config=config,
@@ -559,6 +576,7 @@ class ClawFactory:
             security=security,
             agents=agents,
             prism_engine=search.prism_engine,
+            gap_analyzer=gap_analyzer_inst,
             dispatcher=dispatcher,
             verifier=verifier,
             budget_enforcer=budget_enforcer,

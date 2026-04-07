@@ -5288,6 +5288,7 @@ def mine(
     yield_sort: bool = typer.Option(True, "--yield-sort/--no-yield-sort", help="Sort candidates by expected yield before mining (default: on)"),
     self_assess: bool = typer.Option(False, "--self-assess", help="After mining, classify findings as DUPLICATE/PARTIAL_GAP/NOVEL vs existing CAM knowledge"),
     brain: Optional[str] = typer.Option(None, "--brain", "-b", help="Mining brain: auto (default), python, typescript, go, rust, misc"),
+    suggest: bool = typer.Option(False, "--suggest", help="Show repos ranked by gap-filling potential instead of mining"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -5302,6 +5303,7 @@ def mine(
     Use --no-yield-sort to mine in alphabetical order instead of by expected yield.
     Use --self-assess to classify findings against existing knowledge after mining.
     Use --brain to force a specific language brain (auto-detects by default).
+    Use --suggest to rank repos by gap-filling potential (no mining, no LLM calls).
     """
     _setup_logging(verbose)
 
@@ -5343,6 +5345,10 @@ def mine(
 
     if scan_only:
         _mine_scan_only(dir_path, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
+        return
+
+    if suggest:
+        _mine_suggest(dir_path, depth, dedup, max_repos, config, skip_known, force_rescan, changed_only)
         return
 
     from claw.core.config import load_config
@@ -5599,6 +5605,109 @@ def _mine_scan_only(
             console.print(group_table)
 
     console.print(f"\n[dim]Remove --scan-only to mine these repos.[/dim]")
+
+
+def _mine_suggest(
+    dir_path: Path,
+    depth: int,
+    dedup: bool,
+    max_repos: int,
+    config_path: Optional[str],
+    skip_known: bool,
+    force_rescan: bool,
+    changed_only: bool,
+) -> None:
+    """Rank repos by gap-filling potential using the coverage matrix."""
+    from claw.core.config import load_config
+    from claw.miner import (
+        RepoScanLedger, _default_scan_ledger_path, _discover_repos,
+        _dedup_iterations, detect_repo_language,
+    )
+
+    cfg = load_config(Path(config_path) if config_path else None)
+
+    if not cfg.gap_analyzer.enabled or not cfg.instances.enabled:
+        console.print("[yellow]Gap analyzer requires [gap_analyzer] enabled=true and [instances] enabled=true[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]CAM Mine Suggest (gap-aware repo ranking)[/bold]")
+    console.print(f"  Directory: {dir_path}")
+    console.print()
+
+    # Discover repos
+    candidates = _discover_repos(dir_path, max_depth=depth, config=cfg)
+    if dedup:
+        candidates, _ = _dedup_iterations(candidates)
+
+    ledger = RepoScanLedger(_default_scan_ledger_path(cfg))
+    if skip_known:
+        candidates = [
+            c for c in candidates
+            if ledger.should_mine(c, skip_known=skip_known, force_rescan=force_rescan)[0]
+        ]
+
+    if not candidates:
+        console.print("[yellow]No unmined repos found.[/yellow]")
+        return
+
+    # Compute coverage matrix
+    async def _run():
+        from claw.db.engine import DatabaseEngine
+        from claw.db.repository import Repository
+        from claw.community.gap_analyzer import GapAnalyzer
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        await engine.apply_migrations()
+        repo = Repository(engine)
+        primary_db = str(Path(cfg.database.db_path).resolve())
+        analyzer = GapAnalyzer(repo, cfg.instances, primary_db, cfg.gap_analyzer)
+
+        try:
+            coverage = await analyzer.compute_coverage_matrix()
+        finally:
+            await engine.close()
+
+        # Score each candidate
+        scored: list[tuple[Any, float, str]] = []
+        for c in candidates:
+            lang = detect_repo_language(c.path)
+            domain_info = {"language": lang, "categories": []}
+            score = analyzer.score_repo_for_gaps(c.name, domain_info, coverage)
+            scored.append((c, score, lang))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        # Display
+        table = Table(title=f"Repos Ranked by Gap-Filling Potential ({len(scored)} candidates)")
+        table.add_column("#", justify="right", style="dim", width=4)
+        table.add_column("Name", style="cyan", max_width=30)
+        table.add_column("Language", style="magenta", width=12)
+        table.add_column("Gap Score", justify="right", style="yellow", width=10)
+        table.add_column("Path", style="dim", max_width=40)
+
+        for i, (c, score, lang) in enumerate(scored[:max_repos], 1):
+            score_style = "green" if score > 0.3 else "yellow" if score > 0 else "dim"
+            table.add_row(
+                str(i), c.name, lang or "?",
+                f"[{score_style}]{score:.3f}[/{score_style}]",
+                str(c.path)[:40],
+            )
+
+        console.print(table)
+
+        # Coverage summary
+        sparse = coverage.sparse_cells + coverage.empty_cells
+        if sparse:
+            console.print(f"\n[bold]Sparse/empty cells ({len(sparse)}):[/bold]")
+            for cat, brain in sorted(sparse)[:15]:
+                count = coverage.matrix.get(cat, {}).get(brain, 0)
+                style = "red" if count == 0 else "yellow"
+                console.print(f"  [{style}]{cat} / {brain}: {count}[/{style}]")
+            if len(sparse) > 15:
+                console.print(f"  [dim]... and {len(sparse) - 15} more[/dim]")
+
+    asyncio.run(_run())
 
 
 async def _mine_async(
@@ -8479,6 +8588,121 @@ app.add_typer(self_enhance_app, name="self-enhance")
 app.add_typer(ab_test_app, name="ab-test")
 app.add_typer(security_app, name="security")
 app.add_typer(cag_app, name="cag")
+
+
+# ---------------------------------------------------------------------------
+# Gap Analysis commands
+# ---------------------------------------------------------------------------
+
+@app.command()
+def gaps(
+    snapshot: bool = typer.Option(False, "--snapshot", help="Take a new coverage snapshot before display"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show category x brain coverage matrix and identify knowledge gaps.
+
+    Displays a Rich table with color coding:
+      red = empty (0 methodologies), yellow = sparse (< threshold), green = adequate.
+    Use --snapshot to persist the current state for trend tracking.
+    Use --json for machine-readable output.
+    """
+    _setup_logging(verbose)
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+
+    if not cfg.gap_analyzer.enabled:
+        console.print("[yellow]Gap analyzer is disabled. Set [gap_analyzer] enabled=true in claw.toml[/yellow]")
+        raise typer.Exit(1)
+
+    async def _run():
+        from claw.db.engine import DatabaseEngine
+        from claw.db.repository import Repository
+        from claw.community.gap_analyzer import GapAnalyzer
+
+        engine = DatabaseEngine(cfg.database)
+        await engine.connect()
+        await engine.apply_migrations()
+        repo = Repository(engine)
+        primary_db = str(Path(cfg.database.db_path).resolve())
+        analyzer = GapAnalyzer(repo, cfg.instances, primary_db, cfg.gap_analyzer)
+
+        try:
+            if snapshot:
+                coverage = await analyzer.take_snapshot()
+                console.print("[green]Snapshot saved.[/green]\n")
+            else:
+                coverage = await analyzer.compute_coverage_matrix()
+
+            if json_output:
+                import json as _json
+                console.print(_json.dumps({
+                    "matrix": coverage.matrix,
+                    "sparse_cells": coverage.sparse_cells,
+                    "empty_cells": coverage.empty_cells,
+                    "total_by_category": coverage.total_by_category,
+                    "total_by_brain": coverage.total_by_brain,
+                }, indent=2))
+                return
+
+            # Rich table display
+            all_brains = sorted(set(coverage.total_by_brain.keys()))
+            if not all_brains:
+                console.print("[yellow]No methodology data found. Run `cam mine` first.[/yellow]")
+                return
+
+            threshold = cfg.gap_analyzer.sparse_cell_threshold
+            total_methods = sum(coverage.total_by_brain.values())
+
+            console.print(f"\n[bold]Coverage Matrix[/bold] ({total_methods} total methodologies, threshold={threshold})")
+
+            table = Table()
+            table.add_column("Category", style="bold", max_width=25)
+            for brain in all_brains:
+                table.add_column(brain, justify="right", width=12)
+            table.add_column("Total", justify="right", style="bold", width=8)
+
+            for cat in sorted(coverage.total_by_category.keys()):
+                row = [cat]
+                for brain in all_brains:
+                    count = coverage.matrix.get(cat, {}).get(brain, 0)
+                    if count == 0:
+                        row.append("[red]0[/red]")
+                    elif count < threshold:
+                        row.append(f"[yellow]{count}[/yellow]")
+                    else:
+                        row.append(f"[green]{count}[/green]")
+                row.append(str(coverage.total_by_category.get(cat, 0)))
+                table.add_row(*row)
+
+            # Total row
+            total_row = ["[bold]TOTAL[/bold]"]
+            for brain in all_brains:
+                total_row.append(f"[bold]{coverage.total_by_brain.get(brain, 0)}[/bold]")
+            total_row.append(f"[bold]{total_methods}[/bold]")
+            table.add_row(*total_row)
+
+            console.print(table)
+
+            # Sparse summary
+            sparse_count = len(coverage.sparse_cells)
+            empty_count = len(coverage.empty_cells)
+            if sparse_count or empty_count:
+                console.print(f"\n  [red]{empty_count} empty[/red] + [yellow]{sparse_count} sparse[/yellow] cells")
+            else:
+                console.print(f"\n  [green]All cells at or above threshold ({threshold})[/green]")
+
+            # Trend
+            trend = await analyzer.get_trend_summary()
+            if trend:
+                console.print(f"\n{trend}")
+
+        finally:
+            await engine.close()
+
+    asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------

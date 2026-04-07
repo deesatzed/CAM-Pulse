@@ -16,6 +16,7 @@ class PulseDiscovery:
     x_author_handle: str = ""
     keywords_matched: list[str] = field(default_factory=list)
     novelty_score: float = 0.0
+    gap_relevance_score: float = 0.0
     scan_id: str = ""
     license_type: str = ""
 

@@ -12,7 +12,7 @@ import os
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -43,11 +43,16 @@ _GITHUB_SKIP_PATHS = {
 class XScout:
     """Searches X via Grok API's native x_search tool for GitHub repos."""
 
-    def __init__(self, config: PulseConfig):
+    def __init__(
+        self,
+        config: PulseConfig,
+        gap_scorer: Optional[Callable[[str, dict], float]] = None,
+    ):
         self.config = config
         self.xai_api_key = os.getenv(config.xai_api_key_env, "")
         self.model = config.xai_model
         self._timeout = httpx.Timeout(120.0, connect=15.0)
+        self._gap_scorer = gap_scorer
 
     async def scan(
         self,
@@ -106,6 +111,25 @@ class XScout:
                 logger.error("X-Scout scan error for keyword %r: %s", kw, e)
 
         discoveries = list(all_discoveries.values())
+
+        # Apply gap scoring to rank discoveries by gap-filling potential
+        if self._gap_scorer and discoveries:
+            for disc in discoveries:
+                try:
+                    # Extract repo name from canonical URL
+                    parts = disc.canonical_url.rstrip("/").split("/")
+                    repo_name = parts[-1] if parts else ""
+                    domain_info = {"keywords": disc.keywords_matched}
+                    disc.gap_relevance_score = self._gap_scorer(
+                        repo_name, domain_info
+                    )
+                except Exception:
+                    disc.gap_relevance_score = 0.0
+            # Sort: highest gap relevance first (within novelty tiers)
+            discoveries.sort(
+                key=lambda d: d.gap_relevance_score, reverse=True
+            )
+
         logger.info(
             "X-Scout scan complete: %d keywords → %d unique repos",
             len(keywords), len(discoveries),

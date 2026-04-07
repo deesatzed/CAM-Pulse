@@ -1946,6 +1946,68 @@ class Repository:
         )
         return [dict(r) for r in rows]
 
+    # ------------------------------------------------------------------
+    # Coverage Analysis
+    # ------------------------------------------------------------------
+
+    async def get_coverage_matrix(self) -> dict[str, dict[str, int]]:
+        """Live category x brain counts from active methodologies.
+
+        Returns dict[category, dict[language, count]].  Categories are
+        extracted from 'category:*' tags.  Language comes from the
+        ``language`` column (NULL → 'unknown').
+        """
+        rows = await self.engine.fetch_all(
+            """SELECT SUBSTR(je.value, 10) AS category,
+                      COALESCE(m.language, 'unknown') AS lang,
+                      COUNT(*) AS cnt
+               FROM methodologies m, json_each(m.tags) je
+               WHERE m.lifecycle_state NOT IN ('dead', 'dormant')
+                 AND je.value LIKE 'category:%'
+               GROUP BY category, lang"""
+        )
+        matrix: dict[str, dict[str, int]] = {}
+        for r in rows:
+            cat = r["category"]
+            lang = r["lang"]
+            matrix.setdefault(cat, {})[lang] = r["cnt"]
+        return matrix
+
+    async def save_coverage_snapshot(
+        self,
+        snapshot_id: str,
+        snapshot_data: str,
+        sparse_cells: str,
+        total_methodologies: int,
+    ) -> None:
+        """Persist a coverage snapshot."""
+        await self.engine.execute(
+            """INSERT INTO coverage_snapshots
+               (id, snapshot_data, sparse_cells, total_methodologies)
+               VALUES (?, ?, ?, ?)""",
+            [snapshot_id, snapshot_data, sparse_cells, total_methodologies],
+        )
+
+    async def get_latest_coverage_snapshot(self) -> Optional[dict[str, Any]]:
+        """Return the most recent coverage snapshot, or None."""
+        row = await self.engine.fetch_one(
+            """SELECT id, snapshot_data, sparse_cells, total_methodologies, created_at
+               FROM coverage_snapshots
+               ORDER BY created_at DESC
+               LIMIT 1"""
+        )
+        return dict(row) if row else None
+
+    async def get_coverage_trend(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return the last N coverage snapshots (newest first)."""
+        rows = await self.engine.fetch_all(
+            """SELECT id, snapshot_data, sparse_cells, total_methodologies, created_at
+               FROM coverage_snapshots
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [limit],
+        )
+        return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
