@@ -994,7 +994,7 @@ class MicroClaw(ClawCycle):
         if self.ctx.semantic_memory is not None:
             try:
                 similar, signals = await self.ctx.semantic_memory.find_similar_with_signals(
-                    task.description, limit=7
+                    task.description, limit=15
                 )
                 retrieval_confidence = float(signals.get("retrieval_confidence", 0.0) or 0.0)
                 retrieval_conflicts = [str(item) for item in signals.get("conflicts", []) or []]
@@ -1012,14 +1012,21 @@ class MicroClaw(ClawCycle):
                 except Exception:
                     pass  # Non-critical, proceed without filtering
 
-                # Filter out forbidden and below relevance floor (0.3)
+                # Filter out forbidden; apply soft relevance floor with exploration tier
                 RELEVANCE_FLOOR = 0.3
-                eligible = [
-                    s for s in (similar or [])
-                    if s.methodology
-                    and s.methodology.id not in forbidden_method_ids
-                    and getattr(s, "combined_score", 0.0) >= RELEVANCE_FLOOR
-                ]
+                EXPLORATION_FLOOR = 0.15
+                eligible_core = []
+                eligible_explore = []
+                for s in (similar or []):
+                    if not s.methodology or s.methodology.id in forbidden_method_ids:
+                        continue
+                    score = getattr(s, "combined_score", 0.0)
+                    if score >= RELEVANCE_FLOOR:
+                        eligible_core.append(s)
+                    elif score >= EXPLORATION_FLOOR:
+                        eligible_explore.append(s)
+                # Combine: core candidates first, then exploration tier
+                eligible = eligible_core + eligible_explore[:3]  # Cap explore to 3
 
                 # --- Bandit selection: rank by epsilon-greedy / Thompson ---
                 if eligible:

@@ -2009,6 +2009,40 @@ class Repository:
         )
         return [dict(r) for r in rows]
 
+    async def reclassify_methodologies(
+        self,
+        methodology_ids: list[str],
+        old_category: str,
+        new_category: str,
+    ) -> int:
+        """Batch re-tag methodologies from one category to another.
+
+        Updates the JSON tags array, replacing 'category:{old}' with 'category:{new}'.
+        Returns count of updated rows.
+        """
+        updated = 0
+        old_tag = f"category:{old_category}"
+        new_tag = f"category:{new_category}"
+        for mid in methodology_ids:
+            row = await self.engine.fetch_one(
+                "SELECT tags FROM methodologies WHERE id = ?", [mid]
+            )
+            if not row:
+                continue
+            tags_raw = row["tags"]
+            try:
+                tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if old_tag in tags:
+                tags = [new_tag if t == old_tag else t for t in tags]
+                await self.engine.execute(
+                    "UPDATE methodologies SET tags = ? WHERE id = ?",
+                    [json.dumps(tags), mid],
+                )
+                updated += 1
+        return updated
+
 
 # ---------------------------------------------------------------------------
 # Row → Model converters

@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -99,15 +101,11 @@ class CAGRetriever:
             logger.warning("No repository and no methodologies provided -- building empty cache")
             all_methods = []
 
-        # 2. Sort by fitness score (descending) using get_fitness_score()
-        sorted_methods = sorted(
-            all_methods,
-            key=lambda m: get_fitness_score(m),
-            reverse=True,
+        # 2. Stratified selection: balanced across categories, fitness, novelty
+        #    40% high-fitness, 30% category-balanced, 20% high-novelty, 10% random
+        top_methods = self._stratified_select(
+            all_methods, self._config.max_methodologies_per_cache
         )
-
-        # 3. Take top max_methodologies_per_cache
-        top_methods = sorted_methods[: self._config.max_methodologies_per_cache]
 
         # 4. Serialize using serialize_corpus() with config.max_solution_chars,
         #    context_pointer_threshold for L2 compact pointers, and
@@ -175,6 +173,96 @@ class CAGRetriever:
         )
 
         return meta
+
+    @staticmethod
+    def _stratified_select(
+        methods: list[Methodology], budget: int
+    ) -> list[Methodology]:
+        """Select methodologies using stratified strategy instead of pure fitness.
+
+        Allocation:
+          40% — top by fitness (exploitation)
+          30% — category-balanced (diversity: round-robin across categories)
+          20% — top by novelty (exploration)
+          10% — random sample (serendipity)
+
+        Guarantees minimum representation per category when possible.
+        """
+        if len(methods) <= budget:
+            # Sort by fitness for consistent ordering even when all fit
+            return sorted(methods, key=lambda m: get_fitness_score(m), reverse=True)
+
+        # For small budgets (< 10), stratification overhead isn't worth it
+        # Just return top-N by fitness
+        if budget < 10:
+            return sorted(methods, key=lambda m: get_fitness_score(m), reverse=True)[:budget]
+
+        selected_ids: set[str] = set()
+        selected: list[Methodology] = []
+
+        def _add(m: Methodology) -> bool:
+            if m.id not in selected_ids:
+                selected_ids.add(m.id)
+                selected.append(m)
+                return True
+            return False
+
+        # --- Tier 1: Top 40% by fitness ---
+        tier1_budget = int(budget * 0.40)
+        by_fitness = sorted(methods, key=lambda m: get_fitness_score(m), reverse=True)
+        for m in by_fitness:
+            if len(selected) >= tier1_budget:
+                break
+            _add(m)
+
+        # --- Tier 2: 30% category-balanced (round-robin) ---
+        tier2_budget = tier1_budget + int(budget * 0.30)
+        by_category: dict[str, list[Methodology]] = defaultdict(list)
+        for m in by_fitness:  # Pre-sorted by fitness within each category
+            for tag in (m.tags or []):
+                if tag.startswith("category:"):
+                    cat = tag[9:]
+                    by_category[cat].append(m)
+                    break
+
+        # Round-robin across categories
+        cat_iters = {cat: iter(ms) for cat, ms in by_category.items()}
+        while len(selected) < tier2_budget and cat_iters:
+            exhausted = []
+            for cat, it in cat_iters.items():
+                if len(selected) >= tier2_budget:
+                    break
+                try:
+                    while True:
+                        m = next(it)
+                        if _add(m):
+                            break
+                except StopIteration:
+                    exhausted.append(cat)
+            for cat in exhausted:
+                del cat_iters[cat]
+
+        # --- Tier 3: 20% by novelty score ---
+        tier3_budget = tier2_budget + int(budget * 0.20)
+        by_novelty = sorted(
+            methods,
+            key=lambda m: (m.novelty_score or 0.0),
+            reverse=True,
+        )
+        for m in by_novelty:
+            if len(selected) >= tier3_budget:
+                break
+            _add(m)
+
+        # --- Tier 4: 10% random (serendipity) ---
+        remaining = [m for m in methods if m.id not in selected_ids]
+        if remaining:
+            sample_size = min(budget - len(selected), len(remaining))
+            if sample_size > 0:
+                for m in random.sample(remaining, sample_size):
+                    _add(m)
+
+        return selected
 
     async def load_cache(self, ganglion: str = "general") -> bool:
         """Load cached corpus from disk.

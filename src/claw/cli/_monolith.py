@@ -8598,6 +8598,7 @@ app.add_typer(cag_app, name="cag")
 def gaps(
     snapshot: bool = typer.Option(False, "--snapshot", help="Take a new coverage snapshot before display"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    discover: bool = typer.Option(False, "--discover", help="Analyze cross_cutting for candidate new categories"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
@@ -8607,6 +8608,7 @@ def gaps(
       red = empty (0 methodologies), yellow = sparse (< threshold), green = adequate.
     Use --snapshot to persist the current state for trend tracking.
     Use --json for machine-readable output.
+    Use --discover to analyze cross_cutting for emergent category candidates.
     """
     _setup_logging(verbose)
     from claw.core.config import load_config
@@ -8698,6 +8700,32 @@ def gaps(
             trend = await analyzer.get_trend_summary()
             if trend:
                 console.print(f"\n{trend}")
+
+            # Category discovery
+            if discover:
+                console.print("\n[bold]Category Discovery[/bold] — analyzing cross_cutting for emergent themes\n")
+                candidates = await analyzer.discover_candidate_categories(min_cluster_size=5)
+                if not candidates:
+                    console.print("[dim]No candidate categories found (cross_cutting may be too small or well-distributed).[/dim]")
+                else:
+                    disc_table = Table(title=f"{len(candidates)} Candidate Categories from cross_cutting")
+                    disc_table.add_column("Theme", style="bold cyan")
+                    disc_table.add_column("Count", justify="right")
+                    disc_table.add_column("Suggested Name", style="green")
+                    disc_table.add_column("Sample Titles")
+                    for c in candidates:
+                        samples = "\n".join(f"  - {t[:70]}" for t in c["sample_titles"][:3])
+                        disc_table.add_row(
+                            c["theme"],
+                            str(c["count"]),
+                            c["suggested_name"],
+                            samples,
+                        )
+                    console.print(disc_table)
+                    console.print(
+                        "\n[dim]To reclassify, add the new category to _VALID_CATEGORIES in miner.py, "
+                        "then use repository.reclassify_methodologies() to migrate tagged entries.[/dim]"
+                    )
 
         finally:
             await engine.close()

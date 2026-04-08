@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -246,6 +247,117 @@ class GapAnalyzer:
             lines.append("  No coverage changes detected.")
 
         return "\n".join(lines)
+
+    async def discover_candidate_categories(
+        self,
+        min_cluster_size: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Analyze cross_cutting methodologies for emergent category clusters.
+
+        Uses keyword frequency analysis on problem descriptions and methodology
+        notes of cross_cutting-tagged methodologies. Groups by dominant themes
+        and returns clusters above min_cluster_size as candidate new categories.
+
+        Returns list of dicts: {theme, count, sample_titles, suggested_name}
+        """
+        # Fetch all cross_cutting methodologies from primary DB
+        rows = await self.repository.engine.fetch_all(
+            """SELECT m.id, m.problem_description, m.methodology_notes, m.tags
+               FROM methodologies m, json_each(m.tags) je
+               WHERE m.lifecycle_state NOT IN ('dead', 'dormant')
+                 AND je.value = 'category:cross_cutting'"""
+        )
+
+        if not rows:
+            return []
+
+        # Extract keywords from problem descriptions (simple TF approach)
+        # Exclude common stop words and very short tokens
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "shall", "can", "need", "must", "ought",
+            "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
+            "neither", "each", "every", "all", "any", "few", "more", "most",
+            "other", "some", "such", "no", "only", "same", "than", "too",
+            "very", "just", "because", "as", "until", "while", "of", "at",
+            "by", "for", "with", "about", "against", "between", "through",
+            "during", "before", "after", "above", "below", "to", "from",
+            "up", "down", "in", "out", "on", "off", "over", "under", "again",
+            "further", "then", "once", "here", "there", "when", "where", "why",
+            "how", "what", "which", "who", "whom", "this", "that", "these",
+            "those", "it", "its", "we", "our", "us", "they", "their", "them",
+            "my", "your", "his", "her", "use", "using", "used", "pattern",
+            "approach", "method", "based", "ensure", "within", "also", "into",
+            "mined", "from", "composite", "methodology", "implementation",
+            "code", "system", "provides", "allows", "enables", "supports",
+            "when", "like", "well", "make", "take", "give", "keep", "work",
+            "claw", "repo", "file", "files", "data", "function", "class",
+            "module", "project", "tool", "tools", "feature", "specific",
+            "different", "multiple", "single", "first", "type", "types",
+            "rather", "instead", "across", "level", "high", "standard",
+            "lacks", "currently", "without", "does", "detect", "detects",
+            "process", "structured", "every", "each", "other", "define",
+        }
+
+        # Count keyword frequency across all cross_cutting methodologies
+        keyword_to_methods: dict[str, list[dict]] = defaultdict(list)
+        for row in rows:
+            desc = (row["problem_description"] or "").lower()
+            notes = (row["methodology_notes"] or "").lower()
+            text = f"{desc} {notes}"
+            words = set()
+            for word in text.split():
+                word = word.strip(".,;:!?()[]{}\"'`-_/\\")
+                if len(word) >= 4 and word not in stop_words and word.isalpha():
+                    words.add(word)
+            for word in words:
+                keyword_to_methods[word].append({
+                    "id": row["id"],
+                    "title": (row["problem_description"] or "")[:100],
+                })
+
+        # Find keywords that appear in many methodologies (candidate themes)
+        theme_candidates = [
+            (kw, methods)
+            for kw, methods in keyword_to_methods.items()
+            if len(methods) >= min_cluster_size
+        ]
+        theme_candidates.sort(key=lambda x: len(x[1]), reverse=True)
+
+        # Deduplicate overlapping clusters: if two themes share >70% of methods,
+        # keep the larger one
+        seen_method_sets: list[set[str]] = []
+        clusters: list[dict[str, Any]] = []
+
+        for theme, methods in theme_candidates[:30]:  # Check top 30
+            method_ids = {m["id"] for m in methods}
+
+            # Check overlap with existing clusters
+            is_duplicate = False
+            for existing_set in seen_method_sets:
+                overlap = len(method_ids & existing_set) / max(len(method_ids), 1)
+                if overlap > 0.70:
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                continue
+
+            seen_method_sets.append(method_ids)
+            sample_titles = [m["title"] for m in methods[:5]]
+            clusters.append({
+                "theme": theme,
+                "count": len(methods),
+                "sample_titles": sample_titles,
+                "suggested_name": theme.replace(" ", "_"),
+                "methodology_ids": [m["id"] for m in methods],
+            })
+
+            if len(clusters) >= 10:  # Cap at 10 candidate categories
+                break
+
+        return clusters
 
     async def _query_sibling_coverage(
         self, db_path_str: str

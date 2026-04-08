@@ -1124,9 +1124,15 @@ def parse_findings(llm_response: str, repo_name: str) -> list[MiningFinding]:
             continue
 
         # Category validation
-        category = _text(item.get("category", ""), "").strip().lower()
-        if category not in _VALID_CATEGORIES:
+        raw_category = _text(item.get("category", ""), "").strip().lower()
+        if raw_category not in _VALID_CATEGORIES:
+            logger.info(
+                "Invalid category '%s' from LLM (title='%s') → defaulting to cross_cutting",
+                raw_category, title[:80],
+            )
             category = "cross_cutting"
+        else:
+            category = raw_category
 
         # Relevance filter
         try:

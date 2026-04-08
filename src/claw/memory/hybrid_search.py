@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from typing import Any, Optional
 
 from claw.core.models import LifecycleState, Methodology
@@ -97,6 +98,7 @@ class HybridSearch:
         novelty_retrieval_boost: float = 0.0,
         potential_retrieval_boost: float = 0.0,
         deep_conf_config: Any = None,
+        epsilon_rerank: float = 0.15,
     ):
         self.repository = repository
         self.embedding_engine = embedding_engine
@@ -110,6 +112,7 @@ class HybridSearch:
         self.novelty_retrieval_boost = novelty_retrieval_boost
         self.potential_retrieval_boost = potential_retrieval_boost
         self._deep_conf = deep_conf_config
+        self._epsilon_rerank = epsilon_rerank
 
     async def search(
         self,
@@ -162,6 +165,10 @@ class HybridSearch:
 
         # 8. MMR re-ranking for diversity (OpenClaw transfer)
         merged = self._apply_mmr(merged, limit)
+
+        # 9. Epsilon re-ranking: with probability epsilon, shuffle top results
+        #    to break determinism and enable serendipitous discovery
+        merged = self._apply_epsilon_rerank(merged)
 
         return merged[:limit]
 
@@ -330,11 +337,20 @@ class HybridSearch:
             fitness = get_fitness_score(result.methodology)
             result.combined_score = similarity_score * 0.6 + fitness * 0.4
 
-            # Novelty & potential retrieval boost: surface novel/high-potential items
+            # Novelty & potential: blended scoring (not purely additive)
+            # Blend base similarity with novelty/potential signals so novel items
+            # can actually reach top-K instead of being drowned by similarity
+            novelty_blend = 0.0
             if self.novelty_retrieval_boost > 0 and result.methodology.novelty_score is not None:
-                result.combined_score += self.novelty_retrieval_boost * result.methodology.novelty_score
+                novelty_blend += self.novelty_retrieval_boost * result.methodology.novelty_score
             if self.potential_retrieval_boost > 0 and result.methodology.potential_score is not None:
-                result.combined_score += self.potential_retrieval_boost * result.methodology.potential_score
+                novelty_blend += self.potential_retrieval_boost * result.methodology.potential_score
+            if novelty_blend > 0:
+                # Blended: (1 - blend_weight) * base + blend_weight * novelty_signal
+                blend_weight = min(novelty_blend, 0.30)  # Cap at 30% novelty influence
+                result.combined_score = (1 - blend_weight) * result.combined_score + blend_weight * (
+                    result.combined_score + novelty_blend
+                )
 
             result.confidence_score, result.conflict_score = self._derive_memory_signals(result)
 
@@ -433,6 +449,32 @@ class HybridSearch:
             selected.append(remaining.pop(best_idx))
 
         return selected
+
+    def _apply_epsilon_rerank(
+        self,
+        results: list[HybridSearchResult],
+    ) -> list[HybridSearchResult]:
+        """With probability epsilon, shuffle top results to break determinism.
+
+        This enables serendipitous discovery by occasionally surfacing
+        lower-ranked but potentially valuable methodologies. Only shuffles
+        within the top portion of results to maintain quality floor.
+        """
+        if not results or len(results) <= 2 or self._epsilon_rerank <= 0:
+            return results
+
+        if random.random() >= self._epsilon_rerank:
+            return results  # No shuffle this time (85% of calls)
+
+        # Shuffle the top half of results while keeping bottom half stable
+        split = max(2, len(results) // 2)
+        top_portion = results[:split]
+        random.shuffle(top_portion)
+        logger.debug(
+            "Epsilon re-rank triggered: shuffled top %d of %d results",
+            split, len(results),
+        )
+        return top_portion + results[split:]
 
     def _apply_filters(
         self,

@@ -582,3 +582,8 @@ description = "Rust language patterns: WASM, safety, CLI, systems programming"
 name = "go"
 db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/go/claw.db"
 description = "Go language patterns: concurrency, CLI, networking, cloud infrastructure"
+
+[[instances.siblings]]
+name = "misc"
+db_path = "/Volumes/WS4TB/a_aSatzClaw/multiclaw/instances/misc/claw.db"
+description = "Misc language patterns mined by CAM misc brain"
