@@ -150,6 +150,8 @@ GOOGLE_API_KEY=AIza-your-key-here
 knowledge_budget_chars = 32000    # Increase from default 16000
 ```
 
+> **Note (2026-04-09)**: A paired A/B experiment (26 pairs, p=1.000) showed **no significant difference** between 24K and 32K chars. The default 16K is the tested sweet spot. Increasing beyond it is unlikely to improve quality and may slightly hurt Token Economy. See `scripts/run_ab_knowledge_budget.py`.
+
 ---
 
 ## Local LLM

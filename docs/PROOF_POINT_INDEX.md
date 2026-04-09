@@ -9,6 +9,7 @@ How to reproduce every proof point CAM-PULSE claims.
 | # | Proof | What It Shows | Reproduce | Detailed Doc |
 |---|-------|---------------|-----------|--------------|
 | 20 | **Paired A/B (p=0.015)** | KB-equipped agents: 92.3% vs 73.1% success, Cohen's dz=0.45 | `python scripts/run_ab_paired.py` | [ab-proof.html](ab-proof.html) |
+| 21 | **Knowledge Budget A/B** | 24K vs 32K chars: no significant difference (p=1.000, dz=0.009). Token Economy slightly worse at 32K (p=0.042). | `python scripts/run_ab_knowledge_budget.py` | [AB_KNOWLEDGE_ABLATION_SHOWPIECE.md](AB_KNOWLEDGE_ABLATION_SHOWPIECE.md) |
 | 17 | **SkyDate SWE A/B** | +33.6% composite quality, 100% vs 67% success, p<0.05 on 3/6 dimensions | `python scripts/run_skydate_ab.py execute` | [SKYDATE_KB_SHOWPIECE.md](SKYDATE_KB_SHOWPIECE.md) |
 | 16 | **Retry Quality A/B** | KB-equipped wins 7/8 quality checks on retry logic | Manual — see detailed doc | [showcase_retry_backoff.md](showcase_retry_backoff.md) |
 | 14 | **Adaptive A/B Margins** | Sample-size-aware win thresholds prevent premature conclusions | `python scripts/run_ab_minitrial.py` | [showcase_retry_backoff.md](showcase_retry_backoff.md) |
@@ -58,4 +59,4 @@ How to reproduce every proof point CAM-PULSE claims.
 
 ---
 
-**Full test suite** (validates nothing is broken): `PYTHONPATH=src python -m pytest tests/ -q` (3,715 tests)
+**Full test suite** (validates nothing is broken): `PYTHONPATH=src python -m pytest tests/ -q` (3,734 tests)

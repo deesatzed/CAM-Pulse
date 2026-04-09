@@ -190,6 +190,8 @@ When `shorthand_compression = true`, solutions between `compress_max_chars` and 
 
 A/B tested result (2026-03-31): 16K chars is optimal for qwen2.5:7b and qwen3.5:9b. 8K was marginal, 64K caused 25% timeouts. Needle-in-haystack retrieval accuracy: 92% within the 16K budget.
 
+**Budget size A/B (2026-04-09):** Paired within-subject experiment (26 pairs, 52 cycles) comparing 24K vs 32K chars showed **no significant difference** — Wilcoxon p=1.000, Cohen's dz=0.009, mean composite diff +0.002. Token Economy was slightly *worse* at 32K (p=0.042) due to larger prompts consuming output budget. Conclusion: increasing beyond 16K provides no measurable quality improvement. See `scripts/run_ab_knowledge_budget.py`.
+
 ---
 
 ## Ganglion Federation

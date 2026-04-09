@@ -4,7 +4,7 @@
 
 CAM mines reusable engineering patterns from GitHub repos, your own code, and X/Twitter discoveries — then injects those patterns into AI-assisted builds with full attribution and test verification. It is the only AI coding tool with persistent cross-session memory, statistical proof of improvement (p=0.015), and honest failure reporting.
 
-**3,715 tests** | **3,590 methodologies** | **55 source repos** | **5 brains** | **5 agent backends** | **KB +19.2pp success rate (p=0.015, paired)** | **$0 — MIT licensed**
+**3,734 tests** | **3,590 methodologies** | **55 source repos** | **5 brains** | **5 agent backends** | **KB +19.2pp success rate (p=0.015, paired)** | **$0 — MIT licensed**
 
 <!-- Counts verified 2026-04-09. Update: cam govern stats | pytest --collect-only -q | sqlite3 queries -->
 
@@ -222,7 +222,7 @@ cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 3,715 tests collected, 8 skipped (environment-dependent). Zero failures.
+**Verified**: Fresh clone → install → 3,734 tests collected, 8 skipped (environment-dependent). Zero failures.
 
 **Web UI** (optional):
 
@@ -446,7 +446,7 @@ Before any self-modification takes effect, the enhanced copy must pass **all 7 g
 | 3. Imports | All `claw.*` modules import | Zero failures |
 | 4. DB Schema | Can open and query live database | Full compatibility |
 | 5. CLI Smoke | Core commands execute | Zero crashes |
-| 6. Full Pytest | Complete test suite | **All 3,715 tests pass** |
+| 6. Full Pytest | Complete test suite | **All 3,734 tests pass** |
 | 7. Diff Summary | Human-readable change report | Informational |
 
 **One failure at any gate = no swap.** The live installation is never touched until all gates pass.
@@ -531,10 +531,10 @@ Immediately after the knowledge application run, CAM assessed its trigger condit
 | 3 | Import (all `claw.*` modules) | 82/82 imported |
 | 4 | DB schema (open + query live DB) | 35 tables, 40,703 rows |
 | 5 | CLI smoke test | Core commands executed |
-| 6 | Full pytest | 3,715 passed, 6 skipped, 0 failed |
+| 6 | Full pytest | 3,734 passed, 6 skipped, 0 failed |
 | 7 | Diff summary | Clean |
 
-After the atomic swap completed, a live install verification confirmed 3,715 tests passing on the new codebase.
+After the atomic swap completed, a live install verification confirmed 3,734 tests passing on the new codebase.
 
 ### The Full Loop
 
@@ -815,7 +815,7 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  THE CODE (public, on GitHub)                                    │
-│  44K lines of Python, 3,715 tests, CLI, prompts, schema         │
+│  44K lines of Python, 3,734 tests, CLI, prompts, schema         │
 │  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
@@ -1431,7 +1431,7 @@ CAM uses the same validation-first philosophy for its own releases. Before pushi
 ### Release Checklist
 
 ```
-1. TESTS         — All 3,715 tests collected (pytest tests/ -q)
+1. TESTS         — All 3,734 tests collected (pytest tests/ -q)
                    Zero failures. No new skips without documented reason.
 
 2. SELF-ENHANCE  — If self-enhance was run, all 7 gates passed
