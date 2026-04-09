@@ -145,8 +145,8 @@ class HybridSearch:
         # 2. Text search
         text_results = await self._text_search(query, fetch_limit)
 
-        # 3. Merge and deduplicate (sync -- operates on in-memory data)
-        merged = self._merge_results(vector_results, text_results, query=query)
+        # 3. Merge and deduplicate
+        merged = await self._merge_results(vector_results, text_results, query=query)
 
         # 4. Apply scope filter (Item 2)
         if scope:
@@ -177,7 +177,7 @@ class HybridSearch:
     ) -> list[HybridSearchResult]:
         """Execute vector similarity search."""
         try:
-            embedding = self.embedding_engine.encode(query)
+            embedding = await self.embedding_engine.async_encode(query)
             raw_results = await self.repository.find_similar_methodologies(embedding, limit=limit)
 
             results = []
@@ -231,7 +231,7 @@ class HybridSearch:
             logger.warning("Text search failed (falling back to vector-only): %s", e)
             return []
 
-    def _merge_results(
+    async def _merge_results(
         self,
         vector_results: list[HybridSearchResult],
         text_results: list[HybridSearchResult],
@@ -241,8 +241,6 @@ class HybridSearch:
 
         When a methodology appears in both result sets, its scores are combined
         using the configured weights. Unique results keep their single-source score.
-
-        This is sync -- operates entirely on in-memory data.
         """
         # Index by methodology ID for deduplication
         merged: dict[str, HybridSearchResult] = {}
@@ -277,7 +275,7 @@ class HybridSearch:
         query_prism_emb = None
         if self.prism_engine and query:
             try:
-                query_emb = self.embedding_engine.encode(query)
+                query_emb = await self.embedding_engine.async_encode(query)
                 query_prism_emb = self.prism_engine.enhance(
                     query_emb, {"lifecycle_state": "query"}
                 )

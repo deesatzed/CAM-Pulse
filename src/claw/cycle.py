@@ -503,7 +503,7 @@ async def _infer_used_methodology_ids(
         threshold = getattr(memory_config, "attribution_embedding_threshold", 0.35)
 
         try:
-            outcome_embedding = embedding_engine.encode(outcome_text[:12000])
+            outcome_embedding = await embedding_engine.async_encode(outcome_text[:12000])
 
             for meth in lexical_unmatched:
                 meth_text = " ".join(
@@ -515,7 +515,7 @@ async def _infer_used_methodology_ids(
                 )
                 if not meth_text.strip():
                     continue
-                meth_embedding = embedding_engine.encode(meth_text[:12000])
+                meth_embedding = await embedding_engine.async_encode(meth_text[:12000])
                 cosine = embedding_engine.cosine_similarity(
                     outcome_embedding, meth_embedding
                 )
@@ -534,7 +534,7 @@ async def _infer_used_methodology_ids(
                     )
                     if not meth_text.strip():
                         continue
-                    meth_embedding = embedding_engine.encode(meth_text[:12000])
+                    meth_embedding = await embedding_engine.async_encode(meth_text[:12000])
                     cosine = embedding_engine.cosine_similarity(
                         outcome_embedding, meth_embedding
                     )

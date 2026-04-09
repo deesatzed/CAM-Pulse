@@ -90,7 +90,7 @@ class NoveltyFilter:
             return 1.0
 
         try:
-            vec = self.embedding_engine.encode(text[:500])
+            vec = await self.embedding_engine.async_encode(text[:500])
             packed = EmbeddingEngine.to_sqlite_vec(vec)
 
             # Find nearest neighbor in methodology_embeddings

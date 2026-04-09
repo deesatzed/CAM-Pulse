@@ -32,6 +32,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
 
 @pytest.fixture
 async def db_engine():
@@ -659,3 +662,329 @@ class TestGovernanceConfig:
         assert config.max_methodologies == 500
         assert config.dedup_similarity_threshold == 0.90
         assert config.sweep_interval_cycles == 5
+
+
+# ---------------------------------------------------------------------------
+# Health score tests
+# ---------------------------------------------------------------------------
+
+class TestHealthScore:
+
+    async def test_health_score_empty_db(self, governor):
+        """Health score is 0 on empty DB."""
+        result = await governor.compute_health_score()
+        assert result["score"] == 0
+        assert result["breakdown"]["lifecycle"] == 0
+        assert result["breakdown"]["freshness"] == 0
+        assert result["breakdown"]["provenance"] == 0
+        assert result["breakdown"]["dedup"] == 0
+        assert result["breakdown"]["coverage"] == 0
+
+    async def test_health_score_healthy_db(self, repository, embedding_engine):
+        """Healthy DB with viable/thriving methodologies, source tags, multiple categories."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        # Create 10 viable + 5 thriving with source and category tags
+        for i in range(10):
+            await _make_methodology(
+                repository, f"viable {i}", state="viable",
+                embedding_engine=embedding_engine,
+                tags=[f"category:cat{i % 5}", f"source:repo{i}"],
+            )
+        for i in range(5):
+            await _make_methodology(
+                repository, f"thriving {i}", state="thriving",
+                embedding_engine=embedding_engine,
+                tags=[f"category:cat{i + 5}", f"source:repo{i + 10}"],
+            )
+
+        result = await gov.compute_health_score()
+        assert 0 <= result["score"] <= 100
+        # 15 viable+thriving / 15 total = 100% → lifecycle should be 25
+        assert result["breakdown"]["lifecycle"] == 25
+        # All have source tags → provenance should be 10
+        assert result["breakdown"]["provenance"] == 10
+        # 10 distinct categories out of 10 expected → coverage = 30
+        assert result["breakdown"]["coverage"] == 30
+        # Overall score should be > 60
+        assert result["score"] > 60
+
+    async def test_health_score_unhealthy_db(self, repository, embedding_engine):
+        """Unhealthy DB: all embryonic, no source tags, single category."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        for i in range(5):
+            await _make_methodology(
+                repository, f"embryonic {i}", state="embryonic",
+                embedding_engine=embedding_engine,
+                tags=[],
+            )
+
+        result = await gov.compute_health_score()
+        assert 0 <= result["score"] <= 100
+        # 0 viable+thriving → lifecycle = 0
+        assert result["breakdown"]["lifecycle"] == 0
+        # No source tags → provenance = 0
+        assert result["breakdown"]["provenance"] == 0
+        # No categories → coverage = 0
+        assert result["breakdown"]["coverage"] == 0
+        # Score should be < 30
+        assert result["score"] < 30
+
+
+# ---------------------------------------------------------------------------
+# Contradiction detection tests
+# ---------------------------------------------------------------------------
+
+class TestContradictionDetection:
+
+    async def test_detect_contradictions_finds_opposing_methods(
+        self, repository, embedding_engine
+    ):
+        """Two methodologies with same problem but opposite solutions → 1 pair."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        # Same problem description → near-identical embeddings (sim ≈ 1.0)
+        problem = "how to handle database connection pooling"
+        m1 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        # Override solution to something very different
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Use a global singleton connection with no pool. Close after every query. "
+             "Never reuse connections. Always create fresh TCP socket.", m1.id],
+        )
+
+        m2 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Implement connection pool with max 20 connections. Use keep-alive. "
+             "Reuse connections aggressively. Pre-warm the pool on startup.", m2.id],
+        )
+
+        pairs = await gov.detect_contradictions()
+        assert len(pairs) >= 1
+        pair = pairs[0]
+        assert pair["problem_similarity"] > 0.80
+        assert pair["solution_divergence"] > 0.70
+
+    async def test_detect_contradictions_ignores_similar_solutions(
+        self, repository, embedding_engine
+    ):
+        """Same problem + similar solution → 0 pairs (dedup catches these)."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        problem = "implementing retry logic with backoff"
+        sol = "Use exponential backoff with jitter and max retries"
+
+        m1 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            [sol, m1.id],
+        )
+
+        m2 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            [sol, m2.id],  # Same solution
+        )
+
+        pairs = await gov.detect_contradictions()
+        # Same solution → solution divergence < 0.70
+        assert len(pairs) == 0
+
+    async def test_detect_contradictions_ignores_different_problems(
+        self, repository, embedding_engine
+    ):
+        """Different problems + different solutions → 0 pairs."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        m1 = await _make_methodology(
+            repository, "handling database connection pools for PostgreSQL", state="viable",
+            embedding_engine=embedding_engine,
+        )
+        m2 = await _make_methodology(
+            repository, "implementing authentication with OAuth2 PKCE flow for mobile", state="viable",
+            embedding_engine=embedding_engine,
+        )
+        # Different problems → problem_similarity < 0.80
+        pairs = await gov.detect_contradictions()
+        assert len(pairs) == 0
+
+    async def test_contradiction_persisted_to_db(
+        self, repository, embedding_engine, db_engine
+    ):
+        """Detected contradictions are persisted in methodology_contradictions table."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        problem = "managing application state in React"
+        m1 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Never use global state. Always pass props down. No context. "
+             "No redux. Each component manages its own state entirely.", m1.id],
+        )
+        m2 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Use centralized global state with Redux store. Single source of truth. "
+             "All components connect to store. Never use local state.", m2.id],
+        )
+
+        pairs = await gov.detect_contradictions()
+        if pairs:
+            # Verify persisted in DB
+            rows = await db_engine.fetch_all(
+                "SELECT * FROM methodology_contradictions"
+            )
+            assert len(rows) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Entity relationship graph tests
+# ---------------------------------------------------------------------------
+
+class TestEntityGraph:
+
+    async def test_contradiction_persists_edge(
+        self, repository, embedding_engine, db_engine
+    ):
+        """Contradiction detection creates edge in methodology_links."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        problem = "caching strategy for API responses"
+        m1 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Never cache anything. Always fetch fresh data from origin. "
+             "Disable all CDN and proxy caches. Set no-store headers.", m1.id],
+        )
+        m2 = await _make_methodology(
+            repository, problem, state="viable",
+            embedding_engine=embedding_engine,
+        )
+        await repository.engine.execute(
+            "UPDATE methodologies SET solution_code = ? WHERE id = ?",
+            ["Cache everything aggressively with max-age=86400. "
+             "Use stale-while-revalidate. Pre-warm all caches on deploy.", m2.id],
+        )
+
+        pairs = await gov.detect_contradictions()
+        if pairs:
+            # Check methodology_links for 'contradicts' edge
+            rows = await db_engine.fetch_all(
+                "SELECT * FROM methodology_links WHERE link_type = 'contradicts'"
+            )
+            assert len(rows) >= 1
+            assert rows[0]["strength"] > 0.80
+
+    async def test_methodology_neighborhood_returns_graph(
+        self, repository, embedding_engine, db_engine
+    ):
+        """get_methodology_neighborhood returns nodes + edges."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        m1 = await _make_methodology(
+            repository, "methodology A", state="viable",
+            embedding_engine=embedding_engine,
+        )
+        m2 = await _make_methodology(
+            repository, "methodology B", state="viable",
+            embedding_engine=embedding_engine,
+        )
+
+        # Insert an edge manually
+        import uuid
+        await db_engine.execute(
+            "INSERT INTO methodology_links (id, source_id, target_id, link_type, strength) "
+            "VALUES (?, ?, ?, 'co_retrieval', 0.85)",
+            [str(uuid.uuid4()), m1.id, m2.id],
+        )
+
+        result = await gov.get_methodology_neighborhood(m1.id)
+        assert len(result["nodes"]) >= 2
+        assert len(result["edges"]) >= 1
+        # Check edge structure
+        edge = result["edges"][0]
+        assert "source" in edge
+        assert "target" in edge
+        assert "type" in edge
+        assert "strength" in edge
+
+    async def test_methodology_neighborhood_empty(self, repository, embedding_engine):
+        """Methodology with no edges returns self-only node, empty edges."""
+        config = GovernanceConfig()
+        gov = MemoryGovernor(repository=repository, config=config)
+
+        m = await _make_methodology(
+            repository, "lonely method", state="viable",
+            embedding_engine=embedding_engine,
+        )
+
+        result = await gov.get_methodology_neighborhood(m.id)
+        assert len(result["nodes"]) == 1
+        assert result["nodes"][0]["id"] == m.id
+        assert len(result["edges"]) == 0
+
+    async def test_niche_collision_persists_edge(
+        self, repository, embedding_engine, db_engine
+    ):
+        """Niche collision creates 'competes_with' edge in methodology_links."""
+        from claw.memory.lifecycle import check_niche_collision
+
+        # Create two similar methodologies with overlapping files
+        m1 = Methodology(
+            problem_description="optimize database query performance",
+            problem_embedding=embedding_engine.encode("optimize database query performance"),
+            solution_code="SELECT * FROM users WHERE active = TRUE",
+            lifecycle_state="viable",
+            files_affected=["src/db.py", "src/models.py"],
+            fitness_vector={"total": 0.9},
+        )
+        await repository.save_methodology(m1)
+
+        m2 = Methodology(
+            problem_description="optimize database query performance",
+            problem_embedding=embedding_engine.encode("optimize database query performance"),
+            solution_code="CREATE INDEX ON users(active); SELECT ...",
+            lifecycle_state="viable",
+            files_affected=["src/db.py", "src/utils.py"],
+            fitness_vector={"total": 0.3},
+        )
+        await repository.save_methodology(m2)
+
+        await check_niche_collision(m2, repository)
+
+        # Check for competes_with edge
+        rows = await db_engine.fetch_all(
+            "SELECT * FROM methodology_links WHERE link_type = 'competes_with'"
+        )
+        assert len(rows) >= 1

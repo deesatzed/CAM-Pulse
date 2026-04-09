@@ -39,8 +39,17 @@ W_FRESHNESS = 0.15
 W_CROSS_DOMAIN = 0.10
 W_FREQUENCY = 0.10
 
-# Freshness half-life in days
+# Freshness half-life in days (legacy constant, still used as fallback)
 FRESHNESS_HALF_LIFE_DAYS = 90.0
+
+# Temporal decay tiers — replace single half-life with context-sensitive tiers
+DECAY_TIERS: dict[str, float] = {
+    "core": float("inf"),   # Seed/architecture: never decays
+    "active": 30.0,         # Recently retrieved + used: fast decay encourages freshness
+    "warm": 90.0,           # Within 90 days: matches legacy behavior
+    "cold": 180.0,          # 90-180 days: slower decay
+    "archive": 365.0,       # 180+ days: very slow decay (preservation)
+}
 
 # EMA smoothing factor for outcome efficacy.
 # Alpha=0.3 means 30% weight on the latest outcome, 70% on the running average.
@@ -53,6 +62,85 @@ EMA_ALPHA = 0.3
 EMA_BLEND_WEIGHT = 0.6
 STATIC_BLEND_WEIGHT = 1.0 - EMA_BLEND_WEIGHT
 
+# Default category weights — architecture and security get a boost,
+# debugging-focused categories are neutral.  All unrecognized categories
+# default to 1.0 (no change).  These can be overridden in claw.toml
+# via [memory] category_weights = {architecture = 1.5, ...}
+DEFAULT_CATEGORY_WEIGHTS: dict[str, float] = {
+    "architecture": 1.4,
+    "security": 1.3,
+    "testing": 1.2,
+    "ai_integration": 1.1,
+    "data_processing": 1.1,
+    "code_quality": 1.0,
+    "cli_ux": 1.0,
+    "cross_cutting": 1.0,
+    "debugging": 1.0,
+    "error_handling": 1.0,
+}
+
+
+def _extract_category(tags: list[str]) -> str | None:
+    """Extract the first category:* tag value, or None."""
+    for t in tags:
+        if isinstance(t, str) and t.startswith("category:"):
+            return t.split(":", 1)[1]
+    return None
+
+
+def classify_decay_tier(
+    methodology: Methodology,
+    now: Optional[datetime] = None,
+) -> tuple[str, float]:
+    """Classify a methodology into a temporal decay tier.
+
+    Returns (tier_name, half_life_days). The tier determines the freshness
+    half-life used in fitness scoring.
+
+    Tier logic:
+        core    — origin:seed or category:architecture → infinite half-life
+        active  — retrieved within 30 days AND ≥3 retrievals → 30-day half-life
+        warm    — retrieved within 90 days → 90-day half-life (legacy default)
+        cold    — retrieved within 180 days → 180-day half-life
+        archive — 180+ days without retrieval → 365-day half-life
+    """
+    if now is None:
+        now = datetime.now(UTC)
+
+    tags = methodology.tags or []
+
+    # Core tier: seed or architecture methodologies never decay
+    if "origin:seed" in tags or "category:architecture" in tags:
+        return "core", DECAY_TIERS["core"]
+
+    # Determine days since last retrieval (or since creation if never retrieved)
+    if methodology.last_retrieved_at:
+        if isinstance(methodology.last_retrieved_at, str):
+            try:
+                last_ret = datetime.fromisoformat(methodology.last_retrieved_at.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                last_ret = methodology.created_at
+        else:
+            last_ret = methodology.last_retrieved_at
+        days_since = max(0.0, (now - last_ret).total_seconds() / 86400.0)
+    else:
+        days_since = (now - methodology.created_at).total_seconds() / 86400.0
+
+    # Active tier: recently retrieved AND frequently used
+    if days_since <= 30 and methodology.retrieval_count >= 3:
+        return "active", DECAY_TIERS["active"]
+
+    # Warm tier: within 90 days (matches legacy 90-day half-life)
+    if days_since <= 90:
+        return "warm", DECAY_TIERS["warm"]
+
+    # Cold tier: 90-180 days
+    if days_since <= 180:
+        return "cold", DECAY_TIERS["cold"]
+
+    # Archive tier: 180+ days
+    return "archive", DECAY_TIERS["archive"]
+
 
 def compute_fitness(
     methodology: Methodology,
@@ -61,6 +149,7 @@ def compute_fitness(
     now: Optional[datetime] = None,
     latest_outcome: Optional[bool] = None,
     kelly_posterior_std: Optional[float] = None,
+    category_weights: Optional[dict[str, float]] = None,
 ) -> tuple[float, dict[str, float]]:
     """Compute the 6-dimensional fitness score for a methodology.
 
@@ -138,9 +227,13 @@ def compute_fitness(
     files_score = min(1.0, len(methodology.files_affected) / 10.0)
     d_specificity = (tag_score + files_score) / 2.0
 
-    # 4. Freshness -- exponential decay
+    # 4. Freshness -- exponential decay with tier-specific half-life
+    decay_tier, tier_half_life = classify_decay_tier(methodology, now=now)
     age_days = (now - methodology.created_at).total_seconds() / 86400.0
-    d_freshness = math.exp(-0.693 * age_days / FRESHNESS_HALF_LIFE_DAYS)
+    if math.isinf(tier_half_life):
+        d_freshness = 1.0  # Core tier: never decays
+    else:
+        d_freshness = math.exp(-0.693 * age_days / tier_half_life)
 
     # 5. Cross-Domain Transfer -- global + successful
     if methodology.scope == "global" and methodology.success_count > 0:
@@ -164,6 +257,12 @@ def compute_fitness(
         + W_FREQUENCY * d_frequency
     )
 
+    # Category weight multiplier — boosts/dampens total based on category tag
+    category = _extract_category(methodology.tags or [])
+    weights = category_weights if category_weights is not None else DEFAULT_CATEGORY_WEIGHTS
+    category_weight = weights.get(category, 1.0) if category else 1.0
+    total = min(1.0, total * category_weight)
+
     vector = {
         "retrieval_relevance": round(d_relevance, 4),
         "outcome_efficacy": round(d_efficacy, 4),
@@ -173,6 +272,13 @@ def compute_fitness(
         "retrieval_frequency": round(d_frequency, 4),
         "total": round(total, 4),
     }
+
+    # Persist decay tier for observability
+    vector["decay_tier"] = decay_tier
+
+    # Persist category weight for observability
+    if category_weight != 1.0:
+        vector["category_weight"] = round(category_weight, 4)
 
     # Persist EMA state for next computation
     if outcome_ema is not None:

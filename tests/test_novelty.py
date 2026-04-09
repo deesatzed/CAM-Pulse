@@ -783,7 +783,7 @@ class TestLifecycleNoveltyProtection:
 class TestRetrievalBoost:
     """Test novelty/potential retrieval boost in HybridSearch."""
 
-    def test_boost_applied(self):
+    async def test_boost_applied(self):
         """Novel methodology should get higher combined_score."""
         novel_meth = _make_methodology(
             novelty_score=0.9,
@@ -817,7 +817,7 @@ class TestRetrievalBoost:
         hs._deep_conf = None
 
         # Merge
-        merged = hs._merge_results(
+        merged = await hs._merge_results(
             [novel_result, plain_result], [], query=""
         )
 
@@ -825,7 +825,7 @@ class TestRetrievalBoost:
         # Novel methodology should have higher score
         assert scores[novel_meth.id] > scores[plain_meth.id]
 
-    def test_zero_boost_no_effect(self):
+    async def test_zero_boost_no_effect(self):
         """With zero boost, novelty scores don't affect ranking."""
         novel_meth = _make_methodology(novelty_score=0.9, potential_score=0.9)
         plain_meth = _make_methodology(novelty_score=None, potential_score=None)
@@ -846,7 +846,7 @@ class TestRetrievalBoost:
         hs._mmr_enabled = False
         hs._deep_conf = None
 
-        merged = hs._merge_results([novel_result, plain_result], [], query="")
+        merged = await hs._merge_results([novel_result, plain_result], [], query="")
         scores = {r.methodology.id: r.combined_score for r in merged}
         # Should be equal (fitness differences aside, both have same base stats)
         diff = abs(scores[novel_meth.id] - scores[plain_meth.id])

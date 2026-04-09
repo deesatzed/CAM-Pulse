@@ -297,7 +297,7 @@ async def _approve_record(
     if embedding_engine is not None:
         try:
             import struct
-            vec = embedding_engine.encode(problem)
+            vec = await embedding_engine.async_encode(problem)
             vec_bytes = struct.pack(f"<{len(vec)}f", *vec)
             await engine.execute(
                 "INSERT INTO methodology_embeddings (methodology_id, embedding) VALUES (?, ?)",

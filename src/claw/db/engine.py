@@ -635,6 +635,30 @@ class DatabaseEngine:
             await self.conn.commit()
             logger.info("Migration 18 applied: created coverage_snapshots table")
 
+        # Migration 19: create methodology_contradictions table
+        mc_check = await self.fetch_one(
+            "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='methodology_contradictions'"
+        )
+        if mc_check and mc_check["cnt"] == 0:
+            await self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS methodology_contradictions (
+                    id TEXT PRIMARY KEY,
+                    methodology_a_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+                    methodology_b_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+                    problem_similarity REAL NOT NULL,
+                    solution_divergence REAL NOT NULL,
+                    detected_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    resolution TEXT,
+                    resolved_by TEXT,
+                    resolved_at TEXT,
+                    UNIQUE(methodology_a_id, methodology_b_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_contradictions_a ON methodology_contradictions(methodology_a_id);
+                CREATE INDEX IF NOT EXISTS idx_contradictions_b ON methodology_contradictions(methodology_b_id);
+            """)
+            await self.conn.commit()
+            logger.info("Migration 19 applied: created methodology_contradictions table")
+
     # ------------------------------------------------------------------
     # Write operations — wrapped with _retry_on_locked for contention
     # ------------------------------------------------------------------

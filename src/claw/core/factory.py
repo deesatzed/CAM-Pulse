@@ -95,6 +95,24 @@ class ClawContext:
 
     async def close(self) -> None:
         """Cleanly shut down all components."""
+        # Close embedding engine (releases Gemini httpx transport → prevents CLOSE_WAIT)
+        try:
+            self.embeddings.close()
+        except Exception as e:
+            logger.debug("EmbeddingEngine close error (non-fatal): %s", e)
+
+        # Close agent backends (releases aiohttp/httpx sessions)
+        for name, agent in self.agents.items():
+            try:
+                close_fn = getattr(agent, "close", None)
+                if close_fn is not None:
+                    import asyncio
+                    result = close_fn()
+                    if asyncio.iscoroutine(result):
+                        await result
+            except Exception as e:
+                logger.debug("Agent '%s' close error (non-fatal): %s", name, e)
+
         await self.llm_client.close()
         await self.engine.close()
         logger.info("ClawContext closed")

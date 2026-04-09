@@ -39,6 +39,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
 
 def _make_vector(seed: int, dim: int = 384) -> list[float]:
     """Generate a deterministic vector from a seed using numpy RNG."""

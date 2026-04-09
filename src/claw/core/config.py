@@ -54,6 +54,7 @@ class MemoryConfig(BaseModel):
     attribution_embedding_enabled: bool = False
     attribution_embedding_weight: float = 0.6
     attribution_embedding_threshold: float = 0.35
+    category_weights: dict[str, float] = Field(default_factory=dict)
 
 
 class OrchestratorConfig(BaseModel):

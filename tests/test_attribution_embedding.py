@@ -150,6 +150,9 @@ class CountingEngine:
         self.encode_count += 1
         return self.real.encode(text)
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
     @staticmethod
     def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
         from claw.db.embeddings import EmbeddingEngine
@@ -191,6 +194,9 @@ class TestLexicalUnchangedWhenDisabled:
             def encode(self, text: str) -> list[float]:
                 self.encode_count += 1
                 return [0.0] * 384
+
+            async def async_encode(self, text: str) -> list[float]:
+                return self.encode(text)
 
             @staticmethod
             def cosine_similarity(v1: list[float], v2: list[float]) -> float:
@@ -552,6 +558,9 @@ class TestEngineErrorGraceful:
             """Engine that always raises on encode()."""
             def encode(self, text: str) -> list[float]:
                 raise RuntimeError("Gemini API quota exceeded")
+
+            async def async_encode(self, text: str) -> list[float]:
+                return self.encode(text)
 
             @staticmethod
             def cosine_similarity(v1: list[float], v2: list[float]) -> float:

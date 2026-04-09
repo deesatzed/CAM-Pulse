@@ -72,6 +72,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = sum(x * x for x in a) ** 0.5

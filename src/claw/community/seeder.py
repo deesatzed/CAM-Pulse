@@ -210,7 +210,7 @@ async def _seed_record(
     # 3. Embedding — required for semantic (vector) search
     if embedding_engine is not None:
         try:
-            vec = embedding_engine.encode(problem)
+            vec = await embedding_engine.async_encode(problem)
             vec_bytes = struct.pack(f"<{len(vec)}f", *vec)
             await engine.execute(
                 "INSERT INTO methodology_embeddings (methodology_id, embedding) VALUES (?, ?)",
@@ -320,7 +320,7 @@ async def repair_missing_embeddings(
     repaired = 0
     for row in rows:
         try:
-            vec = embedding_engine.encode(row["problem_description"])
+            vec = await embedding_engine.async_encode(row["problem_description"])
             vec_bytes = struct.pack(f"<{len(vec)}f", *vec)
             await engine.execute(
                 "INSERT OR IGNORE INTO methodology_embeddings (methodology_id, embedding) VALUES (?, ?)",

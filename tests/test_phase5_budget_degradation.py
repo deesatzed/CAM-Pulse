@@ -641,7 +641,7 @@ class TestGetFallbackAgent:
         self, degradation: DegradationManager, health_monitor: HealthMonitor
     ):
         """Returns None when all agents except the preferred are down."""
-        for agent in ["codex", "gemini", "grok"]:
+        for agent in ["codex", "gemini", "grok", "local"]:
             for _ in range(3):
                 health_monitor.record_agent_failure(agent)
         fallback = degradation.get_fallback_agent("claude")
@@ -655,7 +655,7 @@ class TestGetFallbackAgent:
         fallback = degradation.get_fallback_agent("codex")
         # Claude is rate limited so should not be chosen
         assert fallback != "claude"
-        assert fallback in ["gemini", "grok"]
+        assert fallback in ["gemini", "grok", "local"]
 
 
 class TestRouteWithFallback:
@@ -736,7 +736,7 @@ class TestShouldNotifyHuman:
     async def test_false_when_minority_down(
         self, degradation: DegradationManager, health_monitor: HealthMonitor
     ):
-        """No notification when less than half of agents are down (1 of 4)."""
+        """No notification when less than half of agents are down."""
         for _ in range(3):
             health_monitor.record_agent_failure("grok")
         assert degradation.should_notify_human() is False
@@ -744,7 +744,7 @@ class TestShouldNotifyHuman:
     async def test_true_when_majority_down(
         self, degradation: DegradationManager, health_monitor: HealthMonitor
     ):
-        """Notification when more than half of agents are down (3 of 4)."""
+        """Notification when more than half of agents are down."""
         for agent_id in ["codex", "gemini", "grok"]:
             for _ in range(3):
                 health_monitor.record_agent_failure(agent_id)
@@ -762,15 +762,15 @@ class TestShouldNotifyHuman:
     async def test_false_when_exactly_half_down(
         self, health_monitor: HealthMonitor
     ):
-        """Notification NOT triggered when exactly half are down (2 of 4).
+        """Notification NOT triggered when minority are down.
 
-        The condition is ``down_count > total / 2``, so 2 > 2.0 is False.
+        The condition is ``down_count > total / 2``.
         """
         dm = DegradationManager(health_monitor=health_monitor)
         for agent_id in ["codex", "gemini"]:
             for _ in range(3):
                 health_monitor.record_agent_failure(agent_id)
-        # 2 down, 2 healthy -> 2 > 4/2 -> 2 > 2.0 -> False
+        # 2 down out of 5 -> 2 > 5/2 -> 2 > 2.5 -> False
         assert dm.should_notify_human() is False
 
     async def test_true_when_zero_agents_configured(
@@ -867,8 +867,8 @@ class TestGetDegradationStatus:
     async def test_status_all_healthy(self, degradation: DegradationManager):
         """When all agents healthy, status reflects that."""
         status = degradation.get_degradation_status()
-        assert status["healthy_count"] == 4
-        assert status["total_agents"] == 4
+        assert status["healthy_count"] == len(DEFAULT_AGENT_IDS)
+        assert status["total_agents"] == len(DEFAULT_AGENT_IDS)
         assert status["all_down"] is False
         assert status["should_notify_human"] is False
         assert len(status["unhealthy_agents"]) == 0
@@ -882,7 +882,7 @@ class TestGetDegradationStatus:
         status = degradation.get_degradation_status()
         assert "codex" in status["unhealthy_agents"]
         assert "codex" not in status["healthy_agents"]
-        assert status["healthy_count"] == 3
+        assert status["healthy_count"] == len(DEFAULT_AGENT_IDS) - 1
 
     async def test_status_agent_details_rate_limit_info(
         self, degradation: DegradationManager

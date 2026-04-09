@@ -347,6 +347,11 @@ async def check_niche_collision(
 
         existing_fitness = get_fitness_score(existing)
 
+        # Persist competition edge in methodology_links
+        await _persist_competition_edge(
+            repository, new_methodology.id, existing.id, similarity
+        )
+
         if existing_fitness < new_fitness:
             # Existing is weaker -- demote it
             if existing.lifecycle_state not in (
@@ -385,6 +390,32 @@ async def check_niche_collision(
                 break  # No need to check further -- new one is already demoted
 
     return demoted
+
+
+async def _persist_competition_edge(
+    repository: Repository,
+    source_id: str,
+    target_id: str,
+    similarity: float,
+) -> None:
+    """Persist a 'competes_with' edge in methodology_links.
+
+    Uses INSERT OR REPLACE to update strength if edge already exists.
+    """
+    import uuid
+
+    # Sort IDs for stable UNIQUE constraint
+    id_a, id_b = sorted([source_id, target_id])
+    try:
+        link_id = str(uuid.uuid4())
+        await repository.engine.execute(
+            "INSERT OR REPLACE INTO methodology_links "
+            "(id, source_id, target_id, link_type, strength) "
+            "VALUES (?, ?, ?, 'competes_with', ?)",
+            [link_id, id_a, id_b, round(similarity, 4)],
+        )
+    except Exception as exc:
+        logger.debug("Failed to persist competition edge: %s", exc)
 
 
 def _days_since_retrieval(methodology: Methodology, now: datetime) -> float:

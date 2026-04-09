@@ -52,6 +52,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
 
 class DeterministicLLMClient:
     """LLM client that returns deterministic meta-pattern responses.

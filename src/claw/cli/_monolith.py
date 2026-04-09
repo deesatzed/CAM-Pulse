@@ -9747,6 +9747,53 @@ async def _kb_brains_async() -> None:
                   f"[bold]{1 + len(cfg.instances.siblings)}[/bold] ganglia")
 
 
+@kb_app.command(name="export-kit")
+def kb_export_kit(
+    brain: str = typer.Option("python", "--brain", "-b", help="Brain name to export from"),
+    category: Optional[str] = typer.Option(None, "--category", help="Category filter"),
+    top: int = typer.Option(10, "--top", "-n", help="Number of top methodologies"),
+    output: str = typer.Option(..., "--output", "-o", help="Output directory path"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing directory"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Export top methodologies as a JourneyKits-compatible directory."""
+    asyncio.run(_kb_export_kit_async(brain, category, top, Path(output), force))
+
+
+async def _kb_export_kit_async(
+    brain: str, category: Optional[str], top_n: int, output_dir: Path, force: bool,
+) -> None:
+    from claw.community.kit_exporter import export_kit
+    from claw.core.config import load_config
+    from claw.db.engine import DatabaseEngine
+
+    cfg = load_config()
+    engine = DatabaseEngine(cfg.database)
+    await engine.connect()
+    await engine.apply_migrations()
+    await engine.initialize_schema()
+
+    try:
+        result = await export_kit(
+            engine=engine,
+            output_dir=output_dir,
+            brain=brain,
+            category=category,
+            top_n=top_n,
+            instance_name=getattr(cfg.instances, "instance_name", ""),
+            force=force,
+        )
+        console.print(f"[green]Kit exported:[/green] {result['kit_name']}")
+        console.print(f"  Methodologies: {result['methodology_count']}")
+        console.print(f"  Output: {result['output_path']}")
+        console.print(f"  Manifest hash: {result['manifest_hash'][:16]}...")
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    finally:
+        await engine.close()
+
+
 # ---------------------------------------------------------------------------
 # pulse — CAM-PULSE command group
 # ---------------------------------------------------------------------------

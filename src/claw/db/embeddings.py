@@ -6,6 +6,7 @@ sqlite-vec compatible storage via binary serialization.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import struct
@@ -169,7 +170,10 @@ class EmbeddingEngine:
                 )
             from google import genai
 
-            self._genai_client = genai.Client(api_key=api_key)
+            self._genai_client = genai.Client(
+                api_key=api_key,
+                http_options={"timeout": 30_000},  # 30s timeout to prevent CLOSE_WAIT hangs
+            )
             logger.info(
                 "Gemini embedding client initialized (model=%s, dimension=%d)",
                 self.model_name,
@@ -266,6 +270,30 @@ class EmbeddingEngine:
 
         raise RuntimeError(f"Gemini embeddings call failed: {last_exc}") from last_exc
 
+    def close(self) -> None:
+        """Release resources held by the embedding engine.
+
+        Closes the Gemini genai.Client (and its underlying httpx transport)
+        to prevent CLOSE_WAIT socket leaks.
+        """
+        if self._genai_client is not None:
+            try:
+                # google-genai Client wraps httpx; call close if available
+                close_fn = getattr(self._genai_client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+                # Also close the internal httpx client if exposed
+                _http = getattr(self._genai_client, "_client", None)
+                if _http is not None:
+                    close_fn2 = getattr(_http, "close", None)
+                    if callable(close_fn2):
+                        close_fn2()
+            except Exception as e:
+                logger.debug("EmbeddingEngine.close() ignoring error: %s", e)
+            finally:
+                self._genai_client = None
+                logger.debug("Gemini genai client closed")
+
     def encode(self, text: str) -> list[float]:
         """Encode a single text string to a vector."""
         if self._uses_gemini_api:
@@ -275,6 +303,10 @@ class EmbeddingEngine:
             return self._embed_with_mlx([text])[0]
         vec = self.model.encode(text, show_progress_bar=False)
         return vec.tolist()
+
+    async def async_encode(self, text: str) -> list[float]:
+        """Async wrapper around encode() — runs in a thread to avoid blocking the event loop."""
+        return await asyncio.to_thread(self.encode, text)
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
         """Encode multiple texts to vectors."""

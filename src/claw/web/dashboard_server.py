@@ -181,6 +181,15 @@ async def api_stats() -> JSONResponse:
                     sib_info["methodology_count"] = 0
             siblings.append(sib_info)
 
+    # Health score
+    health_data = {"score": 0, "breakdown": {}}
+    try:
+        from claw.memory.governance import MemoryGovernor
+        gov = MemoryGovernor(repository=repo, config=config.governance)
+        health_data = await gov.compute_health_score()
+    except Exception as exc:
+        logger.warning("Health score computation failed: %s", exc)
+
     return JSONResponse(
         {
             "primary": {
@@ -196,6 +205,8 @@ async def api_stats() -> JSONResponse:
             },
             "siblings": siblings,
             "total_across_brain": total + sum(s.get("methodology_count", 0) for s in siblings),
+            "health_score": health_data.get("score", 0),
+            "health_breakdown": health_data.get("breakdown", {}),
         }
     )
 
@@ -2346,6 +2357,81 @@ def _ganglion_badge(name: str) -> str:
     }
     c = colors.get(name, "#76809d")
     return f'<span class="ganglion-badge" style="--gc:{c}">{_E(name)}</span>'
+
+
+@app.get("/api/governance/contradictions")
+async def api_governance_contradictions() -> JSONResponse:
+    """Return all detected methodology contradictions."""
+    st = await _ensure_state(app)
+    try:
+        rows = await st["repository"].engine.fetch_all(
+            "SELECT id, methodology_a_id, methodology_b_id, "
+            "problem_similarity, solution_divergence, detected_at, "
+            "resolution, resolved_by, resolved_at "
+            "FROM methodology_contradictions ORDER BY detected_at DESC LIMIT 100"
+        )
+        return JSONResponse([dict(r) for r in rows])
+    except Exception as exc:
+        logger.warning("Failed to fetch contradictions: %s", exc)
+        return JSONResponse([])
+
+
+@app.get("/api/methodology/{methodology_id}/graph")
+async def api_methodology_graph(methodology_id: str) -> JSONResponse:
+    """Return the 1-hop entity relationship graph around a methodology."""
+    st = await _ensure_state(app)
+    try:
+        from claw.memory.governance import MemoryGovernor
+        gov = MemoryGovernor(
+            repository=st["repository"],
+            config=st["config"].governance,
+        )
+        result = await gov.get_methodology_neighborhood(methodology_id)
+        return JSONResponse(result)
+    except Exception as exc:
+        logger.warning("Failed to get methodology graph: %s", exc)
+        return JSONResponse({"nodes": [], "edges": []})
+
+
+@app.get("/.well-known/mcp.json")
+async def well_known_mcp(request: Request) -> JSONResponse:
+    """MCP discovery endpoint — returns tool schemas and brain topology."""
+    st = await _ensure_state(app)
+    config = st["config"]
+
+    # Tool schemas (lazy import to avoid circular deps)
+    tools: list[dict[str, str]] = []
+    try:
+        from claw.tools.schemas import generate_mcp_tool_schemas
+        raw_tools = generate_mcp_tool_schemas()
+        tools = [{"name": t["name"], "description": t["description"]} for t in raw_tools]
+    except Exception as exc:
+        logger.warning("Failed to load MCP tool schemas: %s", exc)
+
+    # Brain topology (lazy import)
+    brains: list[dict[str, Any]] = []
+    total_methodologies = 0
+    try:
+        from claw.community.manifest import BrainTopology
+        topology = BrainTopology(config)
+        topology.load()
+        brains = [
+            {"name": b.get("name", "unknown"), "methodologies": b.get("total_methodologies", 0)}
+            for b in topology.summaries
+        ]
+        total_methodologies = topology.total_methodologies
+    except Exception as exc:
+        logger.debug("BrainTopology not available: %s", exc)
+
+    return JSONResponse({
+        "name": "cam-pulse",
+        "version": "1.0",
+        "description": "CAM-PULSE autonomous learning engine",
+        "transport": ["stdio"],
+        "tools": tools,
+        "brains": brains,
+        "total_methodologies": total_methodologies,
+    })
 
 
 @app.get("/", response_class=HTMLResponse)

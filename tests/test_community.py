@@ -660,3 +660,172 @@ class TestFitnessHistory:
             await log_fitness_change(engine, "meth-1", 0.5, {"total": 0.5})
 
         _run(run())  # No assertion needed — just verify no exception
+
+
+# ---------------------------------------------------------------------------
+# Kit exporter tests
+# ---------------------------------------------------------------------------
+
+class TestKitExporter:
+    """Tests for export_kit() — JourneyKits-compatible directory generation."""
+
+    def test_export_kit_creates_directory(self, tmp_path):
+        """Generates kit with journey.json, prompts/, and README.md."""
+        async def run():
+            from claw.core.config import DatabaseConfig
+            from claw.db.engine import DatabaseEngine
+
+            engine = DatabaseEngine(DatabaseConfig(db_path=":memory:"))
+            await engine.connect()
+            await engine.initialize_schema()
+            await engine.apply_migrations()
+
+            # Insert test methodologies
+            for i in range(3):
+                await engine.execute(
+                    "INSERT INTO methodologies (id, problem_description, solution_code, "
+                    "tags, lifecycle_state, fitness_vector) VALUES (?, ?, ?, ?, 'viable', ?)",
+                    [
+                        f"kit-test-{i}",
+                        f"Problem number {i}: handling edge case {i}",
+                        f"def solve_{i}(): return {i}",
+                        json.dumps([f"category:testing", f"source:repo{i}"]),
+                        json.dumps({"total": 0.8 - i * 0.1}),
+                    ],
+                )
+
+            from claw.community.kit_exporter import export_kit
+
+            output = tmp_path / "test-kit"
+            result = await export_kit(
+                engine=engine,
+                output_dir=output,
+                brain="python",
+                category="testing",
+                top_n=5,
+            )
+
+            # Check directory structure
+            assert output.exists()
+            assert (output / "journey.json").exists()
+            assert (output / "README.md").exists()
+            assert (output / "prompts").is_dir()
+            assert (output / "prompts" / "system.md").exists()
+
+            # Validate journey.json
+            manifest = json.loads((output / "journey.json").read_text())
+            assert manifest["name"] == "cam-python-testing"
+            assert manifest["methodology_count"] == 3
+            assert len(manifest["methodologies"]) == 3
+
+            # Check result
+            assert result["methodology_count"] == 3
+            assert result["kit_name"] == "cam-python-testing"
+
+            await engine.close()
+
+        _run(run())
+
+    def test_export_kit_prompts_match_count(self, tmp_path):
+        """Export top 5 → exactly 5 .md files in prompts/ (plus system.md)."""
+        async def run():
+            from claw.core.config import DatabaseConfig
+            from claw.db.engine import DatabaseEngine
+
+            engine = DatabaseEngine(DatabaseConfig(db_path=":memory:"))
+            await engine.connect()
+            await engine.initialize_schema()
+            await engine.apply_migrations()
+
+            for i in range(5):
+                await engine.execute(
+                    "INSERT INTO methodologies (id, problem_description, solution_code, "
+                    "tags, lifecycle_state, fitness_vector) VALUES (?, ?, ?, ?, 'viable', ?)",
+                    [
+                        f"count-test-{i}",
+                        f"Methodology {i} for testing prompt count",
+                        f"solution_{i}()",
+                        json.dumps(["category:testing"]),
+                        json.dumps({"total": 0.9 - i * 0.05}),
+                    ],
+                )
+
+            from claw.community.kit_exporter import export_kit
+
+            output = tmp_path / "count-kit"
+            await export_kit(engine=engine, output_dir=output, brain="python", top_n=5)
+
+            # Count .md files in prompts/ (excluding system.md)
+            md_files = [f for f in (output / "prompts").iterdir() if f.suffix == ".md" and f.name != "system.md"]
+            assert len(md_files) == 5
+
+            await engine.close()
+
+        _run(run())
+
+    def test_export_kit_no_secrets(self, tmp_path):
+        """Exported text contains no sk-* or Bearer patterns."""
+        async def run():
+            from claw.core.config import DatabaseConfig
+            from claw.db.engine import DatabaseEngine
+
+            engine = DatabaseEngine(DatabaseConfig(db_path=":memory:"))
+            await engine.connect()
+            await engine.initialize_schema()
+            await engine.apply_migrations()
+
+            # Insert methodology with a secret in solution
+            await engine.execute(
+                "INSERT INTO methodologies (id, problem_description, solution_code, "
+                "tags, lifecycle_state, fitness_vector) VALUES (?, ?, ?, ?, 'viable', ?)",
+                [
+                    "secret-test",
+                    "API integration pattern",
+                    "api_key = 'sk-abc123456789abcdef0123456789' # real key",
+                    json.dumps(["category:testing"]),
+                    json.dumps({"total": 0.9}),
+                ],
+            )
+
+            from claw.community.kit_exporter import export_kit
+
+            output = tmp_path / "secret-kit"
+            await export_kit(engine=engine, output_dir=output, brain="python", top_n=5)
+
+            # Read all files and check for secrets
+            for f in output.rglob("*"):
+                if f.is_file():
+                    content = f.read_text()
+                    assert "sk-abc123456789" not in content, f"Secret found in {f.name}"
+
+            await engine.close()
+
+        _run(run())
+
+    def test_export_kit_empty_category_raises(self, tmp_path):
+        """0 methodologies in category → ValueError, no empty directory."""
+        async def run():
+            from claw.core.config import DatabaseConfig
+            from claw.db.engine import DatabaseEngine
+
+            engine = DatabaseEngine(DatabaseConfig(db_path=":memory:"))
+            await engine.connect()
+            await engine.initialize_schema()
+            await engine.apply_migrations()
+
+            # No methodologies at all
+            from claw.community.kit_exporter import export_kit
+
+            output = tmp_path / "empty-kit"
+            try:
+                await export_kit(
+                    engine=engine, output_dir=output,
+                    brain="python", category="nonexistent",
+                )
+                assert False, "Should have raised ValueError"
+            except ValueError as e:
+                assert "No methodologies found" in str(e)
+
+            await engine.close()
+
+        _run(run())

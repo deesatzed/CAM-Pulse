@@ -475,7 +475,23 @@ CREATE INDEX IF NOT EXISTS idx_mining_outcomes_strategy ON mining_outcomes(strat
 CREATE INDEX IF NOT EXISTS idx_mining_outcomes_brain ON mining_outcomes(brain);
 CREATE INDEX IF NOT EXISTS idx_mining_outcomes_size ON mining_outcomes(prompt_tokens_estimated);
 
--- 22. COVERAGE_SNAPSHOTS (gap analysis periodic snapshots)
+-- 22. METHODOLOGY_CONTRADICTIONS (detected opposing methodology pairs)
+CREATE TABLE IF NOT EXISTS methodology_contradictions (
+    id TEXT PRIMARY KEY,
+    methodology_a_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+    methodology_b_id TEXT NOT NULL REFERENCES methodologies(id) ON DELETE CASCADE,
+    problem_similarity REAL NOT NULL,
+    solution_divergence REAL NOT NULL,
+    detected_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    resolution TEXT,
+    resolved_by TEXT,
+    resolved_at TEXT,
+    UNIQUE(methodology_a_id, methodology_b_id)
+);
+CREATE INDEX IF NOT EXISTS idx_contradictions_a ON methodology_contradictions(methodology_a_id);
+CREATE INDEX IF NOT EXISTS idx_contradictions_b ON methodology_contradictions(methodology_b_id);
+
+-- 23. COVERAGE_SNAPSHOTS (gap analysis periodic snapshots)
 CREATE TABLE IF NOT EXISTS coverage_snapshots (
     id TEXT PRIMARY KEY,
     snapshot_data TEXT NOT NULL,

@@ -84,6 +84,16 @@ CATEGORY_TO_TASK_TYPE: dict[str, str] = {
     # Features / General analysis
     "feature": "analysis",
     "enhancement": "analysis",
+    # Code quality / style — suitable for local inference (low-judgment)
+    "code_quality": "code_summarization",
+    "code_style": "code_summarization",
+    "naming": "code_summarization",
+    "formatting": "code_summarization",
+    # Mining / extraction — routes to local agent
+    "mining": "mining_extraction",
+    "extraction": "pattern_extraction",
+    "classification": "bulk_classification",
+    "pattern": "pattern_extraction",
 }
 
 DEFAULT_TASK_TYPE = "analysis"

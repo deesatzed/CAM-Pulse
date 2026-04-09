@@ -10,10 +10,12 @@ import pytest
 
 from claw.core.models import Methodology
 from claw.memory.fitness import (
+    DEFAULT_CATEGORY_WEIGHTS,
     EMA_ALPHA,
     EMA_BLEND_WEIGHT,
     STATIC_BLEND_WEIGHT,
     W_EFFICACY,
+    classify_decay_tier,
     compute_fitness,
 )
 
@@ -242,7 +244,7 @@ class TestEMAEdgeCases:
         expected_keys = {
             "retrieval_relevance", "outcome_efficacy", "specificity",
             "freshness", "cross_domain_transfer", "retrieval_frequency",
-            "total", "outcome_ema",
+            "total", "outcome_ema", "decay_tier",
         }
         assert set(vec.keys()) == expected_keys
 
@@ -254,9 +256,187 @@ class TestEMAEdgeCases:
         expected_keys = {
             "retrieval_relevance", "outcome_efficacy", "specificity",
             "freshness", "cross_domain_transfer", "retrieval_frequency",
-            "total",
+            "total", "decay_tier",
         }
         assert set(vec.keys()) == expected_keys
+
+
+class TestCategoryWeights:
+    """Category weight multiplier tests."""
+
+    def test_category_weight_architecture_boosts_fitness(self):
+        """Architecture methodology scores higher than identical one without category."""
+        m_arch = _m(
+            success_count=3, failure_count=1,
+            tags=["category:architecture", "source:repo1"],
+        )
+        m_none = _m(
+            success_count=3, failure_count=1,
+            tags=["source:repo1"],
+        )
+        total_arch, vec_arch = compute_fitness(m_arch, now=m_arch.created_at)
+        total_none, vec_none = compute_fitness(m_none, now=m_none.created_at)
+
+        # Architecture default weight is 1.4, so arch score > none
+        assert total_arch > total_none
+        assert vec_arch.get("category_weight") == 1.4
+
+    def test_category_weight_default_is_neutral(self):
+        """Unknown category gets weight 1.0 (no boost, no penalty)."""
+        m_unknown = _m(
+            success_count=3, failure_count=1,
+            tags=["category:bizarre_niche", "source:repo1"],
+        )
+        m_known_neutral = _m(
+            success_count=3, failure_count=1,
+            tags=["category:debugging", "source:repo1"],  # debugging default weight = 1.0
+        )
+        total_unknown, vec_unknown = compute_fitness(m_unknown, now=m_unknown.created_at)
+        total_known, vec_known = compute_fitness(m_known_neutral, now=m_known_neutral.created_at)
+
+        # Both have weight 1.0 — same tags count, same everything
+        assert total_unknown == total_known
+        # category_weight should not appear in vector when it's 1.0
+        assert "category_weight" not in vec_unknown
+        assert "category_weight" not in vec_known
+
+    def test_category_weight_from_config(self):
+        """Custom config weights override defaults."""
+        m = _m(
+            success_count=3, failure_count=1,
+            tags=["category:debugging"],
+        )
+        # Default weight for debugging is 1.0
+        total_default, _ = compute_fitness(m, now=m.created_at)
+
+        # Custom weight boosts debugging to 1.5
+        custom_weights = {"debugging": 1.5}
+        total_custom, vec_custom = compute_fitness(
+            m, now=m.created_at, category_weights=custom_weights
+        )
+
+        assert total_custom > total_default
+        assert vec_custom.get("category_weight") == 1.5
+
+
+class TestDecayTiers:
+    """Temporal decay tier classification and fitness impact."""
+
+    def test_decay_tier_core_never_decays(self):
+        """Seed methodology freshness stays 1.0 regardless of age."""
+        now = datetime.now(UTC)
+        m = _m(
+            tags=["origin:seed"],
+            created_at=now - timedelta(days=500),
+        )
+        tier, half_life = classify_decay_tier(m, now=now)
+        assert tier == "core"
+        assert half_life == float("inf")
+
+        _, vec = compute_fitness(m, now=now)
+        assert vec["freshness"] == 1.0
+        assert vec["decay_tier"] == "core"
+
+    def test_decay_tier_active_decays_fast(self):
+        """Recently retrieved methodology has 30-day half-life (faster decay)."""
+        now = datetime.now(UTC)
+        m = _m(
+            retrieval_count=5,
+            last_retrieved_at=now - timedelta(days=5),
+            created_at=now - timedelta(days=60),
+        )
+        tier, half_life = classify_decay_tier(m, now=now)
+        assert tier == "active"
+        assert half_life == 30.0
+
+        # Compare with warm tier (same methodology but fewer retrievals)
+        m_warm = _m(
+            retrieval_count=1,
+            last_retrieved_at=now - timedelta(days=5),
+            created_at=now - timedelta(days=60),
+        )
+        tier_warm, _ = classify_decay_tier(m_warm, now=now)
+        assert tier_warm == "warm"
+
+        # Active tier should have lower freshness (faster decay for same age)
+        _, vec_active = compute_fitness(m, now=now)
+        _, vec_warm = compute_fitness(m_warm, now=now)
+        assert vec_active["freshness"] < vec_warm["freshness"]
+
+    def test_decay_tier_archive_decays_slow(self):
+        """200-day-old unretrieved methodology gets archive tier (365-day half-life)."""
+        now = datetime.now(UTC)
+        m = _m(
+            retrieval_count=0,
+            created_at=now - timedelta(days=200),
+        )
+        tier, half_life = classify_decay_tier(m, now=now)
+        assert tier == "archive"
+        assert half_life == 365.0
+
+        # Archive half-life (365) is much longer than warm (90),
+        # so freshness should be higher under archive tier
+        assert vec_archive_freshness_is_higher_than_warm(m, now)
+
+    def test_decay_tier_classification_boundaries(self):
+        """Verify each tier boundary condition."""
+        now = datetime.now(UTC)
+
+        # Within 30 days, 3+ retrievals → active
+        m_active = _m(
+            retrieval_count=3,
+            last_retrieved_at=now - timedelta(days=10),
+            created_at=now - timedelta(days=30),
+        )
+        assert classify_decay_tier(m_active, now=now)[0] == "active"
+
+        # Within 30 days, <3 retrievals → warm
+        m_warm = _m(
+            retrieval_count=2,
+            last_retrieved_at=now - timedelta(days=10),
+            created_at=now - timedelta(days=30),
+        )
+        assert classify_decay_tier(m_warm, now=now)[0] == "warm"
+
+        # Within 90 days → warm
+        m_warm2 = _m(
+            retrieval_count=0,
+            last_retrieved_at=now - timedelta(days=60),
+            created_at=now - timedelta(days=80),
+        )
+        assert classify_decay_tier(m_warm2, now=now)[0] == "warm"
+
+        # 91-180 days → cold
+        m_cold = _m(
+            retrieval_count=0,
+            last_retrieved_at=now - timedelta(days=120),
+            created_at=now - timedelta(days=150),
+        )
+        assert classify_decay_tier(m_cold, now=now)[0] == "cold"
+
+        # 181+ days → archive
+        m_archive = _m(
+            retrieval_count=0,
+            last_retrieved_at=now - timedelta(days=200),
+            created_at=now - timedelta(days=300),
+        )
+        assert classify_decay_tier(m_archive, now=now)[0] == "archive"
+
+        # Architecture tag → core (regardless of age)
+        m_core = _m(
+            tags=["category:architecture"],
+            created_at=now - timedelta(days=500),
+        )
+        assert classify_decay_tier(m_core, now=now)[0] == "core"
+
+
+def vec_archive_freshness_is_higher_than_warm(m, now):
+    """Helper: archive tier gives higher freshness than warm tier for old methodology."""
+    import math
+    age_days = (now - m.created_at).total_seconds() / 86400.0
+    freshness_archive = math.exp(-0.693 * age_days / 365.0)
+    freshness_warm = math.exp(-0.693 * age_days / 90.0)
+    return freshness_archive > freshness_warm
 
 
 class TestEMAConstants:

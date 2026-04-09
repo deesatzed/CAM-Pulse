@@ -235,7 +235,7 @@ class Methodology(BaseModel):
     failure_count: int = 0
     last_retrieved_at: Optional[datetime] = None
     generation: int = 0
-    fitness_vector: dict[str, float] = Field(default_factory=dict)
+    fitness_vector: dict[str, Any] = Field(default_factory=dict)
     parent_ids: list[str] = Field(default_factory=list)
     superseded_by: Optional[str] = None
     prism_data: Optional[dict] = None

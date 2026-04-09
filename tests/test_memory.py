@@ -79,6 +79,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = sum(x * x for x in a) ** 0.5
@@ -210,7 +213,8 @@ class TestComputeFitness:
         now = m.created_at + timedelta(days=180)
         total, vector = compute_fitness(m, now=now)
 
-        assert vector["freshness"] < 0.4
+        # 180-day-old methodology with cold tier (180-day half-life) has freshness ~0.50
+        assert vector["freshness"] < 0.6
         # Compare with a fresh methodology
         _, fresh_vector = compute_fitness(m, now=m.created_at)
         assert vector["freshness"] < fresh_vector["freshness"]
@@ -248,7 +252,7 @@ class TestComputeFitness:
         assert vector["retrieval_frequency"] == 0.5
 
     def test_compute_fitness_returns_vector_dict(self):
-        """Fitness vector dict has all 7 expected keys."""
+        """Fitness vector dict has all 8 expected keys."""
         m = _make_methodology()
         total, vector = compute_fitness(m, now=m.created_at)
 
@@ -259,6 +263,7 @@ class TestComputeFitness:
             "freshness",
             "cross_domain_transfer",
             "retrieval_frequency",
+            "decay_tier",
             "total",
         }
         assert set(vector.keys()) == expected_keys
@@ -742,12 +747,12 @@ class TestSemanticMemory:
 # ===========================================================================
 
 class TestHybridSearchMerge:
-    """Tests for _merge_results — sync, in-memory."""
+    """Tests for _merge_results — async, in-memory."""
 
     def _make_search(self):
         """Create a HybridSearch instance with minimal real dependencies."""
         return HybridSearch(
-            repository=None,  # Not needed for sync methods
+            repository=None,
             embedding_engine=FixedEmbeddingEngine(),
         )
 
@@ -756,7 +761,7 @@ class TestHybridSearchMerge:
         m.id = methodology_id  # Override for dedup testing
         return HybridSearchResult(methodology=m)
 
-    def test_merge_results_deduplication(self):
+    async def test_merge_results_deduplication(self):
         """Same methodology from both sources merges into one hybrid result."""
         hs = self._make_search()
 
@@ -766,7 +771,7 @@ class TestHybridSearchMerge:
         vec_result = HybridSearchResult(methodology=m, vector_score=0.9, source="vector")
         txt_result = HybridSearchResult(methodology=m, text_score=0.8, source="text")
 
-        merged = hs._merge_results([vec_result], [txt_result])
+        merged = await hs._merge_results([vec_result], [txt_result])
 
         # Should have exactly 1 result
         assert len(merged) == 1
@@ -775,7 +780,7 @@ class TestHybridSearchMerge:
         assert result.vector_score == 0.9
         assert result.text_score == 0.8
 
-    def test_merge_results_vector_only(self):
+    async def test_merge_results_vector_only(self):
         """Methodology appearing only in vector results keeps source='vector'."""
         hs = self._make_search()
 
@@ -783,14 +788,14 @@ class TestHybridSearchMerge:
         m.id = "meth-vec"
         vec_result = HybridSearchResult(methodology=m, vector_score=0.7, source="vector")
 
-        merged = hs._merge_results([vec_result], [])
+        merged = await hs._merge_results([vec_result], [])
 
         assert len(merged) == 1
         assert merged[0].source == "vector"
         assert merged[0].vector_score == 0.7
         assert merged[0].text_score == 0.0
 
-    def test_merge_results_text_only(self):
+    async def test_merge_results_text_only(self):
         """Methodology appearing only in text results keeps source='text'."""
         hs = self._make_search()
 
@@ -798,14 +803,14 @@ class TestHybridSearchMerge:
         m.id = "meth-txt"
         txt_result = HybridSearchResult(methodology=m, text_score=0.6, source="text")
 
-        merged = hs._merge_results([], [txt_result])
+        merged = await hs._merge_results([], [txt_result])
 
         assert len(merged) == 1
         assert merged[0].source == "text"
         assert merged[0].text_score == 0.6
         assert merged[0].vector_score == 0.0
 
-    def test_merge_results_filters_dead(self):
+    async def test_merge_results_filters_dead(self):
         """Dead methodologies are excluded from merge results."""
         hs = self._make_search()
 
@@ -813,10 +818,10 @@ class TestHybridSearchMerge:
         m.id = "meth-dead"
         vec_result = HybridSearchResult(methodology=m, vector_score=0.9, source="vector")
 
-        merged = hs._merge_results([vec_result], [])
+        merged = await hs._merge_results([vec_result], [])
         assert len(merged) == 0
 
-    def test_merge_results_filters_dormant(self):
+    async def test_merge_results_filters_dormant(self):
         """Dormant methodologies are excluded from merge results."""
         hs = self._make_search()
 
@@ -824,10 +829,10 @@ class TestHybridSearchMerge:
         m.id = "meth-dormant"
         vec_result = HybridSearchResult(methodology=m, vector_score=0.8, source="vector")
 
-        merged = hs._merge_results([vec_result], [])
+        merged = await hs._merge_results([vec_result], [])
         assert len(merged) == 0
 
-    def test_merge_results_viable_passes(self):
+    async def test_merge_results_viable_passes(self):
         """Viable methodologies are kept in merge results."""
         hs = self._make_search()
 
@@ -835,7 +840,7 @@ class TestHybridSearchMerge:
         m.id = "meth-viable"
         vec_result = HybridSearchResult(methodology=m, vector_score=0.8, source="vector")
 
-        merged = hs._merge_results([vec_result], [])
+        merged = await hs._merge_results([vec_result], [])
         assert len(merged) == 1
 
 

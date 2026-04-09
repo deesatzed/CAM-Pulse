@@ -81,9 +81,9 @@ class SemanticMemory:
         Returns:
             The saved Methodology model.
         """
-        # Generate embedding for the problem description
+        # Generate embedding for the problem description (async to avoid blocking event loop)
         try:
-            embedding = self.embedding_engine.encode(problem_description)
+            embedding = await self.embedding_engine.async_encode(problem_description)
             logger.debug(
                 "Generated embedding (%d dims) for: %s",
                 len(embedding), problem_description[:50],

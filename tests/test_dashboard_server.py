@@ -324,6 +324,67 @@ class TestStatsEndpoint:
         data = resp.json()
         assert data["total_across_brain"] == 2895
 
+    def test_stats_includes_health_score(self):
+        """Stats response includes health_score and health_breakdown."""
+        client = _setup_client(with_siblings=False)
+        resp = client.get("/api/stats")
+        data = resp.json()
+        assert "health_score" in data
+        assert isinstance(data["health_score"], int)
+        assert "health_breakdown" in data
+        assert isinstance(data["health_breakdown"], dict)
+
+
+class TestContradictionEndpoint:
+    def test_contradiction_api_returns_list(self):
+        """GET /api/governance/contradictions returns JSON list."""
+        client = _setup_client(with_siblings=False)
+        resp = client.get("/api/governance/contradictions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+
+class TestMethodologyGraphEndpoint:
+    def test_methodology_graph_returns_structure(self):
+        """GET /api/methodology/{id}/graph returns nodes and edges."""
+        client = _setup_client(with_siblings=False)
+        resp = client.get("/api/methodology/nonexistent-id/graph")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "nodes" in data
+        assert "edges" in data
+        assert isinstance(data["nodes"], list)
+        assert isinstance(data["edges"], list)
+
+
+class TestWellKnownEndpoint:
+    def test_well_known_mcp_json(self):
+        """GET /.well-known/mcp.json returns valid JSON with expected keys."""
+        client = _setup_client(with_siblings=False)
+        resp = client.get("/.well-known/mcp.json")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "cam-pulse"
+        assert data["version"] == "1.0"
+        assert "tools" in data
+        assert isinstance(data["tools"], list)
+        assert "brains" in data
+        assert isinstance(data["brains"], list)
+        assert "total_methodologies" in data
+        assert "transport" in data
+
+    def test_well_known_no_secrets(self):
+        """Discovery endpoint does not expose secrets or absolute paths."""
+        client = _setup_client(with_siblings=False)
+        resp = client.get("/.well-known/mcp.json")
+        text = resp.text
+        assert "sk-" not in text
+        assert "Bearer" not in text
+        # No absolute paths to user directories
+        assert "/Users/" not in text
+        assert "/home/" not in text
+
 
 class TestSearchEndpoint:
     def test_search_returns_results(self):

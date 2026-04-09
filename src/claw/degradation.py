@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("claw.degradation")
 
 # Default set of agent identifiers when none are provided.
-DEFAULT_AGENT_IDS: list[str] = ["claude", "codex", "gemini", "grok"]
+DEFAULT_AGENT_IDS: list[str] = ["claude", "codex", "gemini", "grok", "local"]
 
 
 class DegradationManager:

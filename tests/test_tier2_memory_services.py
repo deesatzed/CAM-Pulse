@@ -77,6 +77,9 @@ class FixedEmbeddingEngine:
         raw = [b / 255.0 for b in h] * 8
         return raw[: self.DIMENSION]
 
+    async def async_encode(self, text: str) -> list[float]:
+        return self.encode(text)
+
     def cosine_similarity(self, a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = sum(x * x for x in a) ** 0.5
@@ -979,13 +982,13 @@ class TestHybridSearchMergeExtended:
             embedding_engine=FixedEmbeddingEngine(),
         )
 
-    def test_merge_empty_both(self):
+    async def test_merge_empty_both(self):
         """Merging empty lists returns empty list."""
         hs = self._make_search()
-        merged = hs._merge_results([], [])
+        merged = await hs._merge_results([], [])
         assert merged == []
 
-    def test_merge_multiple_dedup(self):
+    async def test_merge_multiple_dedup(self):
         """Multiple overlapping results deduplicate correctly."""
         hs = self._make_search()
 
@@ -1009,7 +1012,7 @@ class TestHybridSearchMergeExtended:
             HybridSearchResult(methodology=m4, text_score=0.4, source="text"),
         ]
 
-        merged = hs._merge_results(vec_results, txt_results)
+        merged = await hs._merge_results(vec_results, txt_results)
 
         # Should have 4 unique results
         assert len(merged) == 4
@@ -1025,7 +1028,7 @@ class TestHybridSearchMergeExtended:
             elif r.methodology.id == "txt-only":
                 assert r.source == "text"
 
-    def test_merge_combined_score_calculation(self):
+    async def test_merge_combined_score_calculation(self):
         """Combined score blends similarity (60%) with fitness (40%)."""
         hs = self._make_search()
 
@@ -1035,7 +1038,7 @@ class TestHybridSearchMergeExtended:
         vec_result = HybridSearchResult(methodology=m, vector_score=0.9, source="vector")
         txt_result = HybridSearchResult(methodology=m, text_score=0.8, source="text")
 
-        merged = hs._merge_results([vec_result], [txt_result])
+        merged = await hs._merge_results([vec_result], [txt_result])
         assert len(merged) == 1
 
         result = merged[0]
