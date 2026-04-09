@@ -10,7 +10,7 @@
   <img src="demos/cam-pulse-demo.gif" alt="CAM-PULSE demo: cam mine-self --quick showing language breakdown, domain signals, and test results" width="700">
 </p>
 
-**[Quick Start](#quick-start)** | **[How It Compares](#how-it-compares)** | **[What You Can Do](#what-you-can-do)** | **[Novel Technology](#novel-technology)** | **[Architecture](#architecture)**
+**[Quick Start](#quick-start)** | **[How It Compares](#how-it-compares)** | **[Web UI](#web-ui--forge-builder)** | **[What You Can Do](#what-you-can-do)** | **[Novel Technology](#novel-technology)** | **[Architecture](#architecture)**
 
 ---
 
@@ -36,7 +36,130 @@ Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys 
 | **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
 | **Runs 100% local (zero cloud)** | Ollama + MLX-LM | -- | -- | -- | Partial |
 | **Reports honest failures** | 0% lift = 0% lift | Silent | Silent | Silent | Partial |
+| **Browser-based management UI** | 15 interactive pages | -- | -- | -- | -- |
 | **Cost** | **Free + MIT** | $19/mo | $20/mo | $0-40/mo | Free + API |
+
+---
+
+## Web UI & Forge Builder
+
+Everything CAM does is now accessible through a browser. No CLI memorization required -- search knowledge, watch agents execute, build new brains, track evolution, and mine repos from a single interface.
+
+<p align="center">
+
+```text
+┌─ CAM-PULSE ──────────────────────────────────────────────────────┐
+│                                                                   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
+│  │  4,750   │  │    7     │  │   54     │  │  92.3%   │        │
+│  │ Methods  │  │ Brains   │  │  Repos   │  │ KB Win   │        │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
+│                                                                   │
+│  Lifecycle Distribution        Languages                         │
+│  ████████████░░░░ active       Python ████████░░ 68%             │
+│  ████░░░░░░░░░░░ matured       TypeScript ███░░░ 28%             │
+│  ██░░░░░░░░░░░░░ retired       Rust ██░░░░░░░░ 3%               │
+│                                 Go █░░░░░░░░░░ 1%               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+</p>
+
+<p align="center">
+
+```text
+┌─ Playground ─────────────────────────────────────────────────────┐
+│                                                                   │
+│  Task: "Add retry logic with exponential backoff"                │
+│  ┌──────────────────────────────────────────────┐                │
+│  │ ▶ Execute Task                               │                │
+│  └──────────────────────────────────────────────┘                │
+│                                                                   │
+│  7-Gate Verification Pipeline                                    │
+│  [✓ Deps] [✓ Style] [✓ Chaos] [✓ Placeholders] [⟳ Drift] [○] [○]│
+│                                                                   │
+│  Step Log                         │  Corrections                 │
+│  14:32:01 grab    ✓ retrieved 5   │  Attempt 1: 2 violations     │
+│  14:32:03 evaluate ✓ assessed     │   - style_match: missing     │
+│  14:32:05 decide  ✓ selected      │   - chaos_check: no jitter   │
+│  14:32:12 act     ✓ 3 files       │  Attempt 2: ✓ all gates pass │
+│  14:32:15 verify  ✓ 7/7 gates     │                              │
+│  14:32:16 learn   ✓ fitness +0.02 │  [View Diff] [View Tests]    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+</p>
+
+<p align="center">
+
+```text
+┌─ Gap Heatmap ────────────────────────────────────────────────────┐
+│                                                                   │
+│         Python  TypeScript  Rust    Go     Misc                  │
+│  arch    ████    ███░       ██      █░     -                     │
+│  test    ████    ██░        █       ░      -                     │
+│  api     ███░    ████       -       ██     -                     │
+│  perf    ██      █░         ███     -      -                     │
+│  sec     █░      -          ██░     █░     -                     │
+│                                                                   │
+│  ████ = strong coverage   ░ = sparse   - = gap (click to mine)  │
+│                                                                   │
+│  Clicked: [security × Go] → 1 methodology                       │
+│  [Mine this gap] [Search related knowledge]                      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+</p>
+
+<p align="center">
+
+```text
+┌─ Evolution Lab ──────────────────────────────────────────────────┐
+│                                                                   │
+│  [A/B Tests] [Agent Routing] [Fitness Trajectories] [Bandit]     │
+│                                                                   │
+│  Fitness Trajectory: retry_backoff_8a3f                          │
+│  1.0 ┤                                    ●                     │
+│  0.8 ┤              ●───●───●───●───●──●                        │
+│  0.6 ┤         ●──●                                             │
+│  0.4 ┤    ●──●                                                  │
+│  0.2 ┤  ●                                                       │
+│      └──────────────────────────────────────────                 │
+│        Apr 1    Apr 3    Apr 5    Apr 7    Apr 9                 │
+│                                                                   │
+│  Vector: novelty 0.82 | reuse 0.91 | correctness 0.88           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+</p>
+
+### Page Index
+
+| Page | Route | What It Does |
+|------|-------|-------------|
+| Dashboard | `/` | Brain stats, lifecycle distribution, language breakdown |
+| Knowledge Explorer | `/knowledge` | Federated search across all 7 brains with filters |
+| Methodology Detail | `/knowledge/{id}` | Solution code, fitness history, usage attribution |
+| Gap Heatmap | `/knowledge/gaps` | Interactive coverage matrix, click-to-mine gaps |
+| Playground | `/playground` | Execute tasks, watch 7-gate verification, correction replay |
+| Evolution Lab | `/evolution` | A/B tests, agent routing heatmap, fitness trajectories, bandit arms |
+| Mining Console | `/mining` | Mine repos from browser, watch extraction progress |
+| Federation Hub | `/federation` | Brain topology graph, cross-brain analysis |
+| Costs | `/costs` | Token costs, budget utilization, per-agent efficiency |
+| Brain Graph | `/forge` | D3 force-directed brain visualization |
+| Build Brain | `/forge/build` | 4-step wizard: name, repos, agents, prompts |
+| Script Generator | `/forge/script` | Generate executable shell scripts for CAM operations |
+| Brain Detail | `/forge/brain/{name}` | Per-ganglion methodology explorer |
+| Forge Run | `/forge/run/{id}` | Execution session detail viewer |
+| Build Wizard | `/forge/build` | Persistent wizard with sessionStorage |
+
+### Start the Web UI
+
+```bash
+cam dashboard &                            # FastAPI backend on :8420
+cd forge-ui && npm install && npm run dev  # Next.js on :3000
+# Open http://localhost:3000
+```
 
 ---
 
@@ -52,6 +175,14 @@ cam --help
 ```
 
 **Verified**: Fresh clone → install → 3,621 tests passing. Zero skips with API keys configured.
+
+**Web UI** (optional):
+
+```bash
+cam dashboard &                            # FastAPI backend on :8420
+cd forge-ui && npm install && npm run dev  # Next.js frontend on :3000
+open http://localhost:3000
+```
 
 On first startup, CAM automatically loads **31 curated seed methodologies** covering its own algorithms (yield-priority mining, Kelly routing, EMA fitness, lifecycle management, correction loop, and more). No configuration needed — `cam govern stats` triggers seeding if the database is empty.
 
@@ -1173,8 +1304,9 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 4.5**: Self-Awareness — Seed knowledge system (31 curated methodologies ship with install), yield-priority mining (5-factor scoring), `_approve_record()` FTS5+embedding fix, `origin:seed` lifecycle protection | **Complete** |
 | **Phase 4.75**: RL Method Tournament — Epsilon-greedy bandit + Thompson sampling selection, forbidden-on-retry iteration, FTS5 hybrid search fix (AND→OR), `cam govern bandit-stats` CLI | **Complete** |
 | **Phase 4.9**: Knowledge Exploration — Gap analyzer (`cam gaps`), category discovery, exploratory epsilon re-ranking, stratified CAG corpus, batch mining across 7 brains | **Complete** |
-| **Phase 5**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
-| **Phase 6**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
+| **Phase 5.0**: Web UI -- 15-page Next.js frontend, Forge Builder, real-time execution playground, gap heatmap, evolution lab, brain graph | **Complete** |
+| **Phase 6**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
+| **Phase 7**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 
 ---
 
