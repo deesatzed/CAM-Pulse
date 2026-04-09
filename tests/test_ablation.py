@@ -310,8 +310,9 @@ class TestEvaluateProducesBayesianResult:
     async def test_variant_wins_with_higher_success_rate(self, evolver_with_test):
         evolver, _ids = evolver_with_test
 
-        # Record 25 samples: control 40% success, variant 80% success
-        for i in range(25):
+        # Record 200 samples: control 40% success, variant 80% success
+        # MIN_SAMPLES=200 requires at least 200 per variant for evaluate_test readiness
+        for i in range(200):
             await evolver.record_sample(
                 prompt_name="knowledge_ablation",
                 variant_label="control",
@@ -336,10 +337,10 @@ class TestEvaluateProducesBayesianResult:
         assert result["margin"] > 0, "Positive margin means variant is ahead"
 
         # Verify stats structure
-        assert result["control"]["sample_count"] == 25
-        assert result["variant"]["sample_count"] == 25
-        assert result["control"]["success_count"] == 10  # 40% of 25
-        assert result["variant"]["success_count"] == 20  # 80% of 25
+        assert result["control"]["sample_count"] == 200
+        assert result["variant"]["sample_count"] == 200
+        assert result["control"]["success_count"] == 80  # 40% of 200
+        assert result["variant"]["success_count"] == 160  # 80% of 200
         assert "bayesian_score" in result["control"]
         assert "bayesian_score" in result["variant"]
 
@@ -348,7 +349,8 @@ class TestEvaluateProducesBayesianResult:
         evolver, _ids = evolver_with_test
 
         # control: 90% success; variant: 30% success
-        for i in range(25):
+        # MIN_SAMPLES=200 requires at least 200 per variant
+        for i in range(200):
             await evolver.record_sample(
                 prompt_name="knowledge_ablation",
                 variant_label="control",

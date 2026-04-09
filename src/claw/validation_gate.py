@@ -624,8 +624,8 @@ def _gate_test_suite(config: ValidationConfig) -> tuple[GateResult, Optional[Pyt
 
 def _gate_diff_summary(config: ValidationConfig) -> tuple[GateResult, DiffSummary]:
     """Gate 7 (informational): Summarize source differences."""
-    live_src = config.live_dir / "src"
-    copy_src = config.copy_dir / "src"
+    live_src = config.live_dir / "src" / "claw"
+    copy_src = config.copy_dir / "src" / "claw"
 
     ds = DiffSummary()
 
