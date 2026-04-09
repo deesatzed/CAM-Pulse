@@ -6,6 +6,7 @@ __pycache__/
 *.egg
 dist/
 build/
+!forge-ui/src/app/forge/build/
 *.whl
 
 # Virtual environments
