@@ -1,8 +1,12 @@
 # CAM-PULSE
 
-### Scans X for new GitHub repos via Grok, mines reusable patterns with LLM, stores them forever, and injects them into your builds — with passing tests and full provenance.
+### Your AI coding assistant that actually remembers what works.
 
-**3,621 tests** | **4,750 methodologies** | **54 source repos** | **7 brains** | **5 agent backends** | **KB +19.2pp success rate (p=0.015, paired)** | **$0 — MIT licensed**
+CAM mines reusable engineering patterns from GitHub repos, your own code, and X/Twitter discoveries — then injects those patterns into AI-assisted builds with full attribution and test verification. It is the only AI coding tool with persistent cross-session memory, statistical proof of improvement (p=0.015), and honest failure reporting.
+
+**3,715 tests** | **3,590 methodologies** | **55 source repos** | **5 brains** | **5 agent backends** | **KB +19.2pp success rate (p=0.015, paired)** | **$0 — MIT licensed**
+
+<!-- Counts verified 2026-04-09. Update: cam govern stats | pytest --collect-only -q | sqlite3 queries -->
 
 > **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → attribute → learn
 
@@ -23,6 +27,37 @@
 
 Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys needed).
 
+### Use Case 1: Mine Your Own Forgotten Code
+
+You have 50 old repos on your drive gathering dust. CAM extracts the good parts.
+
+```bash
+cam mine-workspace ~/Projects ~/Archive --scan-only   # Preview: see what's there
+cam mine-workspace ~/Projects ~/Archive --max-repos 15 # Extract patterns
+cam learn search "error handling"                       # Find what YOU already wrote
+```
+
+### Use Case 2: Build with Battle-Tested Patterns
+
+You need retry logic. Instead of writing from scratch, CAM retrieves patterns from real repos.
+
+```bash
+cam create /path/to/my-api --execute \
+  --request "Add retry logic with exponential backoff" \
+  --check "pytest -q"
+# CAM retrieves patterns, builds code, runs tests, attributes sources
+```
+
+### Use Case 3: Discover What's Trending
+
+CAM scans X/Twitter for repos developers are sharing, mines them automatically.
+
+```bash
+cam pulse scan --keywords "AI agent framework"
+# → Discovered: 18 | Novel: 16 | Assimilated: 16 | New patterns: 86
+cam learn search "agent routing"   # Search the new knowledge
+```
+
 ---
 
 ## How It Compares
@@ -30,13 +65,13 @@ Free, MIT-licensed, runs 100% local if you want (Ollama + MLX-LM, zero API keys 
 | | CAM-PULSE | Copilot | Cursor | Windsurf | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Discovers new repos autonomously** | X-Scout via Grok | -- | -- | -- | -- |
-| **Persistent cross-session memory** | 4,750 methodologies + lifecycle | -- | Workspace | Session | -- |
+| **Persistent cross-session memory** | 3,590 methodologies + lifecycle | -- | Workspace | Session | -- |
 | **Applies learned knowledge to builds** | Inject + attribute | -- | -- | -- | -- |
 | **Verifies diffs actually happened** | Fails if nothing changed | -- | -- | -- | -- |
-| **Multi-agent routing** | 4 backends | 1 | 1 | 1 | 1 |
+| **Multi-agent routing** | 5 backends | 1 | 1 | 1 | 1 |
 | **Runs 100% local (zero cloud)** | Ollama + MLX-LM | -- | -- | -- | Partial |
 | **Reports honest failures** | 0% lift = 0% lift | Silent | Silent | Silent | Partial |
-| **Browser-based management UI** | 15 interactive pages | -- | -- | -- | -- |
+| **Browser-based management UI** | 14 interactive pages | -- | -- | -- | -- |
 | **Cost** | **Free + MIT** | $19/mo | $20/mo | $0-40/mo | Free + API |
 
 ---
@@ -51,7 +86,7 @@ Everything CAM does is now accessible through a browser. No CLI memorization req
 ┌─ CAM-PULSE ──────────────────────────────────────────────────────┐
 │                                                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │  4,750   │  │    7     │  │   54     │  │  92.3%   │        │
+│  │  3,590   │  │    5     │  │   55     │  │  92.3%   │        │
 │  │ Methods  │  │ Brains   │  │  Repos   │  │ KB Win   │        │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
 │                                                                   │
@@ -138,7 +173,7 @@ Everything CAM does is now accessible through a browser. No CLI memorization req
 | Page | Route | What It Does |
 |------|-------|-------------|
 | Dashboard | `/` | Brain stats, lifecycle distribution, language breakdown |
-| Knowledge Explorer | `/knowledge` | Federated search across all 7 brains with filters |
+| Knowledge Explorer | `/knowledge` | Federated search across all brains with filters |
 | Methodology Detail | `/knowledge/{id}` | Solution code, fitness history, usage attribution |
 | Gap Heatmap | `/knowledge/gaps` | Interactive coverage matrix, click-to-mine gaps |
 | Playground | `/playground` | Execute tasks, watch 7-gate verification, correction replay |
@@ -170,11 +205,24 @@ git clone https://github.com/deesatzed/CAM-Pulse.git
 cd CAM-Pulse
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+### See It Work (zero cost, zero API keys)
+
+```bash
+cam mine-self --quick    # Shows file stats, language breakdown, domain signals — no LLM calls
+```
+
+This runs instantly on whatever project you're in. No API keys needed.
+
+### Full Setup (for mining + building)
+
+```bash
 cp .env.example .env    # Fill in your API keys
 cam --help
 ```
 
-**Verified**: Fresh clone → install → 3,621 tests passing. Zero skips with API keys configured.
+**Verified**: Fresh clone → install → 3,715 tests collected, 8 skipped (environment-dependent). Zero failures.
 
 **Web UI** (optional):
 
@@ -209,7 +257,9 @@ For **local-only mode** (Ollama/MLX-LM), no API keys are required.
 
 ---
 
-## Proof: Cross-Repo Knowledge Synthesis
+## Proof Points
+
+### What Can CAM Build From Learned Patterns?
 
 CAM retrieved patterns from **3 different mined repos** and synthesized them into one working module:
 
@@ -249,7 +299,7 @@ Every module traces back to a specific mined methodology. This isn't code genera
 
 ---
 
-## Proof: Knowledge Impact — Two Independent A/B Tests
+### Does CAM's Knowledge Actually Help?
 
 Does CAM's knowledge base actually make agent output better? We ran **two independent experiments** — code quality and full-stack SWE — and the answer is unambiguous: **yes, and the effect is large**.
 
@@ -258,7 +308,7 @@ Does CAM's knowledge base actually make agent output better? We ran **two indepe
 **Task:** Add retry logic with exponential backoff to a Python API client with no error handling.
 
 - **Run A (Base):** Empty knowledge base — agent sees only the task description
-- **Run B (KB-Equipped):** Full knowledge base — 4,750 mined methodologies available
+- **Run B (KB-Equipped):** Full knowledge base — 3,590 mined methodologies available
 
 Run B retrieved 5 battle-tested retry patterns from 4 real source repos in 1.4 seconds.
 
@@ -327,13 +377,11 @@ Full writeup: [docs/showcase_retry_backoff.md](docs/showcase_retry_backoff.md) |
 CAM doesn't keep everything in one database. It operates as a **federated brain** — multiple specialist knowledge nodes (ganglia) that share knowledge through read-only cross-queries.
 
 ```
-CAM Brain (4,750 methodologies, 54 source repos)
-├── General Ganglion — 3,227 methodologies (Python-first, multi-domain)
-├── TypeScript Ganglion — 135 methodologies (Next.js, React, Node patterns)
+CAM Brain (3,590 methodologies, 55 source repos)
+├── Python Ganglion (primary) — 3,234 methodologies
+├── TypeScript Ganglion — 142 methodologies (Next.js, React, Node patterns)
 ├── Rust Ganglion — 154 methodologies (WASM, safety, CLI, systems)
 ├── Go Ganglion — 47 methodologies (concurrency, networking, cloud)
-├── Drive-Ops Ganglion — 1,046 methodologies from local repos
-├── Agentic-Memory Ganglion — 128 methodologies from agent/RAG repos
 └── Misc Ganglion — 13 methodologies (polyglot, cross-cutting)
     └── Connected via CAM Swarm (read-only FTS5 cross-queries + enriched manifests)
 ```
@@ -398,7 +446,7 @@ Before any self-modification takes effect, the enhanced copy must pass **all 7 g
 | 3. Imports | All `claw.*` modules import | Zero failures |
 | 4. DB Schema | Can open and query live database | Full compatibility |
 | 5. CLI Smoke | Core commands execute | Zero crashes |
-| 6. Full Pytest | Complete test suite | **All 3,621 tests pass** |
+| 6. Full Pytest | Complete test suite | **All 3,715 tests pass** |
 | 7. Diff Summary | Human-readable change report | Informational |
 
 **One failure at any gate = no swap.** The live installation is never touched until all gates pass.
@@ -483,17 +531,17 @@ Immediately after the knowledge application run, CAM assessed its trigger condit
 | 3 | Import (all `claw.*` modules) | 82/82 imported |
 | 4 | DB schema (open + query live DB) | 35 tables, 40,703 rows |
 | 5 | CLI smoke test | Core commands executed |
-| 6 | Full pytest | 3,621 passed, 6 skipped, 0 failed |
+| 6 | Full pytest | 3,715 passed, 6 skipped, 0 failed |
 | 7 | Diff summary | Clean |
 
-After the atomic swap completed, a live install verification confirmed 3,621 tests passing on the new codebase.
+After the atomic swap completed, a live install verification confirmed 3,715 tests passing on the new codebase.
 
 ### The Full Loop
 
 This is what makes CAM different from code generators that start from zero every time:
 
 ```
-Mine 4,750 patterns from 54 repos across 7 brains
+Mine 3,590 patterns from 55 repos across 5 brains
   --> Retrieve and inject relevant patterns into agent prompts
     --> Produce code informed by those patterns
       --> Verify quality and drift alignment
@@ -507,7 +555,9 @@ Every step in this chain ran with real data, real LLM calls, and real validation
 
 ---
 
-## First Live Scan: 16/16 Repos Assimilated
+## How Does the Discovery Pipeline Work?
+
+### First Live Scan: 16/16 Repos Assimilated
 
 ```
 $ cam pulse scan --keywords "AI agent framework"
@@ -649,11 +699,35 @@ cam learn report --limit 10
 
 # Run the full test suite
 pytest tests/ -q
-# → 3,621 passed, 0 skipped (with API keys configured)
+# → 3,707 passed, 8 skipped, 0 failed
 
 # Scan for secrets before ingestion
 cam security scan /path/to/repo
 cam security status
+```
+
+### Explore and Plan
+```bash
+# Interactive guide — don't know where to start? Just chat
+cam chat
+
+# Generate novel app ideas from your knowledge base
+cam ideate /path/to/repos --focus "real-time data"
+
+# Preview a task before committing to a build
+cam preflight /path/to/repo --request "Add retry logic"
+
+# Auto-generate an enhancement plan for any repo
+cam camify /path/to/repo --goal "modernize error handling"
+
+# Search ALL brains simultaneously
+cam federate "distributed caching patterns"
+
+# Expose CAM as an MCP server for Claude Code, Cursor, etc.
+cam mcp --transport stdio
+
+# See which agent CAM would pick for each task type
+cam doctor routing
 ```
 
 ---
@@ -682,7 +756,7 @@ This is what makes CAM-PULSE different from every other AI coding tool. It's not
                     +---------+----------+
                               |
                     +---------v----------+
-                    |  SQLite + Vectors  |  4,750 methodologies with
+                    |  SQLite + Vectors  |  3,590 methodologies with
                     |  Knowledge Base    |  provenance, lifecycle state,
                     |  (claw.db)         |  and 384-dim embeddings
                     +---------+----------+
@@ -741,11 +815,11 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  THE CODE (public, on GitHub)                                    │
-│  44K lines of Python, 3,621 tests, CLI, prompts, schema         │
+│  44K lines of Python, 3,715 tests, CLI, prompts, schema         │
 │  = the body — same for every CAM ganglion                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  THE BRAIN (local only, never pushed)                            │
-│  data/claw.db — 4,750 methodologies, agent scores,               │
+│  data/claw.db — 3,590 methodologies, agent scores,               │
 │  task history, 384-dim embeddings, lifecycle states               │
 │  = unique to YOUR ganglion — YOUR learned experience             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -765,11 +839,11 @@ Every other AI coding tool is **stateless** — it forgets everything when you c
 
 | Metric | This Ganglion | Fresh Clone |
 |--------|:------------:|:-----------:|
-| Learned methodologies | 4,750 | 0 |
-| Source repos mined | 54 | 0 |
+| Learned methodologies | 3,590 | 0 |
+| Source repos mined | 55 | 0 |
 | Tasks executed | 1,668 | 0 |
 | Lifecycle promotions (embryonic → viable) | 18 | 0 |
-| Brains (language ganglia) | 7 | 0 |
+| Brains (language ganglia) | 5 | 0 |
 | Agent quality scores | Bayesian-tracked | Uniform prior (0.5) |
 
 **The knowledge evolves through use.** When CAM retrieves a methodology and uses it for a task:
@@ -786,16 +860,16 @@ Why have one generalist brain when you can have a **team of domain experts**?
 The **CAM Brain** is the full federated system. Each specialized instance is a **CAM Ganglion** — a semi-autonomous node with its own claw.db, its own learned knowledge, and its own domain focus. The **CAM Swarm** connects ganglia via read-only FTS5 queries through brain manifests.
 
 ```
-┌─────────────────── CAM Brain ───────────────────┐
-│                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │ Primary  │  │ Drive-Ops│  │ Quantum  │ ...  │
-│  │ Ganglion │  │ Ganglion │  │ Ganglion │      │
-│  │ 3227 mth │  │ 1046 mth │  │  18 mth  │      │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
-│       └───── CAM Swarm (FTS5) ─────┘            │
-│            read-only · no copying                │
-└─────────────────────────────────────────────────┘
+┌───────────────────── CAM Brain ─────────────────────┐
+│                                                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │ Python   │ │TypeScript│ │  Rust    │ │  Go    │ │
+│  │ (primary)│ │ Ganglion │ │ Ganglion │ │Ganglion│ │
+│  │ 3234 mth │ │ 142 mth  │ │ 154 mth  │ │ 47 mth │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ │
+│       └────── CAM Swarm (FTS5) ──────────────┘      │
+│             read-only · no copying                   │
+└──────────────────────────────────────────────────────┘
 ```
 
 Each ganglion generates a **brain manifest** — a compact JSON summary of its expertise. When one ganglion works on a task outside its domain, the swarm scores sibling manifests for relevance and queries the best match. No data is copied — the sibling's brain stays intact.
@@ -1303,8 +1377,8 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | **Phase 4**: Drive-Ops — 1.5TB ganglion mining marathon, content-hash dedup, brain federation proven at scale | **Complete** |
 | **Phase 4.5**: Self-Awareness — Seed knowledge system (31 curated methodologies ship with install), yield-priority mining (5-factor scoring), `_approve_record()` FTS5+embedding fix, `origin:seed` lifecycle protection | **Complete** |
 | **Phase 4.75**: RL Method Tournament — Epsilon-greedy bandit + Thompson sampling selection, forbidden-on-retry iteration, FTS5 hybrid search fix (AND→OR), `cam govern bandit-stats` CLI | **Complete** |
-| **Phase 4.9**: Knowledge Exploration — Gap analyzer (`cam gaps`), category discovery, exploratory epsilon re-ranking, stratified CAG corpus, batch mining across 7 brains | **Complete** |
-| **Phase 5.0**: Web UI -- 15-page Next.js frontend, Forge Builder, real-time execution playground, gap heatmap, evolution lab, brain graph | **Complete** |
+| **Phase 4.9**: Knowledge Exploration — Gap analyzer (`cam gaps`), category discovery, exploratory epsilon re-ranking, stratified CAG corpus, batch mining across 5 brains | **Complete** |
+| **Phase 5.0**: Web UI -- 14-page Next.js frontend, Forge Builder, real-time execution playground, gap heatmap, evolution lab, brain graph | **Complete** |
 | **Phase 6**: Enterprise — Sandbox enforcement, audit logs, webhook notifications | Planned |
 | **Phase 7**: Premier — Community hub launch, fleet-scale self-enhancement, embedding hot-swap | Planned |
 
@@ -1335,6 +1409,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | [Advanced Features](docs/ADVANCED_FEATURES.md) | Kelly routing, deepConf, prompt evolution, error KB, budget, pattern learning |
 | [Governance Tuning](docs/GOVERNANCE_TUNING.md) | Memory lifecycle, quotas, methodology management |
 | [Ganglion Guide](docs/CAM_STANDALONE_INSTANCE_GUIDE.md) | Clone CAM, create a specialist ganglion |
+| [MCP Integration Guide](docs/MCP_INTEGRATION_GUIDE.md) | Connect CAM to Claude Code, Cursor, or any MCP client |
 
 ### Proof and Examples
 
@@ -1345,6 +1420,7 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
 | [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
 | [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
+| [Proof Point Index](docs/PROOF_POINT_INDEX.md) | Reproduction commands for all 20 proof points |
 
 ---
 
@@ -1355,8 +1431,8 @@ CAM uses the same validation-first philosophy for its own releases. Before pushi
 ### Release Checklist
 
 ```
-1. TESTS         — All 3,621+ tests pass (pytest tests/ -q)
-                   Zero failures. Zero new skips without documented reason.
+1. TESTS         — All 3,715 tests collected (pytest tests/ -q)
+                   Zero failures. No new skips without documented reason.
 
 2. SELF-ENHANCE  — If self-enhance was run, all 7 gates passed
                    Gate 6 (full pytest) is the hard gate. No exceptions.
@@ -1410,7 +1486,7 @@ The simplest rule: **if the test suite passes and the changes are reviewed, push
 ## Development
 
 ```bash
-# Run tests (3,621 passing, 0 skipped with API keys)
+# Run tests (3,707 passed, 8 skipped, 0 failed)
 pytest tests/ -q
 
 # CLI help
