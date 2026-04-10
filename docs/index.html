@@ -1645,7 +1645,7 @@
         <div class="trust-item"><div class="value">5</div><div class="label">Agent Backends</div></div>
         <div class="trust-item"><div class="value"><span class="counter" data-target="3590">0</span></div><div class="label">Methodologies</div></div>
         <div class="trust-item"><div class="value"><span class="counter" data-target="55">0</span></div><div class="label">Source Repos</div></div>
-        <div class="trust-item"><div class="value">20</div><div class="label">Showpieces</div></div>
+        <div class="trust-item"><div class="value">21</div><div class="label">Showpieces</div></div>
         <div class="trust-item"><div class="value">$0</div><div class="label">MIT Licensed</div></div>
       </div>
 
@@ -2060,7 +2060,7 @@ Knowledge: 2 PULSE patterns injected | Lifecycle: embryonic &rarr; viable</code>
       </div>
 
       <div class="showpieces-toggle">
-        <button id="toggle-showpieces">See all 20 showpieces</button>
+        <button id="toggle-showpieces">See all 21 showpieces</button>
       </div>
 
       <div class="grid-2 showpieces-rest" id="showpieces-rest">
@@ -2414,6 +2414,47 @@ All 5 agents show positive mean diff &mdash; KB effect is agent-independent</cod
             <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">blind within-subject</span>
             <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);">bootstrap CI excludes 0</span>
             <span class="showpiece-tag" style="border-color: rgba(39,174,96,0.3);"><a href="ab-proof.html" style="color: inherit; text-decoration: underline;">full interactive report</a></span>
+          </div>
+        </div>
+
+        <div class="card showpiece-card reveal" style="border-top: 3px solid #8e44ad; grid-column: 1/-1; background: linear-gradient(135deg, rgba(142,68,173,0.08) 0%, rgba(255,252,247,0.76) 100%);">
+          <span class="showpiece-number" style="color: #8e44ad;">21</span>
+          <div class="showpiece-type" style="color: #8e44ad;">Real CLI Tool &mdash; Built From Mined Knowledge</div>
+          <div class="showpiece-hero-metric">
+            <span class="metric-value" style="color: #8e44ad;">1,346,855 files</span>
+            <span class="metric-label">indexed in a single real-world scan &mdash; 97.55 GB, zero dependencies</span>
+          </div>
+          <h4>TidyHome &mdash; The Tool You&rsquo;ll Actually Use Tomorrow</h4>
+          <p>Not a benchmark. Not a meta-tool. Not a synthetic A/B report. A real Python CLI that <code>cam create --execute</code> built end-to-end from CAM-PULSE&rsquo;s file-management, CLI, scanning, and dedup methodology families. Then verified against an actual home directory: <strong>1.35 million files, 97.55 GB</strong>, 360 permission errors handled gracefully. Smart suggestions surfaced <strong>4.8 GB clearly reclaimable</strong> (cache + installers), 27.9 GB in ML model files, 63,300 files untouched for 1+ year. 38 tests. 90% coverage. 16/16 validation steps pass in the harness.</p>
+          <div class="showpiece-proof">
+            <div class="proof-label">Verified end-to-end (April 10, 2026)</div>
+            <code>Source: 8 modules, 459 statements, 0 pip deps (Python stdlib only)<br>
+Tests: 38 passed, 0 failed, 90% code coverage<br>
+Harness: 16/16 validation steps pass, exit 0<br>
+<br>
+Real scan: 1,346,855 files indexed / 360 skipped<br>
+Total size: 97.55 GB across 1,211 unique extensions<br>
+SQLite index: 529 MB at ~/.tidyhome/index.db<br>
+<br>
+Smart suggestions:<br>
+&nbsp;&nbsp;[CACHE]     202,918 files  3.5 GB reclaimable<br>
+&nbsp;&nbsp;[INSTALLER]     623 files  1.3 GB reclaimable<br>
+&nbsp;&nbsp;[ARCHIVE]     6,051 files  4.0 GB reclaimable<br>
+&nbsp;&nbsp;[MODEL]         411 files  27.9 GB (redownloadable)<br>
+&nbsp;&nbsp;[STALE-1Y]   63,300 files  untouched 1+ year<br>
+<br>
+KB sources: MiroFish, abacus_FileSearch, CLI-Anything,<br>
+&nbsp;&nbsp;app_organizer, AMM + Rust/Go/Python brain resilience</code>
+          </div>
+          <div class="showpiece-tags">
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">1.35M files scanned</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">97.55 GB indexed</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">zero pip deps</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">38 tests, 90% coverage</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">16/16 harness steps</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">4.8 GB reclaimable</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);">dry-run by default</span>
+            <span class="showpiece-tag" style="border-color: rgba(142,68,173,0.3);"><a href="CAM_SHOWPIECE_TIDYHOME.md" style="color: inherit; text-decoration: underline;">full writeup</a></span>
           </div>
         </div>
 
@@ -3100,7 +3141,7 @@ All 5 agents show positive mean diff &mdash; KB effect is agent-independent</cod
       btn.addEventListener('click', function() {
         var isVisible = rest.classList.contains('visible');
         rest.classList.toggle('visible', !isVisible);
-        btn.textContent = isVisible ? 'See all 20 showpieces' : 'Show fewer';
+        btn.textContent = isVisible ? 'See all 21 showpieces' : 'Show fewer';
       });
     })();
 

@@ -18,6 +18,7 @@ How to reproduce every proof point CAM-PULSE claims.
 
 | # | Proof | What It Shows | Reproduce | Detailed Doc |
 |---|-------|---------------|-----------|--------------|
+| 23 | **TidyHome CLI** | Real zero-dep CLI scanned 1.35M files / 97.55 GB on real `~/`, 90% test coverage, 38 tests, 16/16 validation steps pass | `./scripts/test_tidyhome_showpiece.sh` | [CAM_SHOWPIECE_TIDYHOME.md](CAM_SHOWPIECE_TIDYHOME.md) |
 | 8 | **Plugin Event System** | 3 repos synthesized into 1 module, 258 lines, 5/5 tests | `./scripts/test_plugin_event_showpiece.sh` | [CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md](CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) |
 | 6 | **PULSE Usage Proof** | Retrieved=3, Used=3, Attributed=3 — knowledge applied with provenance | `./scripts/test_pulse_usage_proof.sh` | [CAM_SHOWPIECE_PULSE_USAGE_PROOF.md](CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) |
 | 1 | **Repo Upgrade Advisor** | Ranked recommendations with confidence scores from mined knowledge | Manual — `cam evaluate /path/to/repo --mode quick` | [CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md](CAM_SHOWPIECE_REPO_UPGRADE_ADVISOR.md) |
@@ -50,6 +51,12 @@ How to reproduce every proof point CAM-PULSE claims.
 | 15 | **Uncertainty-Aware Fitness** | Agent reliability discounts methodology rankings up to 30% | `pytest tests/test_kelly.py -q` | README (Bayesian Kelly Criterion section) |
 | 18 | **RL Method Tournament** | Epsilon-greedy bandit + Thompson sampling selects best methodology per task type. 40 tests. | `pytest tests/test_bandit.py tests/test_bandit_integration.py -q` | README (RL Method Tournament section) |
 | 19 | **Cross-Brain Pattern Atlas** | "defense-in-depth security" query returns 40 results from 5 brains, 2 universal patterns, 108 transferable insights | `cam federate "defense-in-depth security for a multi-tenant AI agent gateway"` | README (Cross-Brain Pattern Atlas section) |
+
+## Visual Proof
+
+| # | Proof | What It Shows | Reproduce | Detailed Doc |
+|---|-------|---------------|-----------|--------------|
+| 22 | **The Architect** | Same task built twice (no KB vs full KB), visual HTML report with brain topology, gate comparison, code diff, knowledge attribution, token cost | `python scripts/run_architect_showpiece.py` | [architect_showpiece_report.html](architect_showpiece_report.html) |
 
 ## End-to-End Proof
 

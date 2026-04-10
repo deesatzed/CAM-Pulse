@@ -1250,12 +1250,13 @@ cam security status
 
 ---
 
-## 20 Proven Showpieces
+## 21 Proven Showpieces
 
 Not demos. Not mockups. Each has a harness script you can run yourself.
 
 | # | Showpiece | What It Proves |
 |---|-----------|----------------|
+| 21 | **TidyHome CLI** | Real zero-dep Python CLI built by `cam create`. Scanned **1,346,855 files / 97.55 GB** on an actual `~/`. 38 tests, 90% coverage, 16/16 validation steps pass. Flagged 4.8 GB clearly reclaimable + 27.9 GB in ML models. [Details →](docs/CAM_SHOWPIECE_TIDYHOME.md) |
 | 1 | **Repo Upgrade Advisor** | Ranked recommendations with confidence scores from mined knowledge |
 | 2 | **medCSS Modernizer** | End-to-end create → validate → postcheck on a real CSS codebase |
 | 3 | **Expectation Ladder** | 5-level escalating complexity (health → build → validate → mine → self-improve) |
@@ -1279,6 +1280,9 @@ Not demos. Not mockups. Each has a harness script you can run yourself.
 
 Run any showpiece:
 ```bash
+# Example: TidyHome — real CLI tool built from mined knowledge
+./scripts/test_tidyhome_showpiece.sh
+
 # Example: Plugin Event System (cross-repo synthesis)
 ./scripts/test_plugin_event_showpiece.sh
 
@@ -1416,11 +1420,12 @@ Most AI coding tools say "I updated the files" and you trust them. CAM doesn't.
 | Doc | Purpose |
 |-----|---------|
 | [Proven Capabilities](docs/CAM_PROVEN_CAPABILITIES.md) | Evidence-backed claims |
+| [TidyHome CLI](docs/CAM_SHOWPIECE_TIDYHOME.md) | Real CLI tool built from mined knowledge — verified on 1.35M files |
 | [Plugin Event System](docs/CAM_SHOWPIECE_PLUGIN_EVENT_SYSTEM.md) | Cross-repo synthesis proof |
 | [PULSE Knowledge Loop](docs/CAM_SHOWPIECE_PULSE_KNOWLEDGE_LOOP.md) | 16/16 scan proof |
 | [PULSE Usage Proof](docs/CAM_SHOWPIECE_PULSE_USAGE_PROOF.md) | Knowledge application proof |
 | [Blog: First Live Scan](docs/blog/2026-03-22-pulse-first-live-scan.md) | Full writeup with results |
-| [Proof Point Index](docs/PROOF_POINT_INDEX.md) | Reproduction commands for all 20 proof points |
+| [Proof Point Index](docs/PROOF_POINT_INDEX.md) | Reproduction commands for all 21 proof points |
 
 ---
 
