@@ -59,6 +59,27 @@ EVALUATION_PHASES: list[tuple[str, list[str]]] = [
 
 ADDITIONAL_PROMPTS: list[str] = ["ironclad", "sotappr", "ultrathink", "interview"]
 
+# Phase-to-task-type mapping for routing distribution.
+#
+# Previously every evaluation prompt was assigned task_type="analysis", which
+# the static routing table maps to the claude agent unconditionally. That
+# concentrated the entire evaluation battery on one agent and created a
+# single point of failure — if claude's slug was broken, every prompt failed.
+#
+# Mapping each phase to a distinct task_type lets the existing static routing
+# table distribute the battery across claude, codex, gemini, and grok based
+# on which agent is best suited for that kind of work. As Kelly/bandit
+# routing accumulates per-task-type performance data, prompts will
+# re-balance automatically.
+PHASE_TO_TASK_TYPE: dict[str, str] = {
+    "orientation": "analysis",              # claude — reading, understanding
+    "deep_analysis": "comprehension",       # gemini — full-repo context
+    "truth_verification": "quick_fix",      # grok — fast verification
+    "quality_assessment": "testing",        # codex — quality/test focus
+    "documentation": "documentation",       # claude — writing
+    "remediation_planning": "refactoring",  # codex — change planning
+}
+
 
 # ---------------------------------------------------------------------------
 # Result data classes
@@ -470,7 +491,13 @@ class Evaluator:
                 logger.warning("Could not serialize repo for evaluation: %s", e)
                 repo_context = f"\n\n(Repository at {repo_path} — contents not available: {e})\n"
 
-            # Create a transient task for this evaluation prompt
+            # Create a transient task for this evaluation prompt.
+            #
+            # task_type is derived from the phase so the dispatcher can
+            # distribute prompts across agents instead of sending every
+            # single one to claude. Unknown phases fall back to "analysis".
+            task_type = PHASE_TO_TASK_TYPE.get(phase, "analysis")
+
             eval_task = Task(
                 project_id=project_id,
                 title=f"Evaluate: {prompt_name}",
@@ -482,7 +509,7 @@ class Evaluator:
                 ),
                 status=TaskStatus.EVALUATING,
                 priority=5,
-                task_type="analysis",
+                task_type=task_type,
             )
 
             task_context = TaskContext(task=eval_task)

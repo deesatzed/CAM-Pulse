@@ -520,7 +520,12 @@ class AgentInterface(ABC):
         self.logger.info("[%s] Starting: task='%s'", self.name, task.task.title)
 
     def _log_complete(self, duration: float, result: TaskOutcome) -> None:
-        status = "success" if result.tests_passed else "completed"
+        if result.failure_reason:
+            status = f"failed ({result.failure_reason})"
+        elif result.tests_passed:
+            status = "success"
+        else:
+            status = "completed"
         self.logger.info(
             "[%s] Complete: status=%s (%.2fs)",
             self.name, status, duration,
