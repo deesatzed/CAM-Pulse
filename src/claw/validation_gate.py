@@ -458,9 +458,15 @@ if results["help"]["exit_code"] != 0:
     sys.exit(1)
 sys.exit(0)
 """
+    # CAM_SKIP_AUTO_SEED=1 prevents `cam status` / `cam doctor status` from
+    # triggering a 38s Gemini embedding seed on the empty copy-dir database.
+    # The gate only needs to prove the CLI entry point is callable, not to
+    # rebuild the knowledge base. See T7 investigation (2026-04-10).
+    env = os.environ.copy()
+    env["CAM_SKIP_AUTO_SEED"] = "1"
     result = subprocess.run(
         [config.python_bin, "-c", script],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, env=env,
     )
 
     try:
