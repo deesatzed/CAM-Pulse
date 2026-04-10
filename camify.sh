@@ -427,13 +427,27 @@ stage_install() {
     fi
 
     if [[ "$need_install" == "1" ]]; then
-        info "Installing CAM (pip install -e .) ..."
+        # Prefer `uv` when available — it's 10-100x faster than pip and
+        # handles venv-aware installs cleanly. Fall back to pip on
+        # machines where uv isn't installed.
+        local installer_desc="pip"
+        if command -v uv >/dev/null 2>&1; then
+            installer_desc="uv pip"
+        fi
+        info "Installing CAM ($installer_desc install -e .) ..."
         if [[ "$DRY_RUN" == "1" ]]; then
-            say "[dry-run] pip install -q -e ."
+            say "[dry-run] $installer_desc install -q -e ."
         else
-            pip install --quiet --upgrade pip >/dev/null 2>&1 || true
-            pip install --quiet -e . 2>&1 | tail -20 \
-                || die "pip install failed. Check Python version and network."
+            if command -v uv >/dev/null 2>&1; then
+                # `source .venv/bin/activate` above set VIRTUAL_ENV so
+                # uv will install into the active venv automatically.
+                uv pip install --quiet -e . 2>&1 | tail -20 \
+                    || die "uv pip install failed. Check Python version and network."
+            else
+                pip install --quiet --upgrade pip >/dev/null 2>&1 || true
+                pip install --quiet -e . 2>&1 | tail -20 \
+                    || die "pip install failed. Check Python version and network."
+            fi
             ok "CAM installed"
         fi
     else
