@@ -4114,12 +4114,17 @@ async def _fleet_enhance_async(
                     console.print(f"  [dim]Continuing on current branch.[/dim]")
                     await fleet.update_repo_status(repo_id, "enhancing")
 
-                # 5b: Create project in DB
-                project = Project(
-                    name=repo_name,
-                    repo_path=repo_path_str,
-                )
-                await ctx.repository.create_project(project)
+                # 5b: Create project in DB (idempotent — re-runs of fleet
+                # enhance must not duplicate rows for the same repo path).
+                existing = await ctx.repository.get_project_by_repo_path(repo_path_str)
+                if existing is not None:
+                    project = existing
+                else:
+                    project = Project(
+                        name=repo_name,
+                        repo_path=repo_path_str,
+                    )
+                    await ctx.repository.create_project(project)
 
                 # 5c: Run structural analysis
                 console.print(f"  [dim]Analyzing repository...[/dim]")
@@ -4518,6 +4523,60 @@ async def _status_async(config_path: Optional[str]) -> None:
             console.print("    [red]executable agents: none[/red]")
         if readonly_agents:
             console.print(f"    reasoning-only agents: {', '.join(readonly_agents)}")
+
+        # Knowledge base health — warn if empty (T11, punch list #6)
+        try:
+            kb_row = await ctx.engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM methodologies"
+            )
+            kb_count = kb_row["cnt"] if kb_row else 0
+            seed_row = await ctx.engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM methodologies WHERE tags LIKE ?",
+                ['%"origin:seed"%'],
+            )
+            seed_count = seed_row["cnt"] if seed_row else 0
+            console.print("\n  Knowledge base:")
+            if kb_count == 0:
+                console.print(
+                    "    [red]methodologies: 0[/red]  "
+                    "[dim](run [bold]cam kb bootstrap[/bold] to seed)[/dim]"
+                )
+            else:
+                console.print(
+                    f"    methodologies: {kb_count} "
+                    f"([dim]{seed_count} seed[/dim])"
+                )
+        except Exception as kb_exc:
+            console.print(f"  [yellow]Knowledge base check failed: {kb_exc}[/yellow]")
+
+        # Local LLM (Ollama) health — optional check (T11, punch list #10)
+        try:
+            local_cfg = getattr(ctx.config, "local_llm", None)
+            if local_cfg and getattr(local_cfg, "provider", "") == "ollama":
+                import httpx
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.get("http://localhost:11434/api/tags")
+                    if resp.status_code == 200:
+                        tags_data = resp.json()
+                        model_count = len(tags_data.get("models", []))
+                        console.print(
+                            f"  Local LLM (Ollama): "
+                            f"[green]running[/green] "
+                            f"([dim]{model_count} models[/dim])"
+                        )
+                    else:
+                        console.print(
+                            f"  Local LLM (Ollama): "
+                            f"[yellow]HTTP {resp.status_code}[/yellow]"
+                        )
+                except Exception:
+                    console.print(
+                        "  Local LLM (Ollama): [red]not responding[/red]  "
+                        "[dim](start with [bold]ollama serve[/bold])[/dim]"
+                    )
+        except Exception:
+            pass  # Ollama check is optional; don't break status
 
         # Task summary
         summary = await ctx.repository.get_task_status_summary()
@@ -4995,7 +5054,8 @@ async def _quickstart_async(
         if execute:
             if not ctx.agents:
                 console.print("\n[red]No agents available to execute. Enable at least one agent in claw.toml.[/red]")
-                return
+                console.print("[dim]Run [bold]cam init[/bold] or [bold]cam doctor status[/bold] to diagnose.[/dim]")
+                raise typer.Exit(code=1)
 
             selected_agent = ctx.agents.get(recommended)
             if selected_agent is not None and not _agent_supports_workspace_execution(selected_agent):
@@ -5005,7 +5065,7 @@ async def _quickstart_async(
                 console.print(
                     f"[red]Agent '{recommended}' must run in CLI mode for quickstart/create execution.[/red]"
                 )
-                return
+                raise typer.Exit(code=1)
 
             console.print("\n[cyan]Executing quickstart task...[/cyan]")
 
@@ -8628,8 +8688,14 @@ def doctor_keycheck(
 def doctor_status(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
-    """Preferred grouped alias for `cam status`."""
-    status(config=config)
+    """Preferred grouped alias for `cam status`.
+
+    Calls _status_async directly rather than the top-level `status`
+    function, because `status` is re-bound later in the module by
+    `@cag_app.command() def status(...)` (Python namespace shadowing).
+    """
+    _setup_logging(False)
+    asyncio.run(_status_async(config))
 
 
 @doctor_app.command(name="expectations")
@@ -8707,8 +8773,32 @@ async def _doctor_routing_async(config_path: Optional[str]) -> None:
     try:
         rows = await repository.get_agent_scores()
         if not rows:
-            console.print("[dim]No agent_scores data yet. Run some tasks first.[/dim]")
+            console.print(
+                "[yellow]Cold-start mode:[/yellow] no agent_scores data yet."
+            )
+            console.print(
+                "  [dim]The dispatcher is falling back to static routing priors "
+                "until agents have historical performance data.[/dim]"
+            )
+            console.print(
+                "  [dim]Run a few tasks ([bold]cam create[/bold], "
+                "[bold]cam quickstart[/bold], or [bold]cam evaluate[/bold]) "
+                "to warm up Kelly routing.[/dim]"
+            )
             return
+
+        # Cold-start warning for under-sampled agents (punch list #4)
+        cold_agents = [
+            r for r in rows
+            if r.get("total_attempts", r.get("successes", 0) + r.get("failures", 0)) < 5
+        ]
+        if cold_agents:
+            count = len(cold_agents)
+            console.print(
+                f"[yellow]Warning:[/yellow] {count} agent-task combo(s) "
+                f"have <5 attempts. Kelly sizing is unreliable at low sample "
+                f"count — expect static fallback for those rows.\n"
+            )
 
         sizer = BayesianKellySizer(
             kappa=cfg.kelly.kappa,

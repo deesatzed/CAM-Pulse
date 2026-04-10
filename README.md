@@ -200,29 +200,51 @@ cd forge-ui && npm install && npm run dev  # Next.js on :3000
 
 ## Quick Start
 
+### One-command quickstart (recommended for first-time users)
+
 ```bash
 git clone https://github.com/deesatzed/CAM-Pulse.git
 cd CAM-Pulse
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+./camify.sh
 ```
 
-### See It Work (zero cost, zero API keys)
+`camify.sh` walks you through every stage: preflight checks, venv + install (prefers `uv`, falls back to `pip`), interactive `.env` wizard with **real OpenRouter key validation**, target selection, and end-to-end evaluation. It's idempotent and resumable:
+
+```bash
+./camify.sh --resume                  # Pick up after a failure
+./camify.sh --stop-at install         # Install only, no further stages
+./camify.sh --dry-run --yes           # Print every command without executing
+./camify.sh --reinstall               # Rebuild the venv from scratch
+```
+
+### Guided onboarding with `cam init`
+
+Once installed, `cam init` is a Python-native wizard that verifies your config, checks API keys, bootstraps domain-specific knowledge packs, and runs a smoke test:
+
+```bash
+cam init                              # Interactive wizard
+cam init --non-interactive --domain python   # Scripted / CI-safe
+```
+
+`cam init` supports four curated domains: **python**, **webdev**, **devsecops**, and **all** — each seeds the knowledge base with the matching starter pack (51 Python methodologies, 12 DevSecOps, 1 WebDev, plus `core_v1`) and reports exactly which categories landed.
+
+### See it work before you install anything
 
 ```bash
 cam mine-self --quick    # Shows file stats, language breakdown, domain signals — no LLM calls
 ```
 
-This runs instantly on whatever project you're in. No API keys needed.
+No API keys needed. Runs instantly in any directory.
 
-### Full Setup (for mining + building)
+### Verify system health
 
 ```bash
-cp .env.example .env    # Fill in your API keys
-cam --help
+cam doctor status    # Agent health, DB path, KB count, Ollama probe, task summary
+cam doctor routing   # Kelly weights per agent, with cold-start warnings
+cam doctor keycheck --live   # Real provider round-trip (OpenRouter + Gemini)
 ```
 
-**Verified**: Fresh clone → install → 3,734 tests collected, 8 skipped (environment-dependent). Zero failures.
+**Verified**: Fresh clone → `./camify.sh` → `cam init --domain python` → `cam doctor status` returns a clean report with **3760 tests passing, zero failures**.
 
 **Web UI** (optional):
 
