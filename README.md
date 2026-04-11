@@ -264,6 +264,7 @@ On first startup, CAM automatically loads **31 curated seed methodologies** cove
 | **Docker** | `docker compose up --build` | Full containerized deployment |
 | **Ollama** (zero cloud) | `pip install -e ".[local]"` | No API keys needed |
 | **MLX-LM** (Apple Silicon) | `pip install -e ".[mlx]"` | Native M-series acceleration |
+| **Developer** (with tests) | `pip install -e ".[dev]"` | Adds pytest, ruff, coverage tools |
 
 ### API Keys
 

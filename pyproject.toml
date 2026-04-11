@@ -20,6 +20,12 @@ dependencies = [
     "gitpython>=3.1.0",
     "python-dotenv>=1.0.0",
     "toml>=0.10.0",
+    # Dashboard server — claw.web.dashboard_server imports FastAPI at
+    # module top level for its decorator-based routing, so fastapi has
+    # to be a base dep. Gate 3 of validation_gate.py imports every
+    # claw.* module to prove the package is self-consistent.
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]
