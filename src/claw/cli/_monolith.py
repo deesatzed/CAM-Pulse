@@ -6907,8 +6907,9 @@ def _mine_self_quick(project_path: Path) -> None:
     console.print(f"  Path: {project_path}")
     console.print()
 
-    # Collect metadata
-    file_count, last_commit_ts, total_bytes, scan_signature = _collect_repo_metadata(project_path)
+    # Collect metadata (miner returns 5-tuple: file_count, last_commit_ts,
+    # total_bytes, scan_signature, content_hash)
+    file_count, last_commit_ts, total_bytes, scan_signature, _content_hash = _collect_repo_metadata(project_path)
 
     if total_bytes >= 1024 * 1024:
         size_str = f"{total_bytes / (1024 * 1024):.1f} MB"
