@@ -226,7 +226,7 @@ cam init                              # Interactive wizard
 cam init --non-interactive --domain python   # Scripted / CI-safe
 ```
 
-`cam init` supports four curated domains: **python**, **webdev**, **devsecops**, and **all** — each seeds the knowledge base with the matching starter pack (51 Python methodologies, 12 DevSecOps, 1 WebDev, plus `core_v1`) and reports exactly which categories landed.
+`cam init` supports four curated domains: **python**, **webdev**, **devsecops**, and **all** — each seeds the knowledge base with the matching starter pack (51 Python methodologies, 12 DevSecOps, 1 WebDev, plus `core_v1`) and reports exactly which categories landed. Full bootstrap playbooks (pack contents, layering tips, dedup guarantees, and troubleshooting) live in [`docs/KB_BOOTSTRAP_PLAYBOOKS.md`](docs/KB_BOOTSTRAP_PLAYBOOKS.md).
 
 ### See it work before you install anything
 
