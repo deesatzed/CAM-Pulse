@@ -92,6 +92,7 @@ class ClawContext:
     self_consumer: Any = None
     assimilation_engine: Any = None
     mcp_server: Any = None  # ClawMCPServer — exposed via MCP protocol for external agents
+    ganglion_pool: Any = None  # GanglionRepositoryPool — Path C Fix 2 write-back for federation outcomes
 
     async def close(self) -> None:
         """Cleanly shut down all components."""
@@ -112,6 +113,14 @@ class ClawContext:
                         await result
             except Exception as e:
                 logger.debug("Agent '%s' close error (non-fatal): %s", name, e)
+
+        # Close ganglion pool before primary engine so any write-back
+        # pending on a ganglion finishes cleanly.
+        if self.ganglion_pool is not None:
+            try:
+                await self.ganglion_pool.close_all()
+            except Exception as e:
+                logger.debug("GanglionRepositoryPool close error (non-fatal): %s", e)
 
         await self.llm_client.close()
         await self.engine.close()
@@ -583,6 +592,15 @@ class ClawFactory:
             except Exception as e:
                 logger.warning("GapAnalyzer creation failed (non-fatal): %s", e)
 
+        # ── Ganglion repository pool (Path C Fix 2) ────────────────
+        # Federation returns methodologies from sibling ganglion DBs,
+        # but outcomes need to be written back to the *source* ganglion
+        # so those rows can mature organically.  The pool caches one
+        # write-mode engine per ganglion for the lifetime of this ctx.
+        from claw.memory.ganglion_pool import GanglionRepositoryPool
+        primary_db_abs = str(Path(config.database.db_path).resolve())
+        ganglion_pool = GanglionRepositoryPool(primary_db_path=primary_db_abs)
+
         # ── Assemble context ───────────────────────────────────────
         ctx = ClawContext(
             config=config,
@@ -609,7 +627,14 @@ class ClawFactory:
             self_consumer=feedback.self_consumer,
             assimilation_engine=feedback.assimilation_engine,
             mcp_server=mcp_srv,
+            ganglion_pool=ganglion_pool,
         )
+
+        # SemanticMemory needs a reference to the pool so record_outcome
+        # can route ganglion writes.  We do this after ctx construction to
+        # keep the existing _build_search_stack signature stable.
+        if hasattr(search.semantic_memory, "set_ganglion_pool"):
+            search.semantic_memory.set_ganglion_pool(ganglion_pool)
 
         agent_names = list(agents.keys()) if agents else ["none"]
         logger.info(

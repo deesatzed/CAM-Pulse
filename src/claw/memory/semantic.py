@@ -48,6 +48,18 @@ class SemanticMemory:
         self.hybrid_search = hybrid_search
         self.prism_engine = prism_engine
         self.governance = governance
+        # Path C Fix 2: GanglionRepositoryPool injected by factory so that
+        # record_retrieval / record_outcome can route writes back to the
+        # source ganglion DB when a methodology came from federation.
+        self._ganglion_pool: Any = None
+
+    def set_ganglion_pool(self, pool: Any) -> None:
+        """Attach a GanglionRepositoryPool for federation write-back.
+
+        Called by the factory after construction so SemanticMemory can
+        resolve ``source_db_path`` → ganglion Repository at outcome time.
+        """
+        self._ganglion_pool = pool
 
     # Quality filter thresholds (Item 5)
     MIN_SOLUTION_LENGTH = 50
@@ -301,15 +313,62 @@ class SemanticMemory:
     # MEE: Outcome feedback loop
     # -------------------------------------------------------------------
 
-    async def record_retrieval(self, methodology_id: str) -> None:
+    async def _resolve_repository(
+        self, source_db_path: Optional[str]
+    ) -> Repository:
+        """Return the correct Repository to write to for a given source.
+
+        Path C Fix 2: if ``source_db_path`` points at a ganglion DB,
+        return the pooled ganglion Repository so outcome writes land in
+        the right place; otherwise return the primary Repository.
+
+        Failures to open a ganglion (missing file, schema error) fall
+        back to the primary repository and log a warning — the primary
+        write is still preferable to silently dropping the outcome.
+        """
+        if not source_db_path or self._ganglion_pool is None:
+            return self.repository
+        if self._ganglion_pool.is_primary(source_db_path):
+            return self.repository
+        try:
+            ganglion_repo = await self._ganglion_pool.get_repository(source_db_path)
+        except FileNotFoundError as e:
+            logger.warning(
+                "Ganglion DB missing for outcome write, falling back to primary: %s", e,
+            )
+            return self.repository
+        except Exception as e:
+            logger.warning(
+                "Failed to open ganglion repository (%s); falling back to primary: %s",
+                source_db_path, e,
+            )
+            return self.repository
+        return ganglion_repo if ganglion_repo is not None else self.repository
+
+    async def record_retrieval(
+        self,
+        methodology_id: str,
+        source_db_path: Optional[str] = None,
+    ) -> None:
         """Record that a methodology was retrieved for use.
 
         Increments retrieval_count and updates last_retrieved_at.
         Called by the orchestrator after Librarian returns past_solutions.
+
+        Args:
+            methodology_id: The methodology that was retrieved.
+            source_db_path: Optional absolute path to the source DB when
+                the methodology came from a sibling ganglion via federation.
+                When None, writes go to the primary repository.
         """
         try:
-            await self.repository.update_methodology_retrieval(methodology_id)
-            logger.debug("Recorded retrieval for methodology %s", methodology_id)
+            repo = await self._resolve_repository(source_db_path)
+            await repo.update_methodology_retrieval(methodology_id)
+            logger.debug(
+                "Recorded retrieval for methodology %s (source=%s)",
+                methodology_id,
+                source_db_path or "primary",
+            )
         except Exception as e:
             logger.warning("Failed to record retrieval for %s: %s", methodology_id, e)
 
@@ -318,6 +377,7 @@ class SemanticMemory:
         methodology_id: str,
         success: bool,
         retrieval_relevance: float = 0.5,
+        source_db_path: Optional[str] = None,
     ) -> None:
         """Record the outcome of using a retrieved methodology.
 
@@ -328,43 +388,54 @@ class SemanticMemory:
             methodology_id: The methodology that was used.
             success: True if the task succeeded, False if it failed.
             retrieval_relevance: The combined_score from the retrieval.
+            source_db_path: Optional absolute path to the source DB when
+                the methodology came from a sibling ganglion via federation.
+                When None or pointing at the primary DB, writes go to
+                ``self.repository``; otherwise they route through the
+                injected GanglionRepositoryPool.
         """
         try:
-            await self.repository.update_methodology_outcome(methodology_id, success)
+            repo = await self._resolve_repository(source_db_path)
+            await repo.update_methodology_outcome(methodology_id, success)
 
-            # Reload to get updated counters
-            methodology = await self.repository.get_methodology(methodology_id)
+            # Reload to get updated counters from the *correct* DB
+            methodology = await repo.get_methodology(methodology_id)
             if methodology is None:
                 return
 
-            # Recalculate fitness (pass latest_outcome for EMA update)
-            max_retrieval = await self._get_max_retrieval_count()
+            # Recalculate fitness (pass latest_outcome for EMA update).
+            # max_retrieval is scoped to the same DB we're writing to so
+            # the normalization is consistent for that ganglion's corpus.
+            max_retrieval = await self._get_max_retrieval_count(repo=repo)
             _, fitness_vector = compute_fitness(
                 methodology,
                 retrieval_relevance=retrieval_relevance,
                 max_retrieval_count=max_retrieval,
                 latest_outcome=success,
             )
-            await self.repository.update_methodology_fitness(methodology_id, fitness_vector)
+            await repo.update_methodology_fitness(methodology_id, fitness_vector)
 
-            # Log fitness change for time-series tracking
+            # Log fitness change for time-series tracking on the same DB
             trigger = "outcome_success" if success else "outcome_failure"
             await log_fitness_change(
-                self.repository.engine,
+                repo.engine,
                 methodology_id,
                 fitness_vector.get("total", 0.0),
                 fitness_vector,
                 trigger_event=trigger,
             )
 
-            # Evaluate lifecycle transition
+            # Evaluate lifecycle transition against the correct repository.
+            # apply_transition persists the new state via repo.update_*,
+            # so ganglion rows get promoted in the ganglion DB — not main.
             from claw.memory.lifecycle import apply_transition
-            await apply_transition(methodology, self.repository)
+            await apply_transition(methodology, repo)
 
             logger.debug(
-                "Recorded outcome (success=%s) for methodology %s, fitness=%.3f",
+                "Recorded outcome (success=%s) for methodology %s in %s, fitness=%.3f",
                 success,
                 methodology_id,
+                source_db_path or "primary",
                 fitness_vector.get("total", 0.0),
             )
         except Exception as e:
@@ -445,12 +516,23 @@ class SemanticMemory:
         logger.info("PRISM backfill complete: %s", stats)
         return stats
 
-    async def _get_max_retrieval_count(self) -> int:
-        """Get the maximum retrieval_count across active methodologies."""
+    async def _get_max_retrieval_count(
+        self,
+        repo: Optional[Repository] = None,
+    ) -> int:
+        """Get the maximum retrieval_count across active methodologies.
+
+        Args:
+            repo: Repository to query. Defaults to the primary repository
+                so existing callers keep working; Path C Fix 2 passes
+                a ganglion Repository so fitness normalization is scoped
+                to that ganglion's corpus.
+        """
+        target = repo if repo is not None else self.repository
         try:
             active: list[Methodology] = []
             for state in ("viable", "thriving", "embryonic"):
-                batch = await self.repository.get_methodologies_by_state(state, limit=500)
+                batch = await target.get_methodologies_by_state(state, limit=500)
                 active.extend(batch)
             if not active:
                 return 1
