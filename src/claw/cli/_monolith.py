@@ -7947,6 +7947,52 @@ def learn_search(
     asyncio.run(_learn_search_async(query, limit, verbose, config))
 
 
+@learn_app.command(name="backfill-components")
+def learn_backfill_components(
+    methodology_id: list[str] = typer.Option(
+        None,
+        "--methodology-id",
+        help="Specific methodology ID(s) to backfill; omit to scan methodologies with capability_data",
+    ),
+    limit: int = typer.Option(100, "--limit", "-n", help="Maximum methodologies to inspect when no IDs are provided"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Backfill component cards from existing methodologies and capability metadata."""
+    _setup_logging(verbose)
+    asyncio.run(_learn_backfill_components_async(methodology_id or None, limit, config))
+
+
+async def _learn_backfill_components_async(
+    methodology_ids: Optional[list[str]],
+    limit: int,
+    config_path: Optional[str],
+) -> None:
+    from claw.core.factory import ClawFactory
+
+    ctx = await ClawFactory.create(config_path=Path(config_path) if config_path else None)
+    try:
+        summary = await ctx.miner.backfill_components(
+            methodology_ids=methodology_ids,
+            limit=limit,
+            repository=ctx.repository,
+        )
+        console.print("\n[bold]CAM-SEQ Component Backfill[/bold]")
+        console.print(f"  Methodologies scanned: [bold]{summary.get('methodologies', 0)}[/bold]")
+        console.print(f"  Components created:    [green]{summary.get('created', 0)}[/green]")
+        console.print(f"  Components updated:    [cyan]{summary.get('updated', 0)}[/cyan]")
+        console.print(f"  Components skipped:    [yellow]{summary.get('skipped', 0)}[/yellow]")
+        skip_reasons = summary.get("skip_reasons", []) or []
+        if skip_reasons:
+            console.print("\n[bold]Skip Reasons[/bold]")
+            for item in skip_reasons[:20]:
+                console.print(
+                    f"  - {item.get('methodology_id', '?')[:8]}: {item.get('reason', 'unknown')}"
+                )
+    finally:
+        await ctx.close()
+
+
 async def _learn_search_async(
     query: str, limit: int, verbose: bool, config_path: Optional[str]
 ) -> None:

@@ -58,6 +58,61 @@ class EscalateInput(BaseModel):
     task_id: Optional[str] = Field(default=None, description="ID of the task being escalated")
 
 
+class DecomposeTaskInput(BaseModel):
+    """Input for claw_decompose_task."""
+    task_text: str = Field(..., description="Task to decompose into slots")
+    workspace_dir: Optional[str] = Field(default=None, description="Optional workspace root")
+    target_language: Optional[str] = Field(default=None, description="Optional target language hint")
+    target_stack_hints: list[str] = Field(default_factory=list, description="Optional stack hints")
+    check_commands: list[str] = Field(default_factory=list, description="Optional verification commands")
+
+
+class BuildApplicationPacketInput(BaseModel):
+    """Input for claw_build_application_packet."""
+    workspace_dir: str = Field(..., description="Workspace root for the target repository")
+    task_text: str = Field(..., description="Task request")
+    slot_name: str = Field(..., description="Slot name to build a packet for")
+    target_language: Optional[str] = Field(default=None, description="Optional language hint")
+    target_stack_hints: list[str] = Field(default_factory=list, description="Optional stack hints")
+
+
+class GetRunConnectomeInput(BaseModel):
+    """Input for claw_get_run_connectome."""
+    run_id: str = Field(..., description="Reviewed run identifier")
+
+
+class TraceFailureInput(BaseModel):
+    """Input for claw_trace_failure."""
+    run_id: str = Field(..., description="Reviewed run identifier")
+    root: Optional[str] = Field(default=None, description="Optional failure root such as test:<name>")
+
+
+class PromoteRecipeInput(BaseModel):
+    """Input for claw_promote_recipe."""
+    run_id: str = Field(..., description="Reviewed run identifier")
+    recipe_name: str = Field(..., description="Recipe name to promote")
+    minimum_sample_size: int = Field(default=5, ge=1, description="Minimum sample size gate")
+
+
+class QueueMiningMissionInput(BaseModel):
+    """Input for claw_queue_mining_mission."""
+    run_id: str = Field(..., description="Reviewed run identifier")
+    slot_family: str = Field(..., description="Slot family or gap family to mine")
+    priority: str = Field(default="medium", description="Mission priority")
+    reason: str = Field(..., description="Why the mining mission is needed")
+
+
+class RequestSpecialistPacketInput(BaseModel):
+    """Input for claw_request_specialist_packet."""
+    task_text: str = Field(..., description="Task request that needs specialist packet help")
+    slot_name: Optional[str] = Field(default=None, description="Optional target slot name")
+    preferred_agent: Optional[Literal["claude", "codex", "gemini", "grok"]] = Field(
+        default=None, description="Preferred specialist agent"
+    )
+    target_language: Optional[str] = Field(default=None, description="Optional language hint")
+    limit: int = Field(default=5, ge=1, le=20, description="Maximum packet candidates to return")
+
+
 # ---------------------------------------------------------------------------
 # Tool metadata registry
 # ---------------------------------------------------------------------------
@@ -82,6 +137,34 @@ TOOL_METADATA: dict[str, tuple[type[BaseModel], str]] = {
     "claw_escalate": (
         EscalateInput,
         "Flag a task as beyond AI capability and escalate to human review.",
+    ),
+    "claw_decompose_task": (
+        DecomposeTaskInput,
+        "Decompose a task into CAM-SEQ archetype and slot structure.",
+    ),
+    "claw_build_application_packet": (
+        BuildApplicationPacketInput,
+        "Build a CAM-SEQ application packet for a specific slot.",
+    ),
+    "claw_get_run_connectome": (
+        GetRunConnectomeInput,
+        "Return the stored connectome for a reviewed CAM-SEQ run.",
+    ),
+    "claw_trace_failure": (
+        TraceFailureInput,
+        "Trace a reviewed CAM-SEQ failure backward through its causal chain.",
+    ),
+    "claw_promote_recipe": (
+        PromoteRecipeInput,
+        "Promote a successful reviewed run into a compiled recipe.",
+    ),
+    "claw_queue_mining_mission": (
+        QueueMiningMissionInput,
+        "Queue a durable mining mission from a reviewed run gap.",
+    ),
+    "claw_request_specialist_packet": (
+        RequestSpecialistPacketInput,
+        "Request a structured specialist packet recommendation with packet candidates and routing guidance.",
     ),
 }
 

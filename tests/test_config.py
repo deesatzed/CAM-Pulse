@@ -8,6 +8,7 @@ from claw.core.config import (
     ClawConfig,
     DatabaseConfig,
     FleetConfig,
+    FeatureFlagsConfig,
     RoutingConfig,
     load_config,
 )
@@ -75,3 +76,11 @@ class TestDefaults:
         ac = AgentConfig()
         assert ac.enabled is False
         assert ac.mode == "cli"
+
+    def test_feature_flags_default(self):
+        flags = FeatureFlagsConfig()
+        assert flags.component_cards is False
+        assert flags.application_packets is False
+        assert flags.connectome_seq is False
+        assert flags.critical_slot_policy is False
+        assert flags.a2a_packets is False

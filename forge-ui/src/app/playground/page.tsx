@@ -2,17 +2,19 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
+  createPlan,
   executeTask,
+  getConfig,
   getSessionStatus,
   getSessionCorrections,
   type SessionStatus,
   type GateResult,
   type CorrectionEntry,
 } from "@/lib/api";
-import { Card, CardTitle, StatCard } from "@/components/card";
+import { Card, CardTitle } from "@/components/card";
 import { ErrorBanner } from "@/components/error-banner";
-import { Skeleton, SkeletonGrid } from "@/components/skeleton";
 
 // ---------------------------------------------------------------------------
 // Gate metadata (educational reference)
@@ -348,6 +350,7 @@ function ResultPanel({ session }: { session: SessionStatus }) {
 // ---------------------------------------------------------------------------
 
 export default function PlaygroundPage() {
+  const router = useRouter();
   const [taskDescription, setTaskDescription] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionStatus | null>(null);
@@ -355,7 +358,27 @@ export default function PlaygroundPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  const [packetReviewEnabled, setPacketReviewEnabled] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadConfig = async () => {
+      try {
+        const config = await getConfig();
+        const enabled = Boolean(
+          (config as { feature_flags?: { application_packets?: boolean } }).feature_flags?.application_packets
+        );
+        if (!cancelled) setPacketReviewEnabled(enabled);
+      } catch {
+        if (!cancelled) setPacketReviewEnabled(false);
+      }
+    };
+    loadConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Poll for session status
   useEffect(() => {
@@ -408,6 +431,16 @@ export default function PlaygroundPage() {
     setSessionId(null);
 
     try {
+      if (packetReviewEnabled) {
+        const plan = await createPlan({
+          task_text: desc,
+          execution_mode: "interactive",
+          check_commands: ["pytest -q"],
+        });
+        router.push(`/playground/plan/${plan.plan_id}`);
+        return;
+      }
+
       const result = await executeTask(desc);
       setSessionId(result.session_id);
     } catch (e) {
@@ -415,7 +448,7 @@ export default function PlaygroundPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [taskDescription]);
+  }, [packetReviewEnabled, router, taskDescription]);
 
   const isRunning = session?.status === "running" || session?.status === "starting";
   const isDone = session?.status === "completed" || session?.status === "failed" || session?.status === "error";
@@ -492,14 +525,16 @@ export default function PlaygroundPage() {
           />
           <div className="flex items-center justify-between">
             <div className="text-xs text-muted">
-              Executes with real MicroClaw cycle: grab → evaluate → decide → act → verify → learn
+              {packetReviewEnabled
+                ? "Creates a pre-mutation application packet plan before any write happens."
+                : "Executes with real MicroClaw cycle: grab → evaluate → decide → act → verify → learn"}
             </div>
             <button
               onClick={handleSubmit}
               disabled={submitting || isRunning || !taskDescription.trim()}
               className="px-5 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              {submitting ? "Submitting..." : isRunning ? "Running..." : "Execute"}
+              {submitting ? "Submitting..." : isRunning ? "Running..." : packetReviewEnabled ? "Review Plan" : "Execute"}
             </button>
           </div>
         </div>

@@ -13,6 +13,8 @@
   --purple: #d2a8ff;
   --muted: #8b949e;
   --muted-dark: #484f58;
+  --font-geist-sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --font-geist-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace;
 }
 
 @theme inline {

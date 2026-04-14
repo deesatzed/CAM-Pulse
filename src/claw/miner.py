@@ -16,17 +16,32 @@ import os
 import re
 import time
 import hashlib
-import ast
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from claw.core.config import AgentConfig, BrainConfig, ClawConfig, DatabaseConfig
-from claw.core.models import ActionTemplate, Methodology, Project, Task, TaskStatus
+from claw.core.models import (
+    ActionTemplate,
+    ComponentCard,
+    ComponentFit,
+    CoverageState,
+    FitBucket,
+    Methodology,
+    Project,
+    Receipt,
+    Task,
+    TaskStatus,
+    TransferMode,
+)
+from claw.connectome.barcodes import build_family_barcode, build_source_barcode
+from claw.connectome.lineage import build_initial_lineage, rebuild_lineage_stats
 from claw.db.engine import DatabaseEngine
 from claw.db.repository import Repository
 from claw.llm.client import LLMClient, LLMMessage, LLMResponse
+from claw.mining.component_extractor import extract_components_from_file
+from claw.mining.scip_loader import load_repo_scip
 from claw.memory.semantic import SemanticMemory
 from claw.memory.cag_staleness import maybe_mark_cag_stale
 
@@ -1251,85 +1266,54 @@ class RepoMiner:
         self._assimilation_parallelism = 4
 
     @staticmethod
-    def _extract_symbols_from_file(repo_path: Path, relative_path: str, max_symbols: int = 8) -> list[dict[str, str]]:
+    def _extract_symbols_from_file(repo_path: Path, relative_path: str, max_symbols: int = 8) -> list[dict[str, Any]]:
         """Extract concrete class/function/module references from a source file."""
-        path = repo_path / relative_path
-        if not path.is_file():
-            return []
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return []
-
-        symbols: list[dict[str, str]] = []
-        module_name = path.stem
-        symbols.append(
-            {
-                "file_path": relative_path,
-                "symbol_name": module_name,
-                "symbol_kind": "module",
-                "note": "module derived from source file",
-            }
+        components = extract_components_from_file(
+            repo_path,
+            relative_path,
+            max_components=max_symbols,
         )
+        return [
+            {
+                "file_path": component.file_path,
+                "symbol_name": component.symbol_name,
+                "symbol_kind": component.symbol_kind,
+                "line_start": component.line_start,
+                "line_end": component.line_end,
+                "provenance_precision": "precise_symbol" if component.line_start else "symbol",
+                "note": component.note,
+            }
+            for component in components
+        ]
 
-        suffix = path.suffix.lower()
-        if suffix == ".py":
-            try:
-                tree = ast.parse(text)
-                for node in tree.body:
-                    if isinstance(node, ast.ClassDef):
-                        symbols.append(
-                            {
-                                "file_path": relative_path,
-                                "symbol_name": node.name,
-                                "symbol_kind": "class",
-                                "note": "top-level class definition",
-                            }
-                        )
-                    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        symbols.append(
-                            {
-                                "file_path": relative_path,
-                                "symbol_name": node.name,
-                                "symbol_kind": "function",
-                                "note": "top-level function definition",
-                            }
-                        )
-            except SyntaxError:
-                pass
-        else:
-            patterns: list[tuple[str, str]] = [
-                (r"(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
-                (r"class\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
-                (r"(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(", "function"),
-                (r"func\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
-                (r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(?:struct|interface)", "class"),
-                (r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)", "function"),
-                (r"\b(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
-                (r"\b(?:class|interface|record)\s+([A-Za-z_][A-Za-z0-9_]*)", "class"),
-            ]
-            for pattern, kind in patterns:
-                for match in re.finditer(pattern, text):
-                    symbols.append(
-                        {
-                            "file_path": relative_path,
-                            "symbol_name": match.group(1),
-                            "symbol_kind": kind,
-                            "note": f"heuristically extracted {kind}",
-                        }
-                    )
+    @staticmethod
+    def _apply_scip_precision(
+        symbols: list[dict[str, Any]],
+        repo_path: Path,
+    ) -> list[dict[str, Any]]:
+        _index_path, scip_symbols = load_repo_scip(repo_path)
+        if not scip_symbols:
+            return symbols
 
-        deduped: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
-        for item in symbols:
-            ident = (item["file_path"], item["symbol_name"], item["symbol_kind"])
-            if ident in seen:
-                continue
-            seen.add(ident)
-            deduped.append(item)
-            if len(deduped) >= max_symbols:
-                break
-        return deduped
+        by_key: dict[tuple[str, str], Any] = {}
+        for record in scip_symbols:
+            symbol_key = record.symbol.split()[-1] if record.symbol else record.symbol
+            by_key[(record.file_path, symbol_key)] = record
+
+        upgraded: list[dict[str, Any]] = []
+        for symbol in symbols:
+            item = dict(symbol)
+            match = by_key.get((item.get("file_path", ""), item.get("symbol_name", "")))
+            if match is not None:
+                if getattr(match, "line_start", None) is not None:
+                    item["line_start"] = match.line_start
+                if getattr(match, "line_end", None) is not None:
+                    item["line_end"] = match.line_end
+                item["provenance_precision"] = "precise_symbol"
+                note = item.get("note", "")
+                item["note"] = f"{note}; scip_matched".strip("; ")
+            upgraded.append(item)
+        return upgraded
 
     @staticmethod
     def _score_symbol_relevance(symbol: dict[str, str], finding: MiningFinding) -> int:
@@ -1358,11 +1342,12 @@ class RepoMiner:
         for finding in findings:
             if finding.source_symbols:
                 continue
-            candidates: list[dict[str, str]] = []
+            candidates: list[dict[str, Any]] = []
             for relative_path in finding.source_files:
                 candidates.extend(self._extract_symbols_from_file(repo_path, relative_path))
+            candidates = self._apply_scip_precision(candidates, repo_path)
             candidates.sort(key=lambda item: self._score_symbol_relevance(item, finding), reverse=True)
-            deduped: list[dict[str, str]] = []
+            deduped: list[dict[str, Any]] = []
             seen: set[tuple[str, str, str]] = set()
             for item in candidates:
                 ident = (item["file_path"], item["symbol_name"], item["symbol_kind"])
@@ -1388,6 +1373,9 @@ class RepoMiner:
                 "file_path": path,
                 "symbol_name": None,
                 "symbol_kind": "file",
+                "line_start": None,
+                "line_end": None,
+                "provenance_precision": "file",
                 "note": f"Mined from {finding.source_repo}",
             }
             for path in finding.source_files
@@ -1398,6 +1386,9 @@ class RepoMiner:
                     "file_path": symbol.get("file_path", ""),
                     "symbol_name": symbol.get("symbol_name"),
                     "symbol_kind": symbol.get("symbol_kind", "symbol"),
+                    "line_start": symbol.get("line_start"),
+                    "line_end": symbol.get("line_end"),
+                    "provenance_precision": symbol.get("provenance_precision", "symbol"),
                     "note": symbol.get("note", ""),
                 }
             )
@@ -1437,6 +1428,280 @@ class RepoMiner:
             "evidence": [f"source_file:{path}" for path in finding.source_files],
             "license_type": getattr(self, "_current_mine_metadata", {}).get("license_type", ""),
         }
+
+    @staticmethod
+    def _infer_component_type(text: str, symbol_kind: str, category: str) -> str:
+        lowered = text.lower()
+        if "fixture" in lowered or category == "testing":
+            return "test_fixture"
+        if any(tok in lowered for tok in ("validate", "validator", "schema", "clean")):
+            return "validator"
+        if any(tok in lowered for tok in ("worker", "queue", "consumer", "processor", "job")):
+            return "queue_worker"
+        if any(tok in lowered for tok in ("client", "oauth", "token", "auth", "session")):
+            return "api_client"
+        if any(tok in lowered for tok in ("route", "router", "endpoint", "handler")):
+            return "route_handler"
+        if any(tok in lowered for tok in ("config", "settings", "option")):
+            return "config_helper"
+        if any(tok in lowered for tok in ("parse", "parser", "transform", "csv", "json")):
+            return "parser"
+        if symbol_kind == "class":
+            return "class_component"
+        return "helper"
+
+    @staticmethod
+    def _infer_abstract_jobs(component_type: str, text: str) -> list[str]:
+        lowered = text.lower()
+        jobs: list[str] = []
+        if component_type == "api_client":
+            if "token" in lowered or "refresh" in lowered:
+                jobs.append("token_refresh_serialization")
+            if "auth" in lowered or "oauth" in lowered:
+                jobs.append("authenticated_api_client")
+        if component_type == "queue_worker":
+            jobs.append("idempotent_event_processor")
+        if component_type == "test_fixture":
+            jobs.append("tempdir_test_fixture")
+        if component_type == "parser":
+            jobs.append("streaming_response_normalization" if "stream" in lowered else "parser_transform")
+        if "retry" in lowered or "backoff" in lowered:
+            jobs.append("retry_with_backoff")
+        if not jobs:
+            jobs.append(component_type)
+        return list(dict.fromkeys(jobs))
+
+    @staticmethod
+    def _artifact_content_hash(methodology: Methodology, artifact: dict[str, Any]) -> str:
+        payload = "|".join(
+            [
+                methodology.id,
+                str(artifact.get("file_path", "")),
+                str(artifact.get("symbol_name", "")),
+                methodology.problem_description or "",
+                methodology.solution_code[:500] if methodology.solution_code else "",
+            ]
+        )
+        return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+
+    async def _upsert_component_from_artifact(
+        self,
+        methodology: Methodology,
+        artifact: dict[str, Any],
+        *,
+        repository: Repository,
+    ) -> tuple[str, Optional[ComponentCard]]:
+        file_path = str(artifact.get("file_path", "")).strip()
+        if not file_path:
+            return "skipped", None
+
+        symbol_name = str(artifact.get("symbol_name", "")).strip() or None
+        symbol_kind = str(artifact.get("symbol_kind", "file")).strip() or "file"
+        line_start = artifact.get("line_start")
+        line_end = artifact.get("line_end")
+        provenance_precision = str(
+            artifact.get("provenance_precision")
+            or ("precise_symbol" if line_start is not None else ("symbol" if symbol_name else "file"))
+        )
+        source_repo = (
+            ((methodology.capability_data or {}).get("source_repos") or [None])[0]
+            or next((tag.split(":", 1)[1] for tag in methodology.tags if tag.startswith("source:")), "unknown")
+        )
+        title = symbol_name or Path(file_path).stem or methodology.problem_description[:80]
+        descriptor = " ".join(
+            [
+                title,
+                methodology.problem_description,
+                methodology.methodology_notes or "",
+                " ".join(methodology.tags or []),
+                symbol_kind,
+            ]
+        )
+        component_type = self._infer_component_type(
+            descriptor,
+            symbol_kind=symbol_kind,
+            category=((methodology.capability_data or {}).get("domain") or [""])[0],
+        )
+        abstract_jobs = self._infer_abstract_jobs(component_type, descriptor)
+        family_barcode = build_family_barcode(component_type, abstract_jobs[0])
+        content_hash = self._artifact_content_hash(methodology, artifact)
+        source_barcode = build_source_barcode(
+            source_repo,
+            file_path,
+            content_hash,
+            symbol_name=symbol_name,
+        )
+
+        existing = await repository.find_component_by_source_barcode(source_barcode)
+        if existing is not None:
+            return "updated", await repository.upsert_component_card(existing.model_copy(
+                update={
+                    "methodology_id": methodology.id,
+                    "title": title,
+                    "component_type": component_type,
+                    "abstract_jobs": abstract_jobs,
+                    "language": methodology.language,
+                    "frameworks": list((methodology.capability_data or {}).get("dependencies", [])),
+                    "constraints": list((methodology.capability_data or {}).get("non_applicability", [])),
+                    "applicability": list((methodology.capability_data or {}).get("applicability", [])),
+                    "non_applicability": list((methodology.capability_data or {}).get("non_applicability", [])),
+                    "adaptation_notes": [methodology.methodology_notes] if methodology.methodology_notes else [],
+                    "risk_notes": list((methodology.capability_data or {}).get("risks", [])),
+                    "keywords": list(dict.fromkeys([*abstract_jobs, component_type, *(methodology.tags or [])])),
+                }
+            ))
+
+        lineage = await repository.find_lineage_by_hash(content_hash)
+        if lineage is None or lineage.family_barcode != family_barcode:
+            lineage = build_initial_lineage(
+                ComponentCard(
+                    methodology_id=methodology.id,
+                    title=title,
+                    component_type=component_type,
+                    abstract_jobs=abstract_jobs,
+                    receipt=Receipt(
+                        source_barcode=source_barcode,
+                        family_barcode=family_barcode,
+                        lineage_id="pending",
+                        repo=source_repo,
+                        file_path=file_path,
+                        symbol=symbol_name,
+                        line_start=line_start,
+                        line_end=line_end,
+                        content_hash=content_hash,
+                        provenance_precision=provenance_precision,
+                    ),
+                    language=methodology.language,
+                )
+            )
+            await repository.upsert_component_lineage(lineage)
+
+        receipt = Receipt(
+            source_barcode=source_barcode,
+            family_barcode=family_barcode,
+            lineage_id=lineage.id,
+            repo=source_repo,
+            file_path=file_path,
+            symbol=symbol_name,
+            line_start=line_start,
+            line_end=line_end,
+            content_hash=content_hash,
+            provenance_precision=provenance_precision,
+        )
+        card = ComponentCard(
+            methodology_id=methodology.id,
+            title=title,
+            component_type=component_type,
+            abstract_jobs=abstract_jobs,
+            receipt=receipt,
+            language=methodology.language,
+            frameworks=list((methodology.capability_data or {}).get("dependencies", [])),
+            dependencies=list((methodology.capability_data or {}).get("dependencies", [])),
+            constraints=list((methodology.capability_data or {}).get("non_applicability", [])),
+            test_evidence=list((methodology.capability_data or {}).get("evidence", [])),
+            applicability=list((methodology.capability_data or {}).get("applicability", [])),
+            non_applicability=list((methodology.capability_data or {}).get("non_applicability", [])),
+            adaptation_notes=[methodology.methodology_notes] if methodology.methodology_notes else [],
+            risk_notes=list((methodology.capability_data or {}).get("risks", [])),
+            keywords=list(dict.fromkeys([*abstract_jobs, component_type, *(methodology.tags or [])])),
+            coverage_state=CoverageState.WEAK if symbol_name else CoverageState.UNCOVERED,
+        )
+        saved = await repository.upsert_component_card(card)
+
+        lineage_components = await repository.list_lineage_components(lineage.id)
+        if lineage_components:
+            full_cards: list[ComponentCard] = []
+            for item in lineage_components:
+                found = await repository.get_component_card(item.id)
+                if found is not None:
+                    full_cards.append(found)
+            if full_cards:
+                rebuilt = rebuild_lineage_stats(lineage, full_cards)
+                await repository.upsert_component_lineage(rebuilt)
+
+        existing_fit = await repository.find_component_fit(
+            task_archetype=None,
+            slot_signature=abstract_jobs[0],
+            component_type=component_type,
+            limit=10,
+        )
+        if not any(row.component_id == saved.id for row in existing_fit):
+            await repository.save_component_fit(
+                ComponentFit(
+                    component_id=saved.id,
+                    task_archetype=None,
+                    component_type=component_type,
+                    slot_signature=abstract_jobs[0],
+                    fit_bucket=FitBucket.MAY_HELP,
+                    transfer_mode=TransferMode.HEURISTIC_FALLBACK,
+                    confidence=0.55 if symbol_name else 0.35,
+                    confidence_basis=["methodology_backfill", "source_artifact"],
+                    evidence_count=max(1, len((methodology.capability_data or {}).get("evidence", []))),
+                    notes=["seeded from methodology capability_data"],
+                )
+            )
+        return "created", saved
+
+    async def backfill_components(
+        self,
+        *,
+        methodology_ids: Optional[list[str]] = None,
+        limit: int = 100,
+        repository: Optional[Repository] = None,
+    ) -> dict[str, Any]:
+        repo = repository or self.repository
+        if methodology_ids:
+            methodologies = []
+            for methodology_id in methodology_ids:
+                methodology = await repo.get_methodology(methodology_id)
+                if methodology is not None:
+                    methodologies.append(methodology)
+        else:
+            methodologies = await repo.get_methodologies_with_capabilities(limit=limit)
+
+        summary = {"created": 0, "updated": 0, "skipped": 0, "methodologies": len(methodologies), "skip_reasons": []}
+        for methodology in methodologies:
+            capability_data = methodology.capability_data or {}
+            artifacts = list(capability_data.get("source_artifacts") or [])
+            if not artifacts:
+                artifacts = [
+                    {
+                        "file_path": path,
+                        "symbol_name": None,
+                        "symbol_kind": "file",
+                        "note": "files_affected fallback",
+                    }
+                    for path in (methodology.files_affected or [])
+                    if path
+                ]
+            if not artifacts:
+                summary["skipped"] += 1
+                summary["skip_reasons"].append(
+                    {"methodology_id": methodology.id, "reason": "no_source_artifacts"}
+                )
+                continue
+
+            method_created = 0
+            method_updated = 0
+            for artifact in artifacts:
+                status, _card = await self._upsert_component_from_artifact(
+                    methodology,
+                    artifact,
+                    repository=repo,
+                )
+                if status == "created":
+                    summary["created"] += 1
+                    method_created += 1
+                elif status == "updated":
+                    summary["updated"] += 1
+                    method_updated += 1
+                else:
+                    summary["skipped"] += 1
+            if method_created == 0 and method_updated == 0:
+                summary["skip_reasons"].append(
+                    {"methodology_id": methodology.id, "reason": "artifacts_not_actionable"}
+                )
+        return summary
 
     def _get_prompt_template(self, prompt_name: str = "repo-mine.md") -> str:
         """Load a mining prompt template from the prompts/ directory.
@@ -2495,10 +2760,12 @@ class RepoMiner:
             files_affected=finding.source_files,
         )
 
+        capability_data = self._seed_capability_data_from_finding(finding)
         await repo.update_methodology_capability_data(
             methodology.id,
-            self._seed_capability_data_from_finding(finding),
+            capability_data,
         )
+        methodology.capability_data = capability_data
 
         logger.debug("Stored finding '%s' as methodology %s", finding.title, methodology.id)
 
@@ -2530,6 +2797,19 @@ class RepoMiner:
                 await self.assimilation_engine.assimilate(methodology.id)
             except Exception as e:
                 logger.warning("Assimilation failed for %s: %s", methodology.id, e)
+
+        if getattr(self.config.feature_flags, "component_cards", False):
+            try:
+                await self.backfill_components(
+                    methodology_ids=[methodology.id],
+                    repository=repo,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Component backfill failed for methodology %s: %s",
+                    methodology.id,
+                    e,
+                )
 
         return methodology.id
 

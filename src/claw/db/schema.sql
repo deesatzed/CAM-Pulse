@@ -501,3 +501,316 @@ CREATE TABLE IF NOT EXISTS coverage_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_coverage_snapshots_created
     ON coverage_snapshots(created_at DESC);
+
+-- =========================================================================
+-- CAM-SEQ additive tables
+-- =========================================================================
+
+-- 24. COMPONENT_LINEAGES (deduplicated lineage families across near-duplicate components)
+CREATE TABLE IF NOT EXISTS component_lineages (
+    id TEXT PRIMARY KEY,
+    family_barcode TEXT NOT NULL,
+    canonical_content_hash TEXT NOT NULL,
+    canonical_title TEXT,
+    language TEXT,
+    lineage_size INTEGER NOT NULL DEFAULT 1,
+    deduped_support_count INTEGER NOT NULL DEFAULT 1,
+    clone_inflated INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_component_lineages_family ON component_lineages(family_barcode);
+CREATE INDEX IF NOT EXISTS idx_component_lineages_hash ON component_lineages(canonical_content_hash);
+
+-- 25. COMPONENT_CARDS (precise reusable implementation units with receipts)
+CREATE TABLE IF NOT EXISTS component_cards (
+    id TEXT PRIMARY KEY,
+    methodology_id TEXT REFERENCES methodologies(id) ON DELETE SET NULL,
+    lineage_id TEXT NOT NULL REFERENCES component_lineages(id) ON DELETE CASCADE,
+    source_barcode TEXT NOT NULL UNIQUE,
+    family_barcode TEXT NOT NULL,
+    title TEXT NOT NULL,
+    component_type TEXT NOT NULL,
+    abstract_jobs_json TEXT NOT NULL DEFAULT '[]',
+    repo TEXT NOT NULL,
+    commit_sha TEXT,
+    file_path TEXT NOT NULL,
+    symbol_name TEXT,
+    line_start INTEGER,
+    line_end INTEGER,
+    content_hash TEXT NOT NULL,
+    provenance_precision TEXT NOT NULL,
+    language TEXT,
+    frameworks_json TEXT NOT NULL DEFAULT '[]',
+    dependencies_json TEXT NOT NULL DEFAULT '[]',
+    constraints_json TEXT NOT NULL DEFAULT '[]',
+    inputs_json TEXT NOT NULL DEFAULT '[]',
+    outputs_json TEXT NOT NULL DEFAULT '[]',
+    test_evidence_json TEXT NOT NULL DEFAULT '[]',
+    applicability_json TEXT NOT NULL DEFAULT '[]',
+    non_applicability_json TEXT NOT NULL DEFAULT '[]',
+    adaptation_notes_json TEXT NOT NULL DEFAULT '[]',
+    risk_notes_json TEXT NOT NULL DEFAULT '[]',
+    keywords_json TEXT NOT NULL DEFAULT '[]',
+    coverage_state TEXT NOT NULL DEFAULT 'weak',
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_component_cards_family ON component_cards(family_barcode);
+CREATE INDEX IF NOT EXISTS idx_component_cards_lineage ON component_cards(lineage_id);
+CREATE INDEX IF NOT EXISTS idx_component_cards_repo ON component_cards(repo);
+CREATE INDEX IF NOT EXISTS idx_component_cards_type ON component_cards(component_type);
+CREATE INDEX IF NOT EXISTS idx_component_cards_language ON component_cards(language);
+
+-- 26. COMPONENT_FIT (heuristic or learned fit for a component under a slot/task pattern)
+CREATE TABLE IF NOT EXISTS component_fit (
+    id TEXT PRIMARY KEY,
+    component_id TEXT NOT NULL REFERENCES component_cards(id) ON DELETE CASCADE,
+    task_archetype TEXT,
+    component_type TEXT,
+    slot_signature TEXT,
+    fit_bucket TEXT NOT NULL,
+    transfer_mode TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    confidence_basis_json TEXT NOT NULL DEFAULT '[]',
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    notes_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_component_fit_component ON component_fit(component_id);
+CREATE INDEX IF NOT EXISTS idx_component_fit_archetype ON component_fit(task_archetype);
+CREATE INDEX IF NOT EXISTS idx_component_fit_slot_signature ON component_fit(slot_signature);
+
+-- 27. TASK_PLANS (durable reviewed plan records)
+CREATE TABLE IF NOT EXISTS task_plans (
+    id TEXT PRIMARY KEY,
+    task_text TEXT NOT NULL,
+    workspace_dir TEXT,
+    branch TEXT,
+    target_brain TEXT,
+    execution_mode TEXT,
+    check_commands_json TEXT NOT NULL DEFAULT '[]',
+    task_archetype TEXT NOT NULL,
+    archetype_confidence REAL NOT NULL DEFAULT 0.0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    approved_slot_ids_json TEXT NOT NULL DEFAULT '[]',
+    plan_json TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_plans_archetype ON task_plans(task_archetype);
+CREATE INDEX IF NOT EXISTS idx_task_plans_status ON task_plans(status);
+
+-- 28. SLOT_INSTANCES (persisted slot definitions for reviewed plans and later runs)
+CREATE TABLE IF NOT EXISTS slot_instances (
+    id TEXT PRIMARY KEY,
+    slot_barcode TEXT NOT NULL,
+    task_archetype TEXT,
+    name TEXT NOT NULL,
+    abstract_job TEXT NOT NULL,
+    risk TEXT NOT NULL DEFAULT 'normal',
+    constraints_json TEXT NOT NULL DEFAULT '[]',
+    target_stack_json TEXT NOT NULL DEFAULT '[]',
+    proof_expectations_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_slot_instances_barcode ON slot_instances(slot_barcode);
+CREATE INDEX IF NOT EXISTS idx_slot_instances_archetype ON slot_instances(task_archetype);
+
+-- 29. APPLICATION_PACKETS (durable packet records for plan review and reuse)
+CREATE TABLE IF NOT EXISTS application_packets (
+    id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    task_archetype TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    packet_json TEXT NOT NULL,
+    selected_component_id TEXT NOT NULL REFERENCES component_cards(id) ON DELETE RESTRICT,
+    review_required INTEGER NOT NULL DEFAULT 0,
+    coverage_state TEXT NOT NULL DEFAULT 'weak',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_application_packets_plan ON application_packets(plan_id);
+CREATE INDEX IF NOT EXISTS idx_application_packets_slot ON application_packets(slot_id);
+CREATE INDEX IF NOT EXISTS idx_application_packets_selected ON application_packets(selected_component_id);
+
+-- 30. PAIR_EVENTS (runtime slot-to-component selection events)
+CREATE TABLE IF NOT EXISTS pair_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    slot_barcode TEXT NOT NULL,
+    packet_id TEXT NOT NULL REFERENCES application_packets(id) ON DELETE CASCADE,
+    component_id TEXT NOT NULL REFERENCES component_cards(id) ON DELETE RESTRICT,
+    source_barcode TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    confidence_basis_json TEXT NOT NULL DEFAULT '[]',
+    replacement_of_pair_id TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pair_events_run ON pair_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_pair_events_slot ON pair_events(slot_id);
+CREATE INDEX IF NOT EXISTS idx_pair_events_packet ON pair_events(packet_id);
+
+-- 31. LANDING_EVENTS (where packet-guided changes landed in the target repo)
+CREATE TABLE IF NOT EXISTS landing_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    packet_id TEXT NOT NULL REFERENCES application_packets(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    symbol_name TEXT,
+    diff_hunk_id TEXT,
+    origin TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_landing_events_run ON landing_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_landing_events_slot ON landing_events(slot_id);
+CREATE INDEX IF NOT EXISTS idx_landing_events_file ON landing_events(file_path);
+
+-- 32. OUTCOME_EVENTS (sequenced proof and verification result per slot)
+CREATE TABLE IF NOT EXISTS outcome_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    packet_id TEXT NOT NULL REFERENCES application_packets(id) ON DELETE CASCADE,
+    success INTEGER NOT NULL,
+    verifier_findings_json TEXT NOT NULL DEFAULT '[]',
+    test_refs_json TEXT NOT NULL DEFAULT '[]',
+    negative_memory_updates_json TEXT NOT NULL DEFAULT '[]',
+    recipe_eligible INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outcome_events_run ON outcome_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_outcome_events_slot ON outcome_events(slot_id);
+CREATE INDEX IF NOT EXISTS idx_outcome_events_packet ON outcome_events(packet_id);
+
+-- 33. RUN_CONNECTOMES (run-level connectome metadata)
+CREATE TABLE IF NOT EXISTS run_connectomes (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE,
+    task_archetype TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- 34. RUN_CONNECTOME_EDGES (persisted graph edges for a run connectome)
+CREATE TABLE IF NOT EXISTS run_connectome_edges (
+    id TEXT PRIMARY KEY,
+    connectome_id TEXT NOT NULL REFERENCES run_connectomes(id) ON DELETE CASCADE,
+    source_node TEXT NOT NULL,
+    target_node TEXT NOT NULL,
+    edge_type TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_run_connectome_edges_connectome ON run_connectome_edges(connectome_id);
+CREATE INDEX IF NOT EXISTS idx_run_connectome_edges_type ON run_connectome_edges(edge_type);
+
+-- 35. RUN_SLOT_EXECUTIONS (durable slot-level runtime state for reviewed runs)
+CREATE TABLE IF NOT EXISTS run_slot_executions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    packet_id TEXT REFERENCES application_packets(id) ON DELETE SET NULL,
+    selected_component_id TEXT REFERENCES component_cards(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    current_step TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_retry_detail TEXT,
+    replacement_count INTEGER NOT NULL DEFAULT 0,
+    blocked_wait_ms INTEGER NOT NULL DEFAULT 0,
+    family_wait_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(run_id, slot_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_slot_executions_run ON run_slot_executions(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_slot_executions_status ON run_slot_executions(status);
+
+-- 36. RUN_EVENTS (durable event stream for reviewed run supervision)
+CREATE TABLE IF NOT EXISTS run_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_events_slot ON run_events(slot_id);
+CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(event_type);
+
+-- 37. RUN_ACTION_AUDITS (durable operator/governance actions)
+CREATE TABLE IF NOT EXISTS run_action_audits (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    slot_id TEXT,
+    action_type TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'operator',
+    reason TEXT NOT NULL DEFAULT '',
+    action_payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_run_action_audits_run ON run_action_audits(run_id);
+CREATE INDEX IF NOT EXISTS idx_run_action_audits_slot ON run_action_audits(slot_id);
+CREATE INDEX IF NOT EXISTS idx_run_action_audits_type ON run_action_audits(action_type);
+
+-- 38. COMPILED_RECIPES (distilled reusable build patterns)
+CREATE TABLE IF NOT EXISTS compiled_recipes (
+    id TEXT PRIMARY KEY,
+    task_archetype TEXT NOT NULL,
+    recipe_name TEXT NOT NULL,
+    recipe_json TEXT NOT NULL DEFAULT '{}',
+    sample_size INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_compiled_recipes_archetype ON compiled_recipes(task_archetype);
+CREATE INDEX IF NOT EXISTS idx_compiled_recipes_active ON compiled_recipes(is_active);
+
+-- 39. MINING_MISSIONS (targeted acquisition backlog from review or evolution)
+CREATE TABLE IF NOT EXISTS mining_missions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT,
+    slot_family TEXT,
+    priority TEXT NOT NULL DEFAULT 'normal',
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    mission_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mining_missions_run ON mining_missions(run_id);
+CREATE INDEX IF NOT EXISTS idx_mining_missions_slot_family ON mining_missions(slot_family);
+
+-- 40. GOVERNANCE_POLICIES (durable promoted governance memory)
+CREATE TABLE IF NOT EXISTS governance_policies (
+    id TEXT PRIMARY KEY,
+    run_id TEXT,
+    task_archetype TEXT,
+    slot_id TEXT,
+    family_barcode TEXT,
+    policy_kind TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'active',
+    reason TEXT NOT NULL DEFAULT '',
+    recommendation TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    promoted_by TEXT NOT NULL DEFAULT 'operator',
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_governance_policies_kind ON governance_policies(policy_kind);
+CREATE INDEX IF NOT EXISTS idx_governance_policies_archetype ON governance_policies(task_archetype);
+CREATE INDEX IF NOT EXISTS idx_governance_policies_family ON governance_policies(family_barcode);
+CREATE INDEX IF NOT EXISTS idx_governance_policies_status ON governance_policies(status);
+CREATE INDEX IF NOT EXISTS idx_mining_missions_run ON mining_missions(run_id);
+CREATE INDEX IF NOT EXISTS idx_mining_missions_status ON mining_missions(status);

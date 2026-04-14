@@ -34,6 +34,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: "Explore",
     items: [
       { href: "/knowledge", label: "Knowledge", icon: "K" },
+      { href: "/knowledge/components", label: "Components", icon: "C" },
       { href: "/knowledge/gaps", label: "Gap Heatmap", icon: "G" },
       { href: "/federation", label: "Federation", icon: "F" },
     ],

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -126,6 +127,46 @@ class FederationResult:
             f"source={self.source_instance}, "
             f"relevance={self.relevance_score:.3f})"
         )
+
+
+@dataclass
+class FederationPacketResult:
+    """A component-card style result retrieved from a sibling instance."""
+
+    component_id: str
+    title: str
+    component_type: str
+    abstract_jobs: list[str]
+    language: Optional[str]
+    repo: str
+    file_path: str
+    symbol: Optional[str]
+    family_barcode: str
+    provenance_precision: str
+    source_instance: str
+    source_db_path: str
+    relevance_score: float = 0.0
+    match_score: float = 0.0
+    match_type: str = "pattern_transfer"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "component_id": self.component_id,
+            "title": self.title,
+            "component_type": self.component_type,
+            "abstract_jobs": self.abstract_jobs,
+            "language": self.language,
+            "repo": self.repo,
+            "file_path": self.file_path,
+            "symbol": self.symbol,
+            "family_barcode": self.family_barcode,
+            "provenance_precision": self.provenance_precision,
+            "source_instance": self.source_instance,
+            "source_db_path": self.source_db_path,
+            "relevance_score": self.relevance_score,
+            "match_score": self.match_score,
+            "match_type": self.match_type,
+        }
 
 
 class Federation:
@@ -246,6 +287,63 @@ class Federation:
             reverse=True,
         )
         return all_results[:max_total]
+
+    async def query_component_packets(
+        self,
+        task_description: str,
+        *,
+        slot_name: Optional[str] = None,
+        task_archetype: Optional[str] = None,
+        language: Optional[str] = None,
+        max_total: int = 5,
+    ) -> list[FederationPacketResult]:
+        """Query sibling ganglia for component-card style results.
+
+        This is additive to methodology federation. It uses read-only SQL and
+        metadata/text matching instead of embeddings so cross-brain results stay
+        transparent and comparable.
+        """
+        if not self.config.enabled or not self.config.siblings:
+            return []
+
+        keywords = _extract_keywords(" ".join(item for item in [task_description, slot_name or "", task_archetype or ""] if item))
+        if not keywords:
+            return []
+
+        scored_siblings = []
+        for sibling in self.config.siblings:
+            manifest = self._load_sibling_manifest(sibling)
+            if manifest is None:
+                continue
+            relevance = score_manifest_relevance(manifest, keywords, language)
+            if relevance >= self.config.federation_relevance_threshold:
+                scored_siblings.append((sibling, relevance))
+
+        scored_siblings.sort(key=lambda item: item[1], reverse=True)
+        results: list[FederationPacketResult] = []
+        seen: set[tuple[str, str]] = set()
+        for sibling, relevance in scored_siblings:
+            if len(results) >= max_total:
+                break
+            remaining = max_total - len(results)
+            sibling_results = await self._query_sibling_component_cards(
+                sibling,
+                keywords=keywords,
+                slot_name=slot_name,
+                task_archetype=task_archetype,
+                language=language,
+                limit=min(self.config.federation_max_results, remaining),
+            )
+            for item in sibling_results:
+                ident = (item.source_instance, item.component_id)
+                if ident in seen:
+                    continue
+                item.relevance_score = relevance
+                results.append(item)
+                seen.add(ident)
+
+        results.sort(key=lambda item: item.relevance_score * max(item.match_score, 0.1), reverse=True)
+        return results[:max_total]
 
     def _load_sibling_manifest(self, sibling: Any) -> Optional[dict[str, Any]]:
         """Load a sibling's brain manifest."""
@@ -454,6 +552,98 @@ class Federation:
             source_name, len(results), len(keywords),
         )
         return results
+
+    async def _query_sibling_component_cards(
+        self,
+        sibling: Any,
+        *,
+        keywords: list[str],
+        slot_name: Optional[str],
+        task_archetype: Optional[str],
+        language: Optional[str],
+        limit: int = 3,
+    ) -> list[FederationPacketResult]:
+        db_path = Path(sibling.db_path)
+        if not db_path.exists():
+            return []
+
+        like_terms = [f"%{kw.lower()}%" for kw in keywords[:8]]
+        if not like_terms:
+            return []
+        where = " OR ".join(
+            [
+                "LOWER(title) LIKE ?",
+                "LOWER(component_type) LIKE ?",
+                "LOWER(abstract_jobs_json) LIKE ?",
+                "LOWER(keywords_json) LIKE ?",
+            ]
+            * len(like_terms)
+        )
+        params: list[Any] = []
+        for term in like_terms:
+            params.extend([term, term, term, term])
+        if language:
+            where = f"({where}) AND (language IS NULL OR LOWER(language) = ?)"
+            params.append(language.lower())
+        params.append(limit * 4)
+
+        results: list[FederationPacketResult] = []
+        async with aiosqlite.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = aiosqlite.Row
+            try:
+                rows = await conn.execute_fetchall(
+                    f"""SELECT id, title, component_type, abstract_jobs_json, language,
+                               repo, file_path, symbol, family_barcode,
+                               provenance_precision, keywords_json
+                        FROM component_cards
+                        WHERE {where}
+                        LIMIT ?""",
+                    params,
+                )
+            except Exception:
+                return []
+
+            slot_tokens = set(_extract_keywords(" ".join(item for item in [slot_name or "", task_archetype or ""] if item), max_keywords=8))
+            for row in rows:
+                title = row["title"] or ""
+                abstract_jobs = []
+                keywords_json = []
+                for field_name, default in (("abstract_jobs_json", []), ("keywords_json", [])):
+                    raw = row[field_name]
+                    try:
+                        parsed = json.loads(raw) if isinstance(raw, str) else (raw or default)
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = default
+                    if field_name == "abstract_jobs_json":
+                        abstract_jobs = parsed
+                    else:
+                        keywords_json = parsed
+                match_basis = {title.lower(), (row["component_type"] or "").lower(), *[str(job).lower() for job in abstract_jobs], *[str(item).lower() for item in keywords_json]}
+                match_score = 0.35
+                if slot_tokens:
+                    overlap = sum(1 for token in slot_tokens if any(token in basis for basis in match_basis))
+                    match_score += min(overlap * 0.2, 0.5)
+                match_type = "direct_fit" if slot_tokens and any(str(job).lower() in slot_tokens or any(token in str(job).lower() for token in slot_tokens) for job in abstract_jobs) else "pattern_transfer"
+                results.append(
+                    FederationPacketResult(
+                        component_id=row["id"],
+                        title=title,
+                        component_type=row["component_type"] or "helper",
+                        abstract_jobs=list(abstract_jobs),
+                        language=row["language"],
+                        repo=row["repo"] or sibling.name,
+                        file_path=row["file_path"] or "",
+                        symbol=row["symbol"],
+                        family_barcode=row["family_barcode"] or "",
+                        provenance_precision=row["provenance_precision"] or "file",
+                        source_instance=sibling.name,
+                        source_db_path=str(db_path),
+                        match_score=match_score,
+                        match_type=match_type,
+                    )
+                )
+        results.sort(key=lambda item: item.match_score, reverse=True)
+        return results[:limit]
 
     async def get_sibling_summaries(self) -> list[dict[str, Any]]:
         """Get manifest summaries for all registered siblings.

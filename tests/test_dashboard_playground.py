@@ -185,7 +185,7 @@ class TestExecuteEndpoint:
         job = jobs[session_id]
         assert job["task_description"] == "Implement feature X"
         assert job["project_id"] == "playground"
-        assert job["created_at"].endswith("Z")
+        assert job["created_at"].endswith(("Z", "+00:00"))
 
     def test_execute_custom_project_id(self):
         """POST with a custom project_id stores it correctly."""

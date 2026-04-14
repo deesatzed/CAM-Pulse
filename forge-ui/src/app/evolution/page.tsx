@@ -5,11 +5,22 @@ import {
   getABTests,
   getRouting,
   getBanditArms,
+  getGovernanceConflicts,
   getEvolutionFitness,
+  getGovernancePolicies,
+  getGovernanceTrends,
+  getFederationPolicyRecommendations,
+  getFederationTrends,
+  promoteFederationPolicy,
   searchKnowledge,
+  type FederationPolicyRecommendationsResponse,
+  type FederationTrendsResponse,
+  type GovernancePolicy,
+  type GovernanceTrendsResponse,
   type RoutingEntry,
   type BanditArm,
   type FitnessTrajectoryEntry,
+  updateGovernancePolicyStatus,
 } from "@/lib/api";
 import { Card, CardTitle } from "@/components/card";
 import { Skeleton, SkeletonGrid } from "@/components/skeleton";
@@ -72,6 +83,12 @@ function winRateBg(rate: number, opacity = 0.15): string {
   return `rgba(${r},${g},${b},${opacity})`;
 }
 
+function governanceSeverityTone(severity: "low" | "medium" | "high" | string): string {
+  if (severity === "high") return "border-red-400/30 bg-red-400/10 text-red-300";
+  if (severity === "medium") return "border-amber-400/30 bg-amber-400/10 text-amber-200";
+  return "border-cam-green/30 bg-cam-green/10 text-cam-green";
+}
+
 // ---------------------------------------------------------------------------
 // Tooltip formatter — typed to satisfy recharts v3 Formatter<ValueType, NameType>
 // ---------------------------------------------------------------------------
@@ -113,15 +130,6 @@ function TabButton({
 // ---------------------------------------------------------------------------
 
 function ABTestsPanel({ tests }: { tests: Record<string, unknown>[] }) {
-  if (tests.length === 0) {
-    return (
-      <Card>
-        <p className="text-muted text-sm">No A/B tests found.</p>
-      </Card>
-    );
-  }
-
-  // Derive column headers from the union of all keys across test records
   const columns = useMemo(() => {
     const keySet = new Set<string>();
     for (const t of tests) {
@@ -129,6 +137,14 @@ function ABTestsPanel({ tests }: { tests: Record<string, unknown>[] }) {
     }
     return Array.from(keySet);
   }, [tests]);
+
+  if (tests.length === 0) {
+    return (
+      <Card>
+        <p className="text-muted text-sm">No A/B tests found.</p>
+      </Card>
+    );
+  }
 
   return (
     <Card>
@@ -185,15 +201,6 @@ function ABTestsPanel({ tests }: { tests: Record<string, unknown>[] }) {
 // ---------------------------------------------------------------------------
 
 function RoutingHeatmap({ routing }: { routing: RoutingEntry[] }) {
-  if (routing.length === 0) {
-    return (
-      <Card>
-        <p className="text-muted text-sm">No routing data available.</p>
-      </Card>
-    );
-  }
-
-  // Build agent -> task_type -> entry lookup
   const { agents, taskTypes, lookup } = useMemo(() => {
     const agentTotals: Record<string, number> = {};
     const taskTypeSet = new Set<string>();
@@ -216,6 +223,14 @@ function RoutingHeatmap({ routing }: { routing: RoutingEntry[] }) {
       lookup: lk,
     };
   }, [routing]);
+
+  if (routing.length === 0) {
+    return (
+      <Card>
+        <p className="text-muted text-sm">No routing data available.</p>
+      </Card>
+    );
+  }
 
   return (
     <Card>
@@ -750,6 +765,27 @@ function FitnessPanel() {
 export default function EvolutionLab() {
   const [activeTab, setActiveTab] = useState<Tab>("ab-tests");
   const [error, setError] = useState<string | null>(null);
+  const [governanceTrends, setGovernanceTrends] = useState<GovernanceTrendsResponse | null>(null);
+  const [federationTrends, setFederationTrends] = useState<FederationTrendsResponse | null>(null);
+  const [federationPolicyRecommendations, setFederationPolicyRecommendations] = useState<FederationPolicyRecommendationsResponse | null>(null);
+  const [governancePolicies, setGovernancePolicies] = useState<GovernancePolicy[] | null>(null);
+  const [governanceConflicts, setGovernanceConflicts] = useState<Array<{
+    policy_kind: string;
+    task_archetype?: string | null;
+    slot_id?: string | null;
+    family_barcode?: string | null;
+    conflict_reasons: string[];
+  }> | null>(null);
+  const [governanceFilters, setGovernanceFilters] = useState<{
+    taskArchetype: string;
+    familyBarcode: string;
+    status: string;
+  }>({
+    taskArchetype: "",
+    familyBarcode: "",
+    status: "active",
+  });
+  const [governanceActionState, setGovernanceActionState] = useState<string | null>(null);
 
   // A/B tests state
   const [abTests, setAbTests] = useState<Record<string, unknown>[] | null>(
@@ -794,6 +830,53 @@ export default function EvolutionLab() {
     else if (activeTab === "bandit") loadBandit();
   }, [activeTab, loadABTests, loadRouting, loadBandit]);
 
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      getGovernanceTrends({
+        limit: 10,
+        task_archetype: governanceFilters.taskArchetype || undefined,
+        family_barcode: governanceFilters.familyBarcode || undefined,
+      }),
+      getFederationTrends({
+        limit: 10,
+        task_archetype: governanceFilters.taskArchetype || undefined,
+        family_barcode: governanceFilters.familyBarcode || undefined,
+      }),
+      getFederationPolicyRecommendations({
+        limit: 10,
+        task_archetype: governanceFilters.taskArchetype || undefined,
+        family_barcode: governanceFilters.familyBarcode || undefined,
+      }),
+      getGovernanceConflicts({
+        task_archetype: governanceFilters.taskArchetype || undefined,
+        active_only: governanceFilters.status === "active",
+        limit: 20,
+      }),
+      getGovernancePolicies({
+        active_only: governanceFilters.status === "active",
+        status: governanceFilters.status === "all" ? undefined : governanceFilters.status,
+        task_archetype: governanceFilters.taskArchetype || undefined,
+        family_barcode: governanceFilters.familyBarcode || undefined,
+        limit: 20,
+      }),
+    ])
+      .then(([trends, federation, federationPolicy, conflicts, policies]) => {
+        if (cancelled) return;
+        setGovernanceTrends(trends);
+        setFederationTrends(federation);
+        setFederationPolicyRecommendations(federationPolicy);
+        setGovernanceConflicts(conflicts.conflicts);
+        setGovernancePolicies(policies.policies);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [governanceFilters]);
+
   const retryCurrentTab = useCallback(() => {
     setError(null);
     if (activeTab === "ab-tests") { setAbTests(null); }
@@ -815,6 +898,313 @@ export default function EvolutionLab() {
           A/B test results, agent routing heatmap, and bandit arm performance
         </p>
       </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+        <Card>
+          <CardTitle>Governance Trends</CardTitle>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 text-sm">
+            <input
+              value={governanceFilters.taskArchetype}
+              onChange={(e) => setGovernanceFilters((prev) => ({ ...prev, taskArchetype: e.target.value }))}
+              placeholder="Filter archetype"
+              className="bg-background border border-card-border rounded-lg px-3 py-2 text-foreground"
+            />
+            <input
+              value={governanceFilters.familyBarcode}
+              onChange={(e) => setGovernanceFilters((prev) => ({ ...prev, familyBarcode: e.target.value }))}
+              placeholder="Filter family barcode"
+              className="bg-background border border-card-border rounded-lg px-3 py-2 text-foreground"
+            />
+            <select
+              value={governanceFilters.status}
+              onChange={(e) => setGovernanceFilters((prev) => ({ ...prev, status: e.target.value }))}
+              className="bg-background border border-card-border rounded-lg px-3 py-2 text-foreground"
+            >
+              <option value="active">Active policies</option>
+              <option value="all">All statuses</option>
+              <option value="inactive">Inactive</option>
+              <option value="superseded">Superseded</option>
+              <option value="waived">Waived</option>
+            </select>
+          </div>
+          {!governanceTrends ? (
+            <div className="text-sm text-muted">Loading governance trends...</div>
+          ) : (
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="text-xs text-muted uppercase tracking-wider mb-2">By Archetype</div>
+                {governanceTrends.by_archetype.length === 0 ? (
+                  <div className="text-sm text-muted">No cross-run governance data yet.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {governanceTrends.by_archetype.slice(0, 5).map((item) => (
+                      <div key={item.task_archetype} className="border border-card-border rounded-lg p-3">
+                        <div className="font-medium text-foreground">{item.task_archetype}</div>
+                        <div className="text-xs text-muted mt-1">
+                          runs {item.runs} · blocked wait {(item.blocked_wait_ms / 1000).toFixed(1)}s · family wait {(item.family_wait_ms / 1000).toFixed(1)}s
+                        </div>
+                        <div className="text-xs text-muted mt-1">
+                          blocks {item.block_actions} · bans {item.ban_actions} · reverifies {item.reverify_actions}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-muted uppercase tracking-wider mb-2">By Family Barcode</div>
+                {governanceTrends.by_family.length === 0 ? (
+                  <div className="text-sm text-muted">No family-level governance pressure yet.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {governanceTrends.by_family.slice(0, 5).map((item) => (
+                      <div key={item.family_barcode} className="border border-card-border rounded-lg p-3">
+                        <div className="font-medium text-foreground">{item.family_barcode}</div>
+                        <div className="text-xs text-muted mt-1">
+                          bans {item.ban_actions} · unbans {item.unban_actions} · waits {item.wait_events} · promoted policies {item.policy_count}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
+        <Card>
+          <CardTitle>Federation Trends</CardTitle>
+          {!federationTrends ? (
+            <div className="text-sm text-muted">Loading federation trends...</div>
+          ) : (
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="text-xs text-muted uppercase tracking-wider mb-2">By Archetype</div>
+                {federationTrends.by_archetype.length === 0 ? (
+                  <div className="text-sm text-muted">No federation pressure recorded yet.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {federationTrends.by_archetype.slice(0, 5).map((item) => (
+                      <div key={item.task_archetype} className="border border-card-border rounded-lg p-3">
+                        <div className="font-medium text-foreground">{item.task_archetype}</div>
+                        <div className="text-xs text-muted mt-1">
+                          runs {item.runs} · direct {item.direct_fit} · pattern {item.pattern_transfer} · fallback {item.heuristic_fallback}
+                        </div>
+                        <div className="text-xs text-muted mt-1">
+                          critical pattern transfer {item.critical_pattern_transfer} · success {item.successful_packets} · fail {item.failed_packets}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs text-muted uppercase tracking-wider mb-2">By Family</div>
+                {federationTrends.by_family.length === 0 ? (
+                  <div className="text-sm text-muted">No family-level federation pressure yet.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {federationTrends.by_family.slice(0, 5).map((item) => (
+                      <div key={item.family_barcode} className="border border-card-border rounded-lg p-3">
+                        <div className="font-medium text-foreground">{item.family_barcode}</div>
+                        <div className="text-xs text-muted mt-1">
+                          direct {item.direct_fit} · pattern {item.pattern_transfer} · fallback {item.heuristic_fallback}
+                        </div>
+                        <div className="text-xs text-muted mt-1">
+                          critical pattern transfer {item.critical_pattern_transfer} · success {item.successful_packets} · fail {item.failed_packets}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+        <Card>
+          <CardTitle>Federation Policy Recommendations</CardTitle>
+          {!federationPolicyRecommendations ? (
+            <div className="text-sm text-muted">Loading federation policy recommendations...</div>
+          ) : federationPolicyRecommendations.recommendations.length === 0 ? (
+            <div className="text-sm text-muted">No cross-run federation policy recommendations yet.</div>
+          ) : (
+            <div className="space-y-3 text-sm">
+              {federationPolicyRecommendations.recommendations.slice(0, 8).map((item, idx) => (
+                <div key={`${item.policy_kind}-${item.family_barcode || item.task_archetype || idx}`} className={`rounded-lg border p-3 ${governanceSeverityTone(item.severity)}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-medium">{item.policy_kind}</div>
+                    <div className="text-[11px] uppercase tracking-wider">{item.severity}{item.already_active ? " · active" : ""}</div>
+                  </div>
+                  <div className="text-xs mt-2 opacity-90">{item.reason}</div>
+                  <div className="text-xs mt-2 opacity-90">{item.recommendation}</div>
+                  <div className="text-[11px] mt-2 opacity-80">
+                    {item.task_archetype ? `archetype ${item.task_archetype}` : "cross-run"}
+                    {item.family_barcode ? ` · family ${item.family_barcode}` : ""}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={item.already_active || governanceActionState === `${item.policy_kind}-${idx}`}
+                      onClick={async () => {
+                        try {
+                          setGovernanceActionState(`${item.policy_kind}-${idx}`);
+                          const resp = await promoteFederationPolicy({
+                            policy_kind: item.policy_kind,
+                            severity: item.severity,
+                            task_archetype: item.task_archetype || undefined,
+                            slot_id: item.slot_id || undefined,
+                            family_barcode: item.family_barcode || undefined,
+                            reason: item.reason,
+                            recommendation: item.recommendation,
+                            evidence_json: item.evidence_json,
+                            promoted_by: "operator",
+                          });
+                          setGovernancePolicies((prev) => [resp.policy, ...(prev || [])]);
+                          setFederationPolicyRecommendations((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  recommendations: prev.recommendations.map((rec, recIdx) =>
+                                    recIdx === idx ? { ...rec, already_active: true } : rec
+                                  ),
+                                }
+                              : prev
+                          );
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setGovernanceActionState(null);
+                        }
+                      }}
+                      className="px-3 py-1 rounded border border-card-border text-xs text-foreground hover:bg-card-hover disabled:opacity-50"
+                    >
+                      Promote Policy
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+        <Card>
+          <CardTitle>Governance Policies</CardTitle>
+          {!governancePolicies ? (
+            <div className="text-sm text-muted">Loading policies...</div>
+          ) : governancePolicies.length === 0 ? (
+            <div className="text-sm text-muted">No promoted governance policies yet.</div>
+          ) : (
+            <div className="space-y-3 text-sm">
+              {governancePolicies.slice(0, 5).map((policy) => (
+                <div key={policy.id} className={`rounded-lg border p-3 ${governanceSeverityTone(policy.severity)}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-medium">{policy.policy_kind}</div>
+                    <div className="text-[11px] uppercase tracking-wider">{policy.severity} · {policy.status}</div>
+                  </div>
+                  <div className="text-xs mt-2 opacity-90">{policy.reason}</div>
+                  <div className="text-xs mt-2 opacity-90">{policy.recommendation}</div>
+                  {policy.task_archetype ? (
+                    <div className="text-[11px] mt-2 opacity-80">archetype {policy.task_archetype}</div>
+                  ) : null}
+                  {policy.run_id ? (
+                    <div className="mt-2">
+                      <a href={`/evolution/run/${policy.run_id}`} className="text-[11px] text-accent hover:text-accent-hover">
+                        source run {policy.run_id}
+                      </a>
+                    </div>
+                  ) : null}
+                  {policy.family_barcode ? (
+                    <div className="text-[11px] mt-2 opacity-80">family {policy.family_barcode}</div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={governanceActionState === policy.id}
+                      onClick={async () => {
+                        try {
+                          setGovernanceActionState(policy.id);
+                          const resp = await updateGovernancePolicyStatus(policy.id, { status: "inactive", reason: "manual deactivation" });
+                          setGovernancePolicies((prev) => (prev || []).map((item) => (item.id === policy.id ? resp.policy : item)));
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setGovernanceActionState(null);
+                        }
+                      }}
+                      className="px-3 py-1 rounded border border-card-border text-xs text-foreground hover:bg-card-hover disabled:opacity-50"
+                    >
+                      Deactivate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={governanceActionState === policy.id}
+                      onClick={async () => {
+                        try {
+                          setGovernanceActionState(policy.id);
+                          const resp = await updateGovernancePolicyStatus(policy.id, { status: "superseded", reason: "superseded by newer governance policy" });
+                          setGovernancePolicies((prev) => (prev || []).map((item) => (item.id === policy.id ? resp.policy : item)));
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setGovernanceActionState(null);
+                        }
+                      }}
+                      className="px-3 py-1 rounded border border-card-border text-xs text-foreground hover:bg-card-hover disabled:opacity-50"
+                    >
+                      Supersede
+                    </button>
+                    <button
+                      type="button"
+                      disabled={governanceActionState === policy.id}
+                      onClick={async () => {
+                        try {
+                          setGovernanceActionState(policy.id);
+                          const resp = await updateGovernancePolicyStatus(policy.id, { status: "waived", reason: "manual waiver", waiver_note: "accepted temporary exception" });
+                          setGovernancePolicies((prev) => (prev || []).map((item) => (item.id === policy.id ? resp.policy : item)));
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setGovernanceActionState(null);
+                        }
+                      }}
+                      className="px-3 py-1 rounded border border-card-border text-xs text-foreground hover:bg-card-hover disabled:opacity-50"
+                    >
+                      Waive
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <CardTitle>Governance Conflicts</CardTitle>
+        {!governanceConflicts ? (
+          <div className="text-sm text-muted">Loading governance conflicts...</div>
+        ) : governanceConflicts.length === 0 ? (
+          <div className="text-sm text-muted">No policy conflicts detected.</div>
+        ) : (
+          <div className="space-y-3 text-sm">
+            {governanceConflicts.slice(0, 10).map((conflict, idx) => (
+              <div key={`${conflict.policy_kind}-${idx}`} className="border border-amber-400/30 bg-amber-400/10 rounded-lg p-3">
+                <div className="font-medium text-foreground">{conflict.policy_kind}</div>
+                <div className="text-xs text-muted mt-1">
+                  {conflict.task_archetype ? `archetype ${conflict.task_archetype}` : "global"}
+                  {conflict.family_barcode ? ` · family ${conflict.family_barcode}` : ""}
+                  {conflict.slot_id ? ` · slot ${conflict.slot_id}` : ""}
+                </div>
+                <div className="text-xs mt-2 text-amber-200">{conflict.conflict_reasons.join(", ")}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6">

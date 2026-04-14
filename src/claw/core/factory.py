@@ -378,6 +378,16 @@ class ClawFactory:
             workspace_dir: Working directory for agent operations.
         """
         config = load_config(config_path)
+        active_camseq_flags = [
+            name
+            for name, enabled in config.feature_flags.model_dump().items()
+            if enabled
+        ]
+        if active_camseq_flags:
+            logger.info(
+                "CAM-SEQ feature flags active: %s",
+                ", ".join(sorted(active_camseq_flags)),
+            )
 
         # ── Infrastructure ─────────────────────────────────────────
         engine = DatabaseEngine(config.database)

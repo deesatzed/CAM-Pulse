@@ -842,9 +842,11 @@ class TestClawMCPServerSchemas:
     # -- test_tool_schemas_count -----------------------------------------
 
     async def test_tool_schemas_count(self, mcp_server: ClawMCPServer):
-        """Exactly 5 tool schemas are defined."""
+        """Tool schema count matches the registered MCP metadata."""
         schemas = mcp_server.get_tool_schemas()
-        assert len(schemas) == 5
+        from claw.tools.schemas import TOOL_METADATA
+
+        assert len(schemas) == len(TOOL_METADATA)
 
     # -- test_tool_schemas_structure -------------------------------------
 
@@ -864,7 +866,7 @@ class TestClawMCPServerSchemas:
     # -- test_tool_schemas_names -----------------------------------------
 
     async def test_tool_schemas_names(self, mcp_server: ClawMCPServer):
-        """All 5 expected tool names are present."""
+        """All expected tool names are present."""
         schemas = mcp_server.get_tool_schemas()
         names = {s["name"] for s in schemas}
         expected = {
@@ -873,6 +875,13 @@ class TestClawMCPServerSchemas:
             "claw_verify_claim",
             "claw_request_specialist",
             "claw_escalate",
+            "claw_decompose_task",
+            "claw_build_application_packet",
+            "claw_get_run_connectome",
+            "claw_trace_failure",
+            "claw_promote_recipe",
+            "claw_queue_mining_mission",
+            "claw_request_specialist_packet",
         }
         assert names == expected
 

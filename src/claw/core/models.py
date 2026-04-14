@@ -83,9 +83,404 @@ class OperationalMode(str, enum.Enum):
     AUTONOMOUS = "autonomous"
 
 
+class FitBucket(str, enum.Enum):
+    WILL_HELP = "will_help"
+    MAY_HELP = "may_help"
+    STRETCH = "stretch"
+    NO_HELP = "no_help"
+
+
+class TransferMode(str, enum.Enum):
+    DIRECT_FIT = "direct_fit"
+    PATTERN_TRANSFER = "pattern_transfer"
+    HEURISTIC_FALLBACK = "heuristic_fallback"
+
+
+class ProvenancePrecision(str, enum.Enum):
+    PRECISE_SYMBOL = "precise_symbol"
+    SYMBOL = "symbol"
+    FILE = "file"
+    CHUNK = "chunk"
+
+
+class SlotRisk(str, enum.Enum):
+    NORMAL = "normal"
+    CRITICAL = "critical"
+
+
+class CoverageState(str, enum.Enum):
+    COVERED = "covered"
+    WEAK = "weak"
+    UNCOVERED = "uncovered"
+    QUARANTINED = "quarantined"
+    CLONE_INFLATED = "clone_inflated"
+
+
+class AdaptationBurden(str, enum.Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class LandingOrigin(str, enum.Enum):
+    ADAPTED_COMPONENT = "adapted_component"
+    NOVEL_SYNTHESIS = "novel_synthesis"
+    MIXED_ANCESTRY = "mixed_ancestry"
+    MANUAL_OVERRIDE = "manual_override"
+
+
+class PacketStatus(str, enum.Enum):
+    DRAFT = "draft"
+    REVIEW_REQUIRED = "review_required"
+    APPROVED = "approved"
+    BLOCKED = "blocked"
+    EXECUTING = "executing"
+    VERIFIED = "verified"
+    FAILED = "failed"
+    QUARANTINED = "quarantined"
+
+
 # ---------------------------------------------------------------------------
 # Database row models
 # ---------------------------------------------------------------------------
+
+
+class Receipt(BaseModel):
+    """Precise or partial source identity for a reusable component."""
+    source_barcode: str
+    family_barcode: str
+    lineage_id: str
+    repo: str
+    commit: Optional[str] = None
+    file_path: str
+    symbol: Optional[str] = None
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
+    content_hash: str
+    provenance_precision: ProvenancePrecision
+
+
+class ComponentLineage(BaseModel):
+    """Deduplicated lineage family across cloned or near-duplicate components."""
+    id: str = Field(default_factory=_new_id)
+    family_barcode: str
+    canonical_content_hash: str
+    canonical_title: Optional[str] = None
+    language: Optional[str] = None
+    lineage_size: int = 1
+    deduped_support_count: int = 1
+    clone_inflated: bool = False
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ComponentCard(BaseModel):
+    """Precise reusable implementation unit derived from mining or backfill."""
+    id: str = Field(default_factory=_new_id)
+    methodology_id: Optional[str] = None
+    title: str
+    component_type: str
+    abstract_jobs: list[str] = Field(default_factory=list)
+    receipt: Receipt
+    language: Optional[str] = None
+    frameworks: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+    outputs: list[dict[str, Any]] = Field(default_factory=list)
+    test_evidence: list[str] = Field(default_factory=list)
+    applicability: list[str] = Field(default_factory=list)
+    non_applicability: list[str] = Field(default_factory=list)
+    adaptation_notes: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    coverage_state: CoverageState = CoverageState.WEAK
+    success_count: int = 0
+    failure_count: int = 0
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ComponentFit(BaseModel):
+    """Learned or heuristic fit estimate for a component under a slot/task pattern."""
+    id: str = Field(default_factory=_new_id)
+    component_id: str
+    task_archetype: Optional[str] = None
+    component_type: Optional[str] = None
+    slot_signature: Optional[str] = None
+    fit_bucket: FitBucket
+    transfer_mode: TransferMode
+    confidence: float = 0.0
+    confidence_basis: list[str] = Field(default_factory=list)
+    success_count: int = 0
+    failure_count: int = 0
+    evidence_count: int = 0
+    notes: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ComponentCardSummary(BaseModel):
+    """Lightweight list/search payload for component explorer views."""
+    id: str
+    title: str
+    component_type: str
+    language: Optional[str] = None
+    family_barcode: str
+    repo: str
+    file_path: str
+    symbol: Optional[str] = None
+    provenance_precision: ProvenancePrecision
+    success_count: int = 0
+    failure_count: int = 0
+    coverage_state: CoverageState = CoverageState.WEAK
+
+
+class SlotSpec(BaseModel):
+    """Concrete part of the current task that must be solved."""
+    slot_id: str
+    slot_barcode: str
+    name: str
+    abstract_job: str
+    risk: SlotRisk = SlotRisk.NORMAL
+    constraints: list[str] = Field(default_factory=list)
+    target_stack: list[str] = Field(default_factory=list)
+    proof_expectations: list[str] = Field(default_factory=list)
+
+
+class CandidateSummary(BaseModel):
+    """Lightweight ranked candidate view for packet construction."""
+    component_id: str
+    title: str
+    fit_bucket: FitBucket
+    transfer_mode: TransferMode
+    confidence: float
+    confidence_basis: list[str] = Field(default_factory=list)
+    receipt: Receipt
+    why_fit: list[str] = Field(default_factory=list)
+    known_failure_modes: list[str] = Field(default_factory=list)
+    prior_success_count: int = 0
+    prior_failure_count: int = 0
+    deduped_lineage_count: int = 0
+    adaptation_burden: AdaptationBurden = AdaptationBurden.MEDIUM
+
+
+class AdaptationStep(BaseModel):
+    """Single adaptation action required to fit a selected component."""
+    step_id: str = Field(default_factory=_new_id)
+    title: str
+    rationale: str = ""
+    blocking: bool = False
+    status: str = "pending"  # pending, applied, failed, skipped
+
+
+class ProofGate(BaseModel):
+    """Single proof requirement attached to a packet."""
+    gate_id: str
+    gate_type: str  # tests, verifier, semgrep, codeql, human_review
+    required: bool = True
+    status: str = "pending"  # pending, pass, fail, waived
+    details: list[str] = Field(default_factory=list)
+
+
+class ExpectedLandingSite(BaseModel):
+    """Expected landing site for a selected packet."""
+    file_path: str
+    symbol: Optional[str] = None
+    rationale: str = ""
+
+
+class ApplicationPacketSummary(BaseModel):
+    """Lightweight packet view for slot lists and plan summaries."""
+    packet_id: str
+    plan_id: str
+    task_archetype: str
+    slot_id: str
+    slot_name: str
+    status: PacketStatus = PacketStatus.DRAFT
+    selected_component_id: str
+    fit_bucket: FitBucket
+    transfer_mode: TransferMode
+    confidence: float
+    review_required: bool = False
+    coverage_state: CoverageState = CoverageState.WEAK
+
+
+class ApplicationPacket(BaseModel):
+    """Primary pre-mutation decision artifact for one slot."""
+    packet_id: str = Field(default_factory=_new_id)
+    schema_version: str = "cam.packet.v1"
+    plan_id: str
+    task_archetype: str
+    slot: SlotSpec
+    status: PacketStatus = PacketStatus.DRAFT
+    selected: CandidateSummary
+    runner_ups: list[CandidateSummary] = Field(default_factory=list)
+    no_viable_runner_up_reason: Optional[str] = None
+    why_selected: list[str] = Field(default_factory=list)
+    why_runner_up_lost: dict[str, list[str]] = Field(default_factory=dict)
+    adaptation_plan: list[AdaptationStep] = Field(default_factory=list)
+    proof_plan: list[ProofGate] = Field(default_factory=list)
+    expected_landing_sites: list[ExpectedLandingSite] = Field(default_factory=list)
+    negative_memory: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+    reviewer_required: bool = False
+    review_required_reasons: list[str] = Field(default_factory=list)
+    confidence_basis: list[str] = Field(default_factory=list)
+    coverage_state: CoverageState = CoverageState.WEAK
+
+
+class TaskPlanRecord(BaseModel):
+    """Durable reviewed task plan record for pre-mutation packet workflows."""
+    id: str
+    task_text: str
+    workspace_dir: Optional[str] = None
+    branch: Optional[str] = None
+    target_brain: Optional[str] = None
+    execution_mode: Optional[str] = None
+    check_commands: list[str] = Field(default_factory=list)
+    task_archetype: str
+    archetype_confidence: float = 0.0
+    status: str = "draft"
+    summary: dict[str, int] = Field(default_factory=dict)
+    approved_slot_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    plan_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class PairEvent(BaseModel):
+    """Runtime record that a slot was paired with a selected component."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: str
+    slot_barcode: str
+    packet_id: str
+    component_id: str
+    source_barcode: str
+    confidence: float = 0.0
+    confidence_basis: list[str] = Field(default_factory=list)
+    replacement_of_pair_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class LandingEvent(BaseModel):
+    """Runtime record of where a packet-guided change landed in the target repo."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: str
+    packet_id: str
+    file_path: str
+    symbol: Optional[str] = None
+    diff_hunk_id: Optional[str] = None
+    origin: LandingOrigin
+    created_at: datetime = Field(default_factory=_now)
+
+
+class OutcomeEvent(BaseModel):
+    """Sequenced result of verification and proof for one slot."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: str
+    packet_id: str
+    success: bool = False
+    verifier_findings: list[str] = Field(default_factory=list)
+    test_refs: list[str] = Field(default_factory=list)
+    negative_memory_updates: list[str] = Field(default_factory=list)
+    recipe_eligible: bool = False
+    created_at: datetime = Field(default_factory=_now)
+
+
+class RunConnectome(BaseModel):
+    """Persisted run-level connectome record."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    task_archetype: Optional[str] = None
+    status: str = "pending"
+    created_at: datetime = Field(default_factory=_now)
+
+
+class RunSlotExecution(BaseModel):
+    """Persisted runtime execution state for one slot inside a reviewed run."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: str
+    packet_id: Optional[str] = None
+    selected_component_id: Optional[str] = None
+    status: str = "queued"
+    current_step: Optional[str] = None
+    retry_count: int = 0
+    last_retry_detail: Optional[str] = None
+    replacement_count: int = 0
+    blocked_wait_ms: int = 0
+    family_wait_ms: int = 0
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class RunEvent(BaseModel):
+    """Durable event stream entry for CAM-SEQ run supervision."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: Optional[str] = None
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_now)
+
+
+class RunActionAudit(BaseModel):
+    """Durable operator/governance action taken against a reviewed run."""
+    id: str = Field(default_factory=_new_id)
+    run_id: str
+    slot_id: Optional[str] = None
+    action_type: str
+    actor: str = "operator"
+    reason: str = ""
+    action_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_now)
+
+
+class CompiledRecipe(BaseModel):
+    """Distilled reusable build pattern learned from repeated success."""
+    id: str = Field(default_factory=_new_id)
+    task_archetype: str
+    recipe_name: str
+    recipe_json: dict[str, Any] = Field(default_factory=dict)
+    sample_size: int = 0
+    is_active: bool = False
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class MiningMission(BaseModel):
+    """Targeted acquisition job emitted from plan review or post-run analysis."""
+    id: str = Field(default_factory=_new_id)
+    run_id: Optional[str] = None
+    slot_family: Optional[str] = None
+    priority: str = "normal"
+    reason: str = ""
+    status: str = "queued"
+    mission_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class GovernancePolicy(BaseModel):
+    """Durable governance recommendation promoted into active policy memory."""
+    id: str = Field(default_factory=_new_id)
+    run_id: Optional[str] = None
+    task_archetype: Optional[str] = None
+    slot_id: Optional[str] = None
+    family_barcode: Optional[str] = None
+    policy_kind: str
+    severity: str = "medium"
+    status: str = "active"
+    reason: str = ""
+    recommendation: str = ""
+    evidence_json: dict[str, Any] = Field(default_factory=dict)
+    promoted_by: str = "operator"
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
 
 class Project(BaseModel):
     id: str = Field(default_factory=_new_id)

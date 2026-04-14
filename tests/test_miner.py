@@ -246,6 +246,114 @@ class TestAssimilationParallelism:
         assert sorted(calls) == ["a", "b", "c", "d"]
         assert duration < 0.16
 
+
+@pytest.mark.asyncio
+async def test_backfill_components_from_existing_methodology(repo_miner, repository):
+    methodology = Methodology(
+        problem_description="Retry helper for HTTP client backoff",
+        solution_code="def with_retry(): pass",
+        capability_data={
+            "source_repos": ["org/service"],
+            "source_artifacts": [
+                {
+                    "file_path": "app/retry.py",
+                    "symbol_name": "with_retry",
+                    "symbol_kind": "function",
+                    "note": "retry helper",
+                }
+            ],
+            "applicability": ["HTTP retry flows"],
+            "non_applicability": ["async event loops"],
+            "dependencies": ["requests"],
+            "risks": ["sleep-based implementation"],
+            "evidence": ["source_file:app/retry.py"],
+            "domain": ["architecture"],
+        },
+        tags=["source:org/service", "category:architecture"],
+        language="python",
+        files_affected=["app/retry.py"],
+    )
+    await repository.save_methodology(methodology)
+
+    summary = await repo_miner.backfill_components(methodology_ids=[methodology.id])
+    cards = await repository.list_components_for_methodology(methodology.id)
+
+    assert summary["created"] >= 1
+    assert len(cards) == 1
+    assert cards[0].file_path == "app/retry.py"
+    assert cards[0].symbol == "with_retry"
+
+
+@pytest.mark.asyncio
+async def test_backfill_components_preserves_precise_symbol_receipts(repo_miner, repository):
+    methodology = Methodology(
+        problem_description="Refresh session helper",
+        solution_code="def refresh_session(): pass",
+        capability_data={
+            "source_repos": ["org/service"],
+            "source_artifacts": [
+                {
+                    "file_path": "app/auth/session.py",
+                    "symbol_name": "refresh_session",
+                    "symbol_kind": "function",
+                    "line_start": 12,
+                    "line_end": 18,
+                    "provenance_precision": "precise_symbol",
+                    "note": "scip matched",
+                }
+            ],
+        },
+        tags=["source:org/service", "category:security"],
+        language="python",
+        files_affected=["app/auth/session.py"],
+    )
+    await repository.save_methodology(methodology)
+
+    summary = await repo_miner.backfill_components(methodology_ids=[methodology.id])
+    cards = await repository.list_components_for_methodology(methodology.id)
+    full_card = await repository.get_component_card(cards[0].id)
+
+    assert summary["created"] >= 1
+    assert full_card is not None
+    assert full_card.receipt.line_start == 12
+    assert full_card.receipt.line_end == 18
+    assert full_card.receipt.provenance_precision == "precise_symbol"
+
+
+@pytest.mark.asyncio
+async def test_store_finding_backfills_components_when_flag_enabled(repo_miner, repository):
+    repo_miner.config.feature_flags.component_cards = True
+
+    finding = MiningFinding(
+        title="Token refresh serialization helper",
+        description="Coordinates token refresh across concurrent requests.",
+        category="security",
+        source_repo="org/auth-service",
+        source_files=["app/auth/session.py"],
+        source_symbols=[
+            {
+                "file_path": "app/auth/session.py",
+                "symbol_name": "refresh_session",
+                "symbol_kind": "function",
+                "note": "top-level function definition",
+            }
+        ],
+        implementation_sketch="Use a lock around token refresh and retry stale requests.",
+        augmentation_notes="Adapt to async lock semantics in async stacks.",
+        relevance_score=0.88,
+        language="python",
+    )
+
+    methodology_id = await repo_miner.store_finding(finding, target_project_id="proj_001")
+    assert methodology_id is not None
+
+    cards = await repository.list_components_for_methodology(methodology_id)
+    assert len(cards) >= 1
+    assert cards[0].symbol == "refresh_session"
+    assert cards[0].family_barcode.startswith("fam_")
+
+
+class TestSerializeRepoEdgeCases:
     def test_empty_directory(self, tmp_path):
         """Empty directory returns empty string and 0 file count."""
         content, count = serialize_repo(tmp_path)
@@ -267,15 +375,12 @@ class TestAssimilationParallelism:
         good.write_text("x = 1", encoding="utf-8")
         bad = tmp_path / "bad.py"
         bad.write_text("secret", encoding="utf-8")
-        # Remove read permission
         bad.chmod(0o000)
         try:
             content, count = serialize_repo(tmp_path)
-            # On some systems (root), file may still be readable
             assert count >= 1
             assert "good.py" in content
         finally:
-            # Restore permissions for cleanup
             bad.chmod(0o644)
 
     def test_file_header_format(self, tmp_path):
@@ -294,7 +399,7 @@ class TestAssimilationParallelism:
 
     def test_skips_all_skip_dirs(self, tmp_path):
         """All directories in _SKIP_DIRS are excluded."""
-        for skip_dir in list(_SKIP_DIRS)[:5]:  # Test a subset for speed
+        for skip_dir in list(_SKIP_DIRS)[:5]:
             d = tmp_path / skip_dir
             d.mkdir(exist_ok=True)
             (d / "file.py").write_text("x = 1", encoding="utf-8")

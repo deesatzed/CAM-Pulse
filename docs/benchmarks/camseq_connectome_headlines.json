@@ -1,0 +1,29 @@
+{
+  "dominant_seeded_clusters": [
+    "proof",
+    "runtime",
+    "transfer"
+  ],
+  "full_archetype_accuracy": 0.9583333333333334,
+  "full_slot_precision": 0.8,
+  "live_run_count": 4,
+  "pilot_archetype_accuracy": 1.0,
+  "seeded_calibrations": [
+    "mixed",
+    "stable"
+  ],
+  "seeded_case_count": 4,
+  "seeded_confidence_bands": [
+    "high",
+    "medium"
+  ],
+  "seeded_stabilities": [
+    "competitive",
+    "fragile"
+  ],
+  "top_seeded_cause_kinds": [
+    "counterfactual",
+    "proof_gate",
+    "slot_execution"
+  ]
+}

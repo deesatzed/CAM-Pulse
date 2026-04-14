@@ -4,9 +4,13 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   getFederationTopology,
   analyzeFederation,
+  getFederationPackets,
+  requestSpecialistPacketExchange,
   type TopologyNode,
   type TopologyEdge,
   type CrossLanguageReport,
+  type FederationPacketResponse,
+  type SpecialistPacketExchangeResponse,
 } from "@/lib/api";
 import { Card, CardTitle } from "@/components/card";
 import { GanglionBadge } from "@/components/badge";
@@ -405,6 +409,62 @@ function AnalysisResults({ report }: { report: CrossLanguageReport }) {
   );
 }
 
+function FederationPacketCard({
+  result,
+}: {
+  result: FederationPacketResponse["results"][0];
+}) {
+  const matchClass =
+    result.match_type === "direct_fit"
+      ? "text-cam-green border-cam-green/30 bg-cam-green/10"
+      : "text-cam-blue border-cam-blue/30 bg-cam-blue/10";
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <h4 className="text-sm font-semibold text-foreground">{result.title}</h4>
+          <div className="text-xs text-muted-dark font-mono">
+            {result.source_instance} · {result.component_type}
+          </div>
+        </div>
+        <div className={`px-2 py-1 rounded-md border text-xs font-medium ${matchClass}`}>
+          {result.match_type === "direct_fit" ? "Direct Fit" : "Pattern Transfer"}
+        </div>
+      </div>
+      <div className="space-y-1 text-xs text-muted">
+        <div>
+          <span className="text-muted-dark">Repo:</span> {result.repo}
+        </div>
+        <div>
+          <span className="text-muted-dark">Path:</span> {result.file_path}
+        </div>
+        {result.symbol && (
+          <div>
+            <span className="text-muted-dark">Symbol:</span> {result.symbol}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {result.abstract_jobs.slice(0, 3).map((job) => (
+            <span
+              key={job}
+              className="px-2 py-0.5 rounded-md bg-card-border/60 text-[11px] text-foreground"
+            >
+              {job}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-between text-xs font-mono">
+        <span className="text-muted-dark">{result.family_barcode}</span>
+        <span className="text-foreground">
+          score {Math.round(result.match_score * 100)} / rel {Math.round(result.relevance_score * 100)}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -422,6 +482,16 @@ export default function FederationPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [report, setReport] = useState<CrossLanguageReport | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [packetQuery, setPacketQuery] = useState("");
+  const [packetLanguage, setPacketLanguage] = useState("");
+  const [packetResults, setPacketResults] = useState<FederationPacketResponse | null>(null);
+  const [packetLoading, setPacketLoading] = useState(false);
+  const [packetError, setPacketError] = useState<string | null>(null);
+  const [specialistQuery, setSpecialistQuery] = useState("");
+  const [specialistAgent, setSpecialistAgent] = useState<"claude" | "codex" | "gemini" | "grok" | "">("");
+  const [specialistExchange, setSpecialistExchange] = useState<SpecialistPacketExchangeResponse | null>(null);
+  const [specialistLoading, setSpecialistLoading] = useState(false);
+  const [specialistError, setSpecialistError] = useState<string | null>(null);
 
   const loadTopology = useCallback(() => {
     getFederationTopology()
@@ -450,6 +520,49 @@ export default function FederationPage() {
       setAnalyzing(false);
     }
   }, [query]);
+
+  const handlePacketSearch = useCallback(async () => {
+    const trimmed = packetQuery.trim();
+    if (!trimmed) return;
+
+    setPacketLoading(true);
+    setPacketError(null);
+    setPacketResults(null);
+
+    try {
+      const result = await getFederationPackets(trimmed, {
+        language: packetLanguage.trim() || undefined,
+        limit: 8,
+      });
+      setPacketResults(result);
+    } catch (e) {
+      setPacketError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPacketLoading(false);
+    }
+  }, [packetLanguage, packetQuery]);
+
+  const handleSpecialistExchange = useCallback(async () => {
+    const trimmed = specialistQuery.trim();
+    if (!trimmed) return;
+
+    setSpecialistLoading(true);
+    setSpecialistError(null);
+    setSpecialistExchange(null);
+
+    try {
+      const result = await requestSpecialistPacketExchange({
+        taskText: trimmed,
+        preferredAgent: specialistAgent || undefined,
+        limit: 6,
+      });
+      setSpecialistExchange(result);
+    } catch (e) {
+      setSpecialistError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSpecialistLoading(false);
+    }
+  }, [specialistAgent, specialistQuery]);
 
   if (error) {
     return (
@@ -547,6 +660,108 @@ export default function FederationPage() {
         </div>
       </Card>
 
+      <Card>
+        <CardTitle>Component Packet Search</CardTitle>
+        <p className="text-xs text-muted mb-3">
+          Query cross-brain component packets with direct-fit versus pattern-transfer labeling.
+        </p>
+        <div className="flex flex-col lg:flex-row gap-3">
+          <input
+            type="text"
+            value={packetQuery}
+            onChange={(e) => setPacketQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !packetLoading) handlePacketSearch();
+            }}
+            placeholder="e.g. Add OAuth session handling with token refresh"
+            className="flex-1 bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-muted-dark focus:outline-none focus:border-accent transition-colors"
+          />
+          <input
+            type="text"
+            value={packetLanguage}
+            onChange={(e) => setPacketLanguage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !packetLoading) handlePacketSearch();
+            }}
+            placeholder="language (optional)"
+            className="w-full lg:w-44 bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-muted-dark focus:outline-none focus:border-accent transition-colors"
+          />
+          <button
+            onClick={handlePacketSearch}
+            disabled={packetLoading || !packetQuery.trim()}
+            className="px-5 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+          >
+            {packetLoading ? "Searching..." : "Search Packets"}
+          </button>
+        </div>
+        {packetResults && (
+          <div className="mt-4 text-sm text-muted">
+            <span className="text-foreground font-medium">{packetResults.task_archetype}</span>
+            <span className="mx-2">·</span>
+            confidence {(packetResults.archetype_confidence * 100).toFixed(0)}%
+            {packetResults.slot && (
+              <>
+                <span className="mx-2">·</span>
+                slot <span className="text-foreground font-medium">{packetResults.slot.name}</span>
+              </>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Specialist Packet Exchange</CardTitle>
+        <p className="text-xs text-muted mb-3">
+          Request a structured packet handoff for a specialist ganglion or agent using the same packet-ready federation surface.
+        </p>
+        <div className="flex flex-col lg:flex-row gap-3">
+          <input
+            type="text"
+            value={specialistQuery}
+            onChange={(e) => setSpecialistQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !specialistLoading) handleSpecialistExchange();
+            }}
+            placeholder="e.g. Fix token refresh races in the OAuth client"
+            className="flex-1 bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-muted-dark focus:outline-none focus:border-accent transition-colors"
+          />
+          <select
+            value={specialistAgent}
+            onChange={(e) => setSpecialistAgent(e.target.value as typeof specialistAgent)}
+            className="w-full lg:w-44 bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm text-foreground focus:outline-none focus:border-accent transition-colors"
+          >
+            <option value="">auto route</option>
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+            <option value="gemini">gemini</option>
+            <option value="grok">grok</option>
+          </select>
+          <button
+            onClick={handleSpecialistExchange}
+            disabled={specialistLoading || !specialistQuery.trim()}
+            className="px-5 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+          >
+            {specialistLoading ? "Requesting..." : "Request Specialist"}
+          </button>
+        </div>
+        {specialistExchange && (
+          <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-lg bg-card-border/40 px-3 py-2">
+              <div className="text-xs text-muted-dark mb-1">Selected Agent</div>
+              <div className="text-foreground font-medium">{specialistExchange.selected_agent}</div>
+            </div>
+            <div className="rounded-lg bg-card-border/40 px-3 py-2">
+              <div className="text-xs text-muted-dark mb-1">Archetype</div>
+              <div className="text-foreground font-medium">{specialistExchange.task_archetype}</div>
+            </div>
+            <div className="rounded-lg bg-card-border/40 px-3 py-2">
+              <div className="text-xs text-muted-dark mb-1">Review Required</div>
+              <div className="text-foreground font-medium">{specialistExchange.review_required ? "yes" : "no"}</div>
+            </div>
+          </div>
+        )}
+      </Card>
+
       {/* Analysis error */}
       {analysisError && (
         <ErrorBanner
@@ -558,6 +773,89 @@ export default function FederationPage() {
 
       {/* Analysis results */}
       {report && <AnalysisResults report={report} />}
+
+      {packetError && (
+        <ErrorBanner
+          message="Federation packet search failed"
+          detail={packetError}
+          onRetry={() => {
+            setPacketError(null);
+            handlePacketSearch();
+          }}
+        />
+      )}
+
+      {packetResults && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">
+              Packet Results
+              <span className="text-muted font-normal ml-2">
+                ({packetResults.results.length})
+              </span>
+            </h3>
+          </div>
+          {packetResults.results.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {packetResults.results.map((result) => (
+                <FederationPacketCard
+                  key={`${result.source_instance}:${result.component_id}`}
+                  result={result}
+                />
+              ))}
+            </div>
+          ) : (
+            <Card>
+              <p className="text-sm text-muted">
+                No component packets matched this query.
+              </p>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {specialistError && (
+        <ErrorBanner
+          message="Specialist packet exchange failed"
+          detail={specialistError}
+          onRetry={() => {
+            setSpecialistError(null);
+            handleSpecialistExchange();
+          }}
+        />
+      )}
+
+      {specialistExchange && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">
+              Specialist Packet Candidates
+              <span className="text-muted font-normal ml-2">
+                ({specialistExchange.results.length})
+              </span>
+            </h3>
+            <div className="text-xs text-muted">
+              route {specialistExchange.routing_method} · task type {specialistExchange.inferred_task_type}
+            </div>
+          </div>
+          {specialistExchange.results.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {specialistExchange.results.map((result) => (
+                <FederationPacketCard
+                  key={`specialist:${result.source_instance}:${result.component_id}`}
+                  result={result}
+                />
+              ))}
+            </div>
+          ) : (
+            <Card>
+              <p className="text-sm text-muted">
+                No specialist packet candidates were available for this request.
+              </p>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }

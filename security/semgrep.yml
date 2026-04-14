@@ -1,0 +1,36 @@
+rules:
+  - id: cam.python.eval
+    message: Avoid eval() in critical-slot code.
+    severity: ERROR
+    languages: [python]
+    pattern: eval(...)
+
+  - id: cam.python.exec
+    message: Avoid exec() in critical-slot code.
+    severity: ERROR
+    languages: [python]
+    pattern: exec(...)
+
+  - id: cam.python.subprocess-shell-true
+    message: Avoid subprocess shell=True in critical-slot code.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$F(..., shell=True, ...)
+          - pattern: $F(..., shell=True, ...)
+      - pattern-inside: |
+          import subprocess
+          ...
+
+  - id: cam.javascript.eval
+    message: Avoid eval() in critical-slot code.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern: eval(...)
+
+  - id: cam.javascript-function
+    message: Avoid Function constructor in critical-slot code.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern: new Function(...)

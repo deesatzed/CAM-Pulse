@@ -1,0 +1,56 @@
+{
+  "last_updated": "2026-04-13",
+  "active_work": [
+    "app troubleshooting: verify frontend/backend runtime behavior and separate app defects from environment/tooling failures",
+    "M6: on hold pending decision to revisit the advanced CodeQL lane",
+    "milestone ledger remains available in the long-form tracker"
+  ],
+  "just_finished": [
+    "installed forge-ui local dependencies",
+    "fixed frontend lint errors across Evolution, Forge Run, Knowledge, Playground, and Layout",
+    "verified production build with next build --webpack",
+    "fixed backend runtime import path so the live server uses this repo's src tree instead of another installed claw checkout",
+    "enabled CAM-SEQ feature flags in the shared .env and verified they load in /api/config",
+    "backfilled component cards into data/claw.db and confirmed live plan creation works for a matching task",
+    "added local-workspace component fallback so POST /api/v2/plans no longer hard-fails when the DB lacks relevant candidates",
+    "persisted local fallback cards before packet creation, fixing the component foreign-key failure",
+    "filtered noisy cache paths like .uv-cache out of component search and candidate lookup",
+    "added local-workspace fallback to component search, plus content-aware file matching",
+    "improved local search ranking to prefer non-test files and propagate file-level relevance into extracted candidates",
+    "changed component search from DB-first fallback behavior to a merged scored result set across persisted and workspace-derived hits",
+    "added component search metadata in the UI so results show memory vs workspace origin plus match score",
+    "added regression coverage proving a workspace auth hit can outrank a weaker persisted DB hit",
+    "fixed workspace search leakage so a file-content hit now yields one explicit file-level fallback result instead of every unrelated symbol in that file"
+  ],
+  "latest_validation": "frontend lint passed; frontend webpack build passed; focused backend suite passes at 41 passed; live backend now serves /api/v2 routes; POST /api/v2/plans succeeds for both a word-count task and an OAuth session task against this repo workspace; GET /api/v2/components/search?q=auth&limit=10 returns repo-local results on the current server; live verification of the latest merged-scoring plus file-level-fallback search fix still requires restarting the already-running backend process",
+  "overall_estimated_completion_pct": 99,
+  "milestones": {
+    "M0": 100,
+    "M1": 100,
+    "M2": 94,
+    "M3": 100,
+    "M4": 100,
+    "M5": 93,
+    "M6": 83,
+    "M7": 86,
+    "M8": 89
+  },
+  "inspect": {
+    "short_status": "docs/plans/CAM_SEQ_live_status.md",
+    "milestone_ledger": "docs/plans/CAM_SEQ_milestone_table.md",
+    "benchmark_markdown": "docs/benchmarks/camseq_connectome_report.md",
+    "benchmark_json": "docs/benchmarks/camseq_connectome_report.json",
+    "benchmark_manifest": "docs/benchmarks/camseq_connectome_manifest.json",
+    "benchmark_headlines": "docs/benchmarks/camseq_connectome_headlines.json",
+    "benchmark_status": "docs/benchmarks/camseq_connectome_status.md"
+  },
+  "open_gaps": [
+    "app: Turbopack build still crashes in this sandbox with a port-binding permission error; webpack build is clean",
+    "app: component search now uses merged scoring and explicit file-level fallback for content matches, but the live backend needs a restart before the latest fix can be re-smoke-tested outside the test client",
+    "M2: broader verified parser coverage beyond the currently tested Python/TypeScript families",
+    "M5: stronger causal model beyond heuristic weighting, grouped summaries, decision traces, confidence drivers, calibration, stability, and discrimination",
+    "M6: CodeQL remains optional advanced/managed mode, not default local mode",
+    "M7: no true external/A2A specialist transport yet",
+    "M8: broader real-repo mutation benchmark coverage and more polished demo artifacts"
+  ]
+}

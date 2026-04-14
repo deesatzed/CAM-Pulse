@@ -45,6 +45,9 @@ ralfed/
 .env.*.local
 !.env.example
 
+# Semgrep local state
+.semgrep-home/
+
 # OS
 .DS_Store
 Thumbs.db

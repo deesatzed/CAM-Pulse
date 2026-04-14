@@ -527,6 +527,15 @@ class LoggingConfig(BaseModel):
     log_file: str = ""
 
 
+class FeatureFlagsConfig(BaseModel):
+    """Additive rollout controls for CAM-SEQ subsystems."""
+    component_cards: bool = False
+    application_packets: bool = False
+    connectome_seq: bool = False
+    critical_slot_policy: bool = False
+    a2a_packets: bool = False
+
+
 class ClawConfig(BaseModel):
     """Top-level CLAW configuration."""
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -551,6 +560,7 @@ class ClawConfig(BaseModel):
     community: CommunityConfig = Field(default_factory=CommunityConfig)
     instances: InstanceRegistryConfig = Field(default_factory=InstanceRegistryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    feature_flags: FeatureFlagsConfig = Field(default_factory=FeatureFlagsConfig)
     local_llm: LocalLLMConfig = Field(default_factory=LocalLLMConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     gap_analyzer: GapAnalyzerConfig = Field(default_factory=GapAnalyzerConfig)
@@ -609,6 +619,18 @@ def _load_runtime_env(config_path: Path) -> None:
         load_dotenv(env_path, override=False)
 
 
+def _env_flag(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def load_config(config_path: Optional[Path] = None) -> ClawConfig:
     """Load CLAW config from TOML file.
 
@@ -650,6 +672,18 @@ def load_config(config_path: Optional[Path] = None) -> ClawConfig:
     db_path_env = os.getenv("CLAW_DB_PATH")
     if db_path_env:
         raw.setdefault("database", {})["db_path"] = db_path_env
+
+    flag_env_map = {
+        "CLAW_FEATURE_COMPONENT_CARDS": "component_cards",
+        "CLAW_FEATURE_APPLICATION_PACKETS": "application_packets",
+        "CLAW_FEATURE_CONNECTOME_SEQ": "connectome_seq",
+        "CLAW_FEATURE_CRITICAL_SLOT_POLICY": "critical_slot_policy",
+        "CLAW_FEATURE_A2A_PACKETS": "a2a_packets",
+    }
+    for env_name, key in flag_env_map.items():
+        value = _env_flag(env_name)
+        if value is not None:
+            raw.setdefault("feature_flags", {})[key] = value
 
     config = ClawConfig(**raw, agents=agents)
     return config

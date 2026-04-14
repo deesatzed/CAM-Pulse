@@ -4,12 +4,19 @@ Per clawpre.md section 8b, CLAW exposes itself as an MCP server so that any of t
 four agents (Claude Code, Codex, Gemini, Grok) can, mid-task, query CLAW's memory,
 store findings, verify claims, request specialist agents, or escalate to a human.
 
-Five tools are exposed:
+Original tools are exposed, plus CAM-SEQ packet/connectome tools:
     1. claw_query_memory    -- query semantic memory for similar past solutions
     2. claw_store_finding   -- store a new finding/methodology in memory
     3. claw_verify_claim    -- verify a claim about code (placeholder scan, validation)
     4. claw_request_specialist -- request a different agent for a subtask
     5. claw_escalate        -- escalate to human with context
+    6. claw_decompose_task -- infer archetype and slot graph
+    7. claw_build_application_packet -- construct a packet for one slot
+    8. claw_get_run_connectome -- inspect stored run connectome
+    9. claw_trace_failure -- inspect stored retrograde trace
+    10. claw_promote_recipe -- persist a compiled recipe
+    11. claw_queue_mining_mission -- persist a mining mission
+    12. claw_request_specialist_packet -- request a structured specialist packet exchange
 
 Design:
     The ClawMCPServer class contains tool handler methods and schema definitions.
@@ -29,9 +36,14 @@ import logging
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from claw.core.models import CompiledRecipe, MiningMission
 from claw.db.repository import Repository
+from claw.memory.component_ranker import rank_components_for_slot
+from claw.planning.application_packet import build_application_packet
+from claw.planning.taskome import decompose_task
 from claw.verifier import PLACEHOLDER_PATTERNS
 
 if TYPE_CHECKING:
@@ -56,7 +68,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = generate_mcp_tool_schemas()
 # ---------------------------------------------------------------------------
 
 class ClawMCPServer:
-    """MCP server that exposes CLAW's 5 mid-task tools to agents.
+    """MCP server that exposes CLAW tools to agents.
 
     This class owns all tool handler methods and dispatches incoming tool
     calls by name. It is instantiated by the coordinator and either served
@@ -80,12 +92,14 @@ class ClawMCPServer:
         semantic_memory: Optional[SemanticMemory] = None,
         verifier: Optional[Verifier] = None,
         dispatcher: Optional[Dispatcher] = None,
+        federation: Optional[Any] = None,
         auth_token: Optional[str] = None,
     ):
         self.repository = repository
         self.semantic_memory = semantic_memory
         self.verifier = verifier
         self.dispatcher = dispatcher
+        self.federation = federation
         self._auth_token = auth_token
 
         # Mapping of tool name -> handler coroutine
@@ -95,13 +109,21 @@ class ClawMCPServer:
             "claw_verify_claim": self.handle_verify_claim,
             "claw_request_specialist": self.handle_request_specialist,
             "claw_escalate": self.handle_escalate,
+            "claw_decompose_task": self.handle_decompose_task,
+            "claw_build_application_packet": self.handle_build_application_packet,
+            "claw_get_run_connectome": self.handle_get_run_connectome,
+            "claw_trace_failure": self.handle_trace_failure,
+            "claw_promote_recipe": self.handle_promote_recipe,
+            "claw_queue_mining_mission": self.handle_queue_mining_mission,
+            "claw_request_specialist_packet": self.handle_request_specialist_packet,
         }
 
         logger.info(
-            "ClawMCPServer initialized: semantic_memory=%s, verifier=%s, dispatcher=%s",
+            "ClawMCPServer initialized: semantic_memory=%s, verifier=%s, dispatcher=%s, federation=%s",
             "connected" if semantic_memory else "none",
             "connected" if verifier else "none",
             "connected" if dispatcher else "none",
+            "connected" if federation else "none",
         )
 
     # ===================================================================
@@ -110,7 +132,7 @@ class ClawMCPServer:
 
     @staticmethod
     def get_tool_schemas() -> list[dict[str, Any]]:
-        """Return the MCP-compatible JSON Schema definitions for all 5 tools.
+        """Return the MCP-compatible JSON Schema definitions for all tools.
 
         Returns:
             List of tool schema dicts, each containing 'name', 'description',
@@ -311,6 +333,329 @@ class ClawMCPServer:
         except Exception as exc:
             logger.error("Text search failed: %s", exc)
         return results_data
+
+    async def _candidate_cards_for_slot(
+        self,
+        *,
+        task_text: str,
+        slot: Any,
+        target_language: Optional[str],
+    ) -> list[Any]:
+        query = " ".join([slot.name, slot.abstract_job, task_text]).strip()
+        summaries = await self.repository.search_component_cards_text(
+            query,
+            limit=8,
+            language=target_language,
+        )
+        if not summaries:
+            summaries = await self.repository.list_component_cards(limit=12, language=target_language)
+
+        cards: list[Any] = []
+        seen: set[str] = set()
+        for summary in summaries:
+            component_id = getattr(summary, "id", None)
+            if not component_id or component_id in seen:
+                continue
+            card = await self.repository.get_component_card(component_id)
+            if card is None:
+                continue
+            cards.append(card)
+            seen.add(component_id)
+        return cards
+
+    async def _active_governance_policies(self, task_archetype: str) -> list[Any]:
+        task_policies = await self.repository.list_governance_policies(
+            task_archetype=task_archetype,
+            active_only=True,
+            limit=200,
+        )
+        global_policies = await self.repository.list_governance_policies(
+            task_archetype=None,
+            active_only=True,
+            limit=200,
+        )
+        merged: dict[str, Any] = {}
+        for policy in [*task_policies, *global_policies]:
+            if policy.task_archetype and policy.task_archetype != task_archetype:
+                continue
+            merged[policy.id] = policy
+        return list(merged.values())
+
+    # ===================================================================
+    # CAM-SEQ tool extensions
+    # ===================================================================
+
+    async def handle_decompose_task(
+        self,
+        task_text: str,
+        workspace_dir: Optional[str] = None,
+        target_language: Optional[str] = None,
+        target_stack_hints: Optional[list[str]] = None,
+        check_commands: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        plan = decompose_task(
+            task_text,
+            workspace_path=workspace_dir,
+            target_language=target_language,
+            target_stack_hints=target_stack_hints or [],
+            check_commands=check_commands or [],
+        )
+        return {
+            "status": "ok",
+            "plan_id": plan.plan_id,
+            "task_archetype": plan.task_archetype,
+            "archetype_confidence": plan.archetype_confidence,
+            "slots": [slot.model_dump(mode="json") for slot in plan.slots],
+        }
+
+    async def handle_build_application_packet(
+        self,
+        workspace_dir: str,
+        task_text: str,
+        slot_name: str,
+        target_language: Optional[str] = None,
+        target_stack_hints: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        plan = decompose_task(
+            task_text,
+            workspace_path=workspace_dir,
+            target_language=target_language,
+            target_stack_hints=target_stack_hints or [],
+            check_commands=[],
+        )
+        slot = next((item for item in plan.slots if item.name == slot_name), None)
+        if slot is None:
+            return {"status": "error", "error": f"slot '{slot_name}' not found"}
+
+        cards = await self._candidate_cards_for_slot(
+            task_text=task_text,
+            slot=slot,
+            target_language=target_language,
+        )
+        fit_rows = await self.repository.find_component_fit(plan.task_archetype, slot.name, None, limit=20)
+        compiled_recipes = await self.repository.list_compiled_recipes(
+            task_archetype=plan.task_archetype,
+            active_only=True,
+            limit=10,
+        )
+        governance_policies = await self._active_governance_policies(plan.task_archetype)
+        ranked = rank_components_for_slot(
+            slot,
+            cards,
+            fit_rows=fit_rows,
+            compiled_recipes=compiled_recipes,
+            governance_policies=governance_policies,
+            target_language=target_language,
+            target_stack_hints=target_stack_hints or [],
+        )
+        if not ranked:
+            return {"status": "error", "error": f"no candidates available for slot '{slot_name}'"}
+
+        packet = build_application_packet(
+            plan.plan_id,
+            plan.task_archetype,
+            slot,
+            ranked,
+            governance_policies=governance_policies,
+        )
+        return {
+            "status": "ok",
+            "schema_version": packet.schema_version,
+            "review_required": packet.reviewer_required,
+            "confidence_basis": packet.confidence_basis,
+            "packet": packet.model_dump(mode="json"),
+        }
+
+    async def handle_get_run_connectome(self, run_id: str) -> dict[str, Any]:
+        connectome = await self.repository.get_run_connectome(run_id)
+        if connectome is None:
+            return {"status": "error", "error": "run connectome not found", "run_id": run_id}
+        pair_events = await self.repository.list_run_pair_events(run_id)
+        landing_events = await self.repository.list_run_landing_events(run_id)
+        outcome_events = await self.repository.list_run_outcome_events(run_id)
+        stored_edges = await self.repository.list_run_connectome_edges(connectome.id)
+
+        nodes: dict[str, dict[str, str]] = {run_id: {"id": run_id, "kind": "run"}}
+        edges: list[dict[str, Any]] = []
+        for event in pair_events:
+            nodes.setdefault(event.slot_id, {"id": event.slot_id, "kind": "slot"})
+            nodes.setdefault(event.component_id, {"id": event.component_id, "kind": "component"})
+            edges.append({"source": event.slot_id, "target": event.component_id, "type": "paired"})
+        for event in landing_events:
+            nodes.setdefault(event.file_path, {"id": event.file_path, "kind": "landing"})
+            edges.append({"source": event.packet_id, "target": event.file_path, "type": "landed"})
+        for event in outcome_events:
+            outcome_id = f"outcome:{event.id}"
+            nodes.setdefault(outcome_id, {"id": outcome_id, "kind": "outcome"})
+            edges.append({"source": event.packet_id, "target": outcome_id, "type": "verified"})
+        for edge in stored_edges:
+            edges.append(
+                {
+                    "source": edge["source_node"],
+                    "target": edge["target_node"],
+                    "type": edge["edge_type"],
+                    "metadata": json.loads(edge["metadata_json"]) if edge.get("metadata_json") else {},
+                }
+            )
+        return {
+            "status": "ok",
+            "run_id": run_id,
+            "connectome": {
+                "id": connectome.id,
+                "task_archetype": connectome.task_archetype,
+                "status": connectome.status,
+                "nodes": list(nodes.values()),
+                "edges": edges,
+            },
+        }
+
+    async def handle_trace_failure(self, run_id: str, root: Optional[str] = None) -> dict[str, Any]:
+        outcome_events = await self.repository.list_run_outcome_events(run_id)
+        landing_events = await self.repository.list_run_landing_events(run_id)
+        pair_events = await self.repository.list_run_pair_events(run_id)
+        slot_executions = await self.repository.list_run_slot_executions(run_id)
+        action_audits = await self.repository.list_run_action_audits(run_id)
+        run_events = await self.repository.list_run_events(run_id)
+
+        failing_outcome = next((event for event in outcome_events if not event.success), outcome_events[0] if outcome_events else None)
+        if failing_outcome is None:
+            return {
+                "status": "ok",
+                "run_id": run_id,
+                "root": {"kind": "run", "id": run_id if root is None else root},
+                "cause_chain": [],
+                "runner_up_analysis": None,
+                "confidence": 0.0,
+            }
+
+        packet = await self.repository.get_application_packet(failing_outcome.packet_id)
+        pair = next((event for event in pair_events if event.packet_id == failing_outcome.packet_id), None)
+        landing = next((event for event in landing_events if event.packet_id == failing_outcome.packet_id), None)
+        slot_execution = next((item for item in slot_executions if item.slot_id == failing_outcome.slot_id), None)
+        relevant_audits = [audit for audit in action_audits if audit.slot_id in {None, failing_outcome.slot_id}]
+        relevant_events = [event for event in run_events if event.slot_id in {None, failing_outcome.slot_id}]
+
+        cause_chain: list[dict[str, Any]] = []
+        if slot_execution is not None:
+            cause_chain.append(
+                {
+                    "kind": "slot_execution",
+                    "id": failing_outcome.slot_id,
+                    "explanation": f"retry_count={slot_execution.retry_count}, blocked_wait_ms={slot_execution.blocked_wait_ms}, family_wait_ms={slot_execution.family_wait_ms}",
+                    "rank_score": 0.65 + min(slot_execution.retry_count * 0.05, 0.2),
+                }
+            )
+        for audit in relevant_audits[-3:]:
+            cause_chain.append(
+                {
+                    "kind": "audit",
+                    "id": audit.id,
+                    "explanation": f"{audit.action_type}: {audit.reason}",
+                    "rank_score": 0.78 if audit.action_type in {"block_slot", "ban_family"} else 0.58,
+                }
+            )
+        if landing is not None:
+            cause_chain.append(
+                {
+                    "kind": "landing",
+                    "id": landing.id,
+                    "explanation": f"landing at {landing.file_path}",
+                    "rank_score": 0.72,
+                }
+            )
+        if pair is not None and packet is not None:
+            cause_chain.append(
+                {
+                    "kind": "component",
+                    "id": pair.component_id,
+                    "explanation": f"selected component {packet.selected.title}",
+                    "rank_score": 0.74,
+                }
+            )
+        for event in relevant_events[-2:]:
+            if event.event_type == "retry_delta":
+                cause_chain.append(
+                    {
+                        "kind": "retry_delta",
+                        "id": event.id,
+                        "explanation": "retry delta recorded before failure",
+                        "rank_score": 0.7,
+                    }
+                )
+
+        cause_chain.sort(key=lambda item: item["rank_score"], reverse=True)
+        runner_up = packet.runner_ups[0] if packet and packet.runner_ups else None
+        return {
+            "status": "ok",
+            "run_id": run_id,
+            "root": {"kind": "outcome", "id": failing_outcome.id if root is None else root},
+            "cause_chain": cause_chain[:5],
+            "runner_up_analysis": (
+                {
+                    "component_id": runner_up.component_id,
+                    "likely_better": True,
+                    "why": runner_up.why_fit[:3],
+                }
+                if runner_up
+                else None
+            ),
+            "confidence": cause_chain[0]["rank_score"] if cause_chain else 0.0,
+        }
+
+    async def handle_promote_recipe(
+        self,
+        run_id: str,
+        recipe_name: str,
+        minimum_sample_size: int = 5,
+    ) -> dict[str, Any]:
+        connectome = await self.repository.get_run_connectome(run_id)
+        if connectome is None:
+            return {"status": "error", "error": "run connectome not found", "run_id": run_id}
+        pair_events = await self.repository.list_run_pair_events(run_id)
+        packets = [
+            await self.repository.get_application_packet(event.packet_id)
+            for event in pair_events
+        ]
+        packets = [packet for packet in packets if packet is not None]
+        recipe = await self.repository.save_compiled_recipe(
+            CompiledRecipe(
+                task_archetype=connectome.task_archetype or "unknown",
+                recipe_name=recipe_name,
+                recipe_json={
+                    "slot_order": [packet.slot.name for packet in packets],
+                    "preferred_families": [packet.selected.receipt.family_barcode for packet in packets],
+                    "required_proof_gates": sorted({gate.gate_type for packet in packets for gate in packet.proof_plan}),
+                    "disallowed_stretch_conditions": ["critical_slot_stretch"],
+                },
+                sample_size=len(packets),
+                is_active=len(packets) >= minimum_sample_size,
+            )
+        )
+        return {"status": "ok", "recipe": recipe.model_dump(mode="json")}
+
+    async def handle_queue_mining_mission(
+        self,
+        run_id: str,
+        slot_family: str,
+        priority: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        mission = await self.repository.save_mining_mission(
+            MiningMission(
+                run_id=run_id,
+                slot_family=slot_family,
+                priority=priority,
+                reason=reason,
+                mission_json={
+                    "run_id": run_id,
+                    "slot_family": slot_family,
+                    "priority": priority,
+                    "reason": reason,
+                    "created_via": "mcp",
+                },
+            )
+        )
+        return {"status": "ok", "mission": mission.model_dump(mode="json")}
 
     # ===================================================================
     # Tool 2: claw_store_finding
@@ -771,6 +1116,93 @@ class ClawMCPServer:
                 return task_type
 
         return "analysis"  # Default task type
+
+    async def handle_request_specialist_packet(
+        self,
+        task_text: str,
+        slot_name: Optional[str] = None,
+        preferred_agent: Optional[str] = None,
+        target_language: Optional[str] = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        if not task_text or not task_text.strip():
+            return {"status": "error", "error": "task_text must not be empty."}
+
+        routing = await self.handle_request_specialist(
+            task_description=task_text,
+            preferred_agent=preferred_agent,
+        )
+        if routing.get("status") != "ok":
+            return routing
+
+        plan = decompose_task(
+            task_text,
+            workspace_path=None,
+            target_language=target_language,
+            target_stack_hints=[],
+            check_commands=[],
+        )
+        slot = next((item for item in plan.slots if item.name == slot_name), None) if slot_name else (plan.slots[0] if plan.slots else None)
+
+        local_results: list[dict[str, Any]] = []
+        cards = await self._candidate_cards_for_slot(
+            task_text=task_text,
+            slot=slot,
+            target_language=target_language,
+        ) if slot is not None else []
+        for card in cards[:limit]:
+            local_results.append(
+                {
+                    "component_id": card.id,
+                    "title": card.title,
+                    "component_type": card.component_type,
+                    "abstract_jobs": list(card.abstract_jobs),
+                    "language": card.language,
+                    "repo": card.receipt.repo,
+                    "file_path": card.receipt.file_path,
+                    "symbol": card.receipt.symbol,
+                    "family_barcode": card.receipt.family_barcode,
+                    "provenance_precision": getattr(card.receipt.provenance_precision, "value", str(card.receipt.provenance_precision)),
+                    "source_instance": "primary",
+                    "match_type": "direct_fit" if slot and any(slot.abstract_job in str(job) or slot.name in str(job) for job in card.abstract_jobs) else "pattern_transfer",
+                    "match_score": 1.0,
+                    "relevance_score": 1.0,
+                }
+            )
+
+        sibling_results: list[dict[str, Any]] = []
+        if self.federation is not None:
+            try:
+                sibling_results = [
+                    item.as_dict()
+                    for item in await self.federation.query_component_packets(
+                        task_text,
+                        slot_name=slot.name if slot else slot_name,
+                        task_archetype=plan.task_archetype,
+                        language=target_language,
+                        max_total=limit,
+                    )
+                ]
+            except Exception as exc:
+                logger.warning("specialist packet federation query failed: %s", exc)
+
+        merged = [*local_results, *sibling_results]
+        merged = merged[:limit]
+        review_required = not merged or any(item.get("match_type") != "direct_fit" for item in merged[:2])
+
+        return {
+            "status": "ok",
+            "exchange_id": f"specpkt_{uuid.uuid4().hex[:12]}",
+            "selected_agent": routing.get("selected_agent"),
+            "inferred_task_type": routing.get("inferred_task_type"),
+            "preferred_agent": preferred_agent,
+            "routing_method": routing.get("routing_method"),
+            "task_archetype": plan.task_archetype,
+            "archetype_confidence": plan.archetype_confidence,
+            "slot": slot.model_dump(mode="json") if slot else None,
+            "review_required": review_required,
+            "packet_candidates": merged,
+        }
 
     # ===================================================================
     # Tool 5: claw_escalate

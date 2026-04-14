@@ -16,17 +16,36 @@ from typing import Any, Optional
 
 from claw.core.models import (
     ActionTemplate,
+    ApplicationPacket,
+    ApplicationPacketSummary,
+    CompiledRecipe,
+    ComponentCard,
+    ComponentCardSummary,
+    ComponentFit,
+    ComponentLineage,
     ContextSnapshot,
+    GovernancePolicy,
     HypothesisEntry,
     HypothesisOutcome,
+    LandingEvent,
     Methodology,
     MethodologyUsageEntry,
+    MiningMission,
+    OutcomeEvent,
+    PairEvent,
     PeerReview,
     Project,
+    Receipt,
+    RunActionAudit,
+    RunConnectome,
+    RunEvent,
+    RunSlotExecution,
     SynergyExploration,
     Task,
+    TaskPlanRecord,
     TaskStatus,
     TokenCostRecord,
+    SlotSpec,
 )
 from claw.db.engine import DatabaseEngine
 
@@ -43,6 +62,27 @@ def _build_safe_fts5_query(query: str) -> str:
     if not tokens:
         return ""
     return " OR ".join(f'"{token}"' for token in tokens)
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value)
+
+
+def _json_loads(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return value
+
+
+def _model_dump(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value
 
 
 class Repository:
@@ -2048,6 +2088,920 @@ class Repository:
 # Row → Model converters
 # ---------------------------------------------------------------------------
 
+    # -------------------------------------------------------------------
+    # CAM-SEQ additive entities
+    # -------------------------------------------------------------------
+
+    async def save_component_lineage(self, lineage: ComponentLineage) -> ComponentLineage:
+        await self.engine.execute(
+            """INSERT INTO component_lineages
+               (id, family_barcode, canonical_content_hash, canonical_title, language,
+                lineage_size, deduped_support_count, clone_inflated, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                lineage.id,
+                lineage.family_barcode,
+                lineage.canonical_content_hash,
+                lineage.canonical_title,
+                lineage.language,
+                lineage.lineage_size,
+                lineage.deduped_support_count,
+                int(lineage.clone_inflated),
+                lineage.created_at.isoformat(),
+                lineage.updated_at.isoformat(),
+            ],
+        )
+        return lineage
+
+    async def upsert_component_lineage(self, lineage: ComponentLineage) -> ComponentLineage:
+        await self.engine.execute(
+            """INSERT INTO component_lineages
+               (id, family_barcode, canonical_content_hash, canonical_title, language,
+                lineage_size, deduped_support_count, clone_inflated, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   family_barcode = excluded.family_barcode,
+                   canonical_content_hash = excluded.canonical_content_hash,
+                   canonical_title = excluded.canonical_title,
+                   language = excluded.language,
+                   lineage_size = excluded.lineage_size,
+                   deduped_support_count = excluded.deduped_support_count,
+                   clone_inflated = excluded.clone_inflated,
+                   updated_at = excluded.updated_at""",
+            [
+                lineage.id,
+                lineage.family_barcode,
+                lineage.canonical_content_hash,
+                lineage.canonical_title,
+                lineage.language,
+                lineage.lineage_size,
+                lineage.deduped_support_count,
+                int(lineage.clone_inflated),
+                lineage.created_at.isoformat(),
+                lineage.updated_at.isoformat(),
+            ],
+        )
+        return lineage
+
+    async def get_component_lineage(self, lineage_id: str) -> Optional[ComponentLineage]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM component_lineages WHERE id = ?", [lineage_id]
+        )
+        return _row_to_component_lineage(row) if row else None
+
+    async def find_lineage_by_hash(self, canonical_content_hash: str) -> Optional[ComponentLineage]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM component_lineages WHERE canonical_content_hash = ? LIMIT 1",
+            [canonical_content_hash],
+        )
+        return _row_to_component_lineage(row) if row else None
+
+    async def list_lineage_components(
+        self, lineage_id: str, limit: int = 100
+    ) -> list[ComponentCardSummary]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM component_cards
+               WHERE lineage_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            [lineage_id, limit],
+        )
+        return [_row_to_component_card_summary(r) for r in rows]
+
+    async def save_component_card(self, card: ComponentCard) -> ComponentCard:
+        receipt = card.receipt
+        await self.engine.execute(
+            """INSERT INTO component_cards
+               (id, methodology_id, lineage_id, source_barcode, family_barcode, title,
+                component_type, abstract_jobs_json, repo, commit_sha, file_path, symbol_name,
+                line_start, line_end, content_hash, provenance_precision, language,
+                frameworks_json, dependencies_json, constraints_json, inputs_json, outputs_json,
+                test_evidence_json, applicability_json, non_applicability_json,
+                adaptation_notes_json, risk_notes_json, keywords_json, coverage_state,
+                success_count, failure_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                card.id,
+                card.methodology_id,
+                receipt.lineage_id,
+                receipt.source_barcode,
+                receipt.family_barcode,
+                card.title,
+                card.component_type,
+                _json_dumps(card.abstract_jobs),
+                receipt.repo,
+                receipt.commit,
+                receipt.file_path,
+                receipt.symbol,
+                receipt.line_start,
+                receipt.line_end,
+                receipt.content_hash,
+                receipt.provenance_precision.value,
+                card.language,
+                _json_dumps(card.frameworks),
+                _json_dumps(card.dependencies),
+                _json_dumps(card.constraints),
+                _json_dumps(card.inputs),
+                _json_dumps(card.outputs),
+                _json_dumps(card.test_evidence),
+                _json_dumps(card.applicability),
+                _json_dumps(card.non_applicability),
+                _json_dumps(card.adaptation_notes),
+                _json_dumps(card.risk_notes),
+                _json_dumps(card.keywords),
+                card.coverage_state.value,
+                card.success_count,
+                card.failure_count,
+                card.created_at.isoformat(),
+                card.updated_at.isoformat(),
+            ],
+        )
+        return card
+
+    async def upsert_component_card(self, card: ComponentCard) -> ComponentCard:
+        receipt = card.receipt
+        await self.engine.execute(
+            """INSERT INTO component_cards
+               (id, methodology_id, lineage_id, source_barcode, family_barcode, title,
+                component_type, abstract_jobs_json, repo, commit_sha, file_path, symbol_name,
+                line_start, line_end, content_hash, provenance_precision, language,
+                frameworks_json, dependencies_json, constraints_json, inputs_json, outputs_json,
+                test_evidence_json, applicability_json, non_applicability_json,
+                adaptation_notes_json, risk_notes_json, keywords_json, coverage_state,
+                success_count, failure_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_barcode) DO UPDATE SET
+                   methodology_id = excluded.methodology_id,
+                   lineage_id = excluded.lineage_id,
+                   family_barcode = excluded.family_barcode,
+                   title = excluded.title,
+                   component_type = excluded.component_type,
+                   abstract_jobs_json = excluded.abstract_jobs_json,
+                   repo = excluded.repo,
+                   commit_sha = excluded.commit_sha,
+                   file_path = excluded.file_path,
+                   symbol_name = excluded.symbol_name,
+                   line_start = excluded.line_start,
+                   line_end = excluded.line_end,
+                   content_hash = excluded.content_hash,
+                   provenance_precision = excluded.provenance_precision,
+                   language = excluded.language,
+                   frameworks_json = excluded.frameworks_json,
+                   dependencies_json = excluded.dependencies_json,
+                   constraints_json = excluded.constraints_json,
+                   inputs_json = excluded.inputs_json,
+                   outputs_json = excluded.outputs_json,
+                   test_evidence_json = excluded.test_evidence_json,
+                   applicability_json = excluded.applicability_json,
+                   non_applicability_json = excluded.non_applicability_json,
+                   adaptation_notes_json = excluded.adaptation_notes_json,
+                   risk_notes_json = excluded.risk_notes_json,
+                   keywords_json = excluded.keywords_json,
+                   coverage_state = excluded.coverage_state,
+                   success_count = excluded.success_count,
+                   failure_count = excluded.failure_count,
+                   updated_at = excluded.updated_at""",
+            [
+                card.id,
+                card.methodology_id,
+                receipt.lineage_id,
+                receipt.source_barcode,
+                receipt.family_barcode,
+                card.title,
+                card.component_type,
+                _json_dumps(card.abstract_jobs),
+                receipt.repo,
+                receipt.commit,
+                receipt.file_path,
+                receipt.symbol,
+                receipt.line_start,
+                receipt.line_end,
+                receipt.content_hash,
+                receipt.provenance_precision.value,
+                card.language,
+                _json_dumps(card.frameworks),
+                _json_dumps(card.dependencies),
+                _json_dumps(card.constraints),
+                _json_dumps(card.inputs),
+                _json_dumps(card.outputs),
+                _json_dumps(card.test_evidence),
+                _json_dumps(card.applicability),
+                _json_dumps(card.non_applicability),
+                _json_dumps(card.adaptation_notes),
+                _json_dumps(card.risk_notes),
+                _json_dumps(card.keywords),
+                card.coverage_state.value,
+                card.success_count,
+                card.failure_count,
+                card.created_at.isoformat(),
+                card.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one(
+            "SELECT * FROM component_cards WHERE source_barcode = ?",
+            [receipt.source_barcode],
+        )
+        return _row_to_component_card(row) if row else card
+
+    async def find_component_by_source_barcode(self, source_barcode: str) -> Optional[ComponentCard]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM component_cards WHERE source_barcode = ?",
+            [source_barcode],
+        )
+        return _row_to_component_card(row) if row else None
+
+    async def get_component_card(self, component_id: str) -> Optional[ComponentCard]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM component_cards WHERE id = ?", [component_id]
+        )
+        return _row_to_component_card(row) if row else None
+
+    async def list_component_cards(
+        self, limit: int = 100, language: Optional[str] = None
+    ) -> list[ComponentCardSummary]:
+        if language:
+            rows = await self.engine.fetch_all(
+                """SELECT * FROM component_cards
+                   WHERE language = ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                [language, limit],
+            )
+        else:
+            rows = await self.engine.fetch_all(
+                """SELECT * FROM component_cards
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                [limit],
+            )
+        return [_row_to_component_card_summary(r) for r in rows]
+
+    async def list_components_for_methodology(
+        self, methodology_id: str
+    ) -> list[ComponentCardSummary]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM component_cards
+               WHERE methodology_id = ?
+               ORDER BY created_at DESC""",
+            [methodology_id],
+        )
+        return [_row_to_component_card_summary(r) for r in rows]
+
+    async def search_component_cards_text(
+        self, query: str, limit: int = 20, language: Optional[str] = None
+    ) -> list[ComponentCardSummary]:
+        tokens = re.findall(r"[A-Za-z0-9_]+", query.lower())
+        if not tokens:
+            return []
+        clauses: list[str] = []
+        params: list[Any] = []
+        for token in tokens:
+            like = f"%{token}%"
+            clauses.append(
+                "(lower(title) LIKE ? OR lower(component_type) LIKE ? OR lower(file_path) LIKE ? "
+                "OR lower(COALESCE(symbol_name, '')) LIKE ? OR lower(abstract_jobs_json) LIKE ? "
+                "OR lower(keywords_json) LIKE ? OR lower(applicability_json) LIKE ?)"
+            )
+            params.extend([like, like, like, like, like, like, like])
+
+        sql = "SELECT * FROM component_cards WHERE (" + " OR ".join(clauses) + ")"
+        if language:
+            sql += " AND language = ?"
+            params.append(language)
+        sql += " ORDER BY success_count DESC, created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = await self.engine.fetch_all(sql, params)
+        return [_row_to_component_card_summary(r) for r in rows]
+
+    async def update_component_outcome(self, component_id: str, success: bool) -> None:
+        if success:
+            await self.engine.execute(
+                "UPDATE component_cards SET success_count = success_count + 1 WHERE id = ?",
+                [component_id],
+            )
+        else:
+            await self.engine.execute(
+                "UPDATE component_cards SET failure_count = failure_count + 1 WHERE id = ?",
+                [component_id],
+            )
+
+    async def save_component_fit(self, fit: ComponentFit) -> ComponentFit:
+        await self.engine.execute(
+            """INSERT INTO component_fit
+               (id, component_id, task_archetype, component_type, slot_signature,
+                fit_bucket, transfer_mode, confidence, confidence_basis_json,
+                success_count, failure_count, evidence_count, notes_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                fit.id,
+                fit.component_id,
+                fit.task_archetype,
+                fit.component_type,
+                fit.slot_signature,
+                fit.fit_bucket.value,
+                fit.transfer_mode.value,
+                fit.confidence,
+                _json_dumps(fit.confidence_basis),
+                fit.success_count,
+                fit.failure_count,
+                fit.evidence_count,
+                _json_dumps(fit.notes),
+                fit.updated_at.isoformat(),
+            ],
+        )
+        return fit
+
+    async def list_component_fit(self, component_id: str) -> list[ComponentFit]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM component_fit
+               WHERE component_id = ?
+               ORDER BY updated_at DESC""",
+            [component_id],
+        )
+        return [_row_to_component_fit(r) for r in rows]
+
+    async def find_component_fit(
+        self,
+        task_archetype: Optional[str],
+        slot_signature: Optional[str],
+        component_type: Optional[str],
+        limit: int = 20,
+    ) -> list[ComponentFit]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if task_archetype:
+            clauses.append("task_archetype = ?")
+            params.append(task_archetype)
+        if slot_signature:
+            clauses.append("slot_signature = ?")
+            params.append(slot_signature)
+        if component_type:
+            clauses.append("component_type = ?")
+            params.append(component_type)
+        params.append(limit)
+        rows = await self.engine.fetch_all(
+            f"""SELECT * FROM component_fit
+                WHERE {' AND '.join(clauses)}
+                ORDER BY confidence DESC, evidence_count DESC
+                LIMIT ?""",
+            params,
+        )
+        return [_row_to_component_fit(r) for r in rows]
+
+    async def save_task_plan(self, plan: TaskPlanRecord) -> TaskPlanRecord:
+        await self.engine.execute(
+            """INSERT INTO task_plans
+               (id, task_text, workspace_dir, branch, target_brain, execution_mode,
+                check_commands_json, task_archetype, archetype_confidence, status,
+                summary_json, approved_slot_ids_json, plan_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   task_text = excluded.task_text,
+                   workspace_dir = excluded.workspace_dir,
+                   branch = excluded.branch,
+                   target_brain = excluded.target_brain,
+                   execution_mode = excluded.execution_mode,
+                   check_commands_json = excluded.check_commands_json,
+                   task_archetype = excluded.task_archetype,
+                   archetype_confidence = excluded.archetype_confidence,
+                   status = excluded.status,
+                   summary_json = excluded.summary_json,
+                   approved_slot_ids_json = excluded.approved_slot_ids_json,
+                   plan_json = excluded.plan_json,
+                   updated_at = excluded.updated_at""",
+            [
+                plan.id,
+                plan.task_text,
+                plan.workspace_dir,
+                plan.branch,
+                plan.target_brain,
+                plan.execution_mode,
+                _json_dumps(plan.check_commands),
+                plan.task_archetype,
+                plan.archetype_confidence,
+                plan.status,
+                _json_dumps(plan.summary),
+                _json_dumps(plan.approved_slot_ids),
+                _json_dumps(plan.plan_json),
+                plan.created_at.isoformat(),
+                plan.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one("SELECT * FROM task_plans WHERE id = ?", [plan.id])
+        return _row_to_task_plan_record(row) if row else plan
+
+    async def get_task_plan(self, plan_id: str) -> Optional[TaskPlanRecord]:
+        row = await self.engine.fetch_one("SELECT * FROM task_plans WHERE id = ?", [plan_id])
+        return _row_to_task_plan_record(row) if row else None
+
+    async def save_slot_instance(self, slot: SlotSpec, task_archetype: Optional[str] = None) -> SlotSpec:
+        await self.engine.execute(
+            """INSERT INTO slot_instances
+               (id, slot_barcode, task_archetype, name, abstract_job, risk,
+                constraints_json, target_stack_json, proof_expectations_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   slot_barcode = excluded.slot_barcode,
+                   task_archetype = excluded.task_archetype,
+                   name = excluded.name,
+                   abstract_job = excluded.abstract_job,
+                   risk = excluded.risk,
+                   constraints_json = excluded.constraints_json,
+                   target_stack_json = excluded.target_stack_json,
+                   proof_expectations_json = excluded.proof_expectations_json""",
+            [
+                slot.slot_id,
+                slot.slot_barcode,
+                task_archetype,
+                slot.name,
+                slot.abstract_job,
+                slot.risk.value,
+                _json_dumps(slot.constraints),
+                _json_dumps(slot.target_stack),
+                _json_dumps(slot.proof_expectations),
+            ],
+        )
+        return slot
+
+    async def save_application_packet(self, packet: ApplicationPacket) -> None:
+        await self.engine.execute(
+            """INSERT INTO application_packets
+               (id, schema_version, plan_id, task_archetype, slot_id, status, packet_json,
+                selected_component_id, review_required, coverage_state, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   schema_version = excluded.schema_version,
+                   task_archetype = excluded.task_archetype,
+                   status = excluded.status,
+                   packet_json = excluded.packet_json,
+                   selected_component_id = excluded.selected_component_id,
+                   review_required = excluded.review_required,
+                   coverage_state = excluded.coverage_state,
+                   updated_at = excluded.updated_at""",
+            [
+                packet.packet_id,
+                packet.schema_version,
+                packet.plan_id,
+                packet.task_archetype,
+                packet.slot.slot_id,
+                packet.status.value,
+                _json_dumps(_model_dump(packet)),
+                packet.selected.component_id,
+                int(packet.reviewer_required),
+                packet.coverage_state.value,
+                datetime.now(UTC).isoformat(),
+                datetime.now(UTC).isoformat(),
+            ],
+        )
+
+    async def get_application_packet(self, packet_id: str) -> Optional[ApplicationPacket]:
+        row = await self.engine.fetch_one(
+            "SELECT packet_json FROM application_packets WHERE id = ?",
+            [packet_id],
+        )
+        if row is None:
+            return None
+        raw = _json_loads(row["packet_json"], {})
+        return ApplicationPacket.model_validate(raw) if raw else None
+
+    async def list_packets_for_plan(self, plan_id: str) -> list[ApplicationPacketSummary]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM application_packets
+               WHERE plan_id = ?
+               ORDER BY created_at ASC""",
+            [plan_id],
+        )
+        return [_row_to_application_packet_summary(r) for r in rows]
+
+    async def list_packet_history_for_component(
+        self, component_id: str, limit: int = 50
+    ) -> list[ApplicationPacketSummary]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM application_packets
+               WHERE selected_component_id = ?
+               ORDER BY updated_at DESC
+               LIMIT ?""",
+            [component_id, limit],
+        )
+        return [_row_to_application_packet_summary(r) for r in rows]
+
+    async def save_pair_event(self, event: PairEvent) -> PairEvent:
+        await self.engine.execute(
+            """INSERT INTO pair_events
+               (id, run_id, slot_id, slot_barcode, packet_id, component_id,
+                source_barcode, confidence, confidence_basis_json, replacement_of_pair_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                event.id,
+                event.run_id,
+                event.slot_id,
+                event.slot_barcode,
+                event.packet_id,
+                event.component_id,
+                event.source_barcode,
+                event.confidence,
+                _json_dumps(event.confidence_basis),
+                event.replacement_of_pair_id,
+                event.created_at.isoformat(),
+            ],
+        )
+        return event
+
+    async def save_landing_event(self, event: LandingEvent) -> LandingEvent:
+        await self.engine.execute(
+            """INSERT INTO landing_events
+               (id, run_id, slot_id, packet_id, file_path, symbol_name, diff_hunk_id, origin, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                event.id,
+                event.run_id,
+                event.slot_id,
+                event.packet_id,
+                event.file_path,
+                event.symbol,
+                event.diff_hunk_id,
+                event.origin.value,
+                event.created_at.isoformat(),
+            ],
+        )
+        return event
+
+    async def save_outcome_event(self, event: OutcomeEvent) -> OutcomeEvent:
+        await self.engine.execute(
+            """INSERT INTO outcome_events
+               (id, run_id, slot_id, packet_id, success, verifier_findings_json,
+                test_refs_json, negative_memory_updates_json, recipe_eligible, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                event.id,
+                event.run_id,
+                event.slot_id,
+                event.packet_id,
+                int(event.success),
+                _json_dumps(event.verifier_findings),
+                _json_dumps(event.test_refs),
+                _json_dumps(event.negative_memory_updates),
+                int(event.recipe_eligible),
+                event.created_at.isoformat(),
+            ],
+        )
+        return event
+
+    async def list_run_pair_events(self, run_id: str) -> list[PairEvent]:
+        rows = await self.engine.fetch_all(
+            "SELECT * FROM pair_events WHERE run_id = ? ORDER BY created_at ASC",
+            [run_id],
+        )
+        return [_row_to_pair_event(r) for r in rows]
+
+    async def list_run_landing_events(self, run_id: str) -> list[LandingEvent]:
+        rows = await self.engine.fetch_all(
+            "SELECT * FROM landing_events WHERE run_id = ? ORDER BY created_at ASC",
+            [run_id],
+        )
+        return [_row_to_landing_event(r) for r in rows]
+
+    async def list_run_outcome_events(self, run_id: str) -> list[OutcomeEvent]:
+        rows = await self.engine.fetch_all(
+            "SELECT * FROM outcome_events WHERE run_id = ? ORDER BY created_at ASC",
+            [run_id],
+        )
+        return [_row_to_outcome_event(r) for r in rows]
+
+    async def save_run_connectome(self, connectome: RunConnectome) -> RunConnectome:
+        await self.engine.execute(
+            """INSERT INTO run_connectomes (id, run_id, task_archetype, status, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(run_id) DO UPDATE SET
+                   task_archetype = excluded.task_archetype,
+                   status = excluded.status""",
+            [
+                connectome.id,
+                connectome.run_id,
+                connectome.task_archetype,
+                connectome.status,
+                connectome.created_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one(
+            "SELECT * FROM run_connectomes WHERE run_id = ?",
+            [connectome.run_id],
+        )
+        return _row_to_run_connectome(row) if row else connectome
+
+    async def get_run_connectome(self, run_id: str) -> Optional[RunConnectome]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM run_connectomes WHERE run_id = ?",
+            [run_id],
+        )
+        return _row_to_run_connectome(row) if row else None
+
+    async def save_run_slot_execution(self, execution: RunSlotExecution) -> RunSlotExecution:
+        await self.engine.execute(
+            """INSERT INTO run_slot_executions
+               (id, run_id, slot_id, packet_id, selected_component_id, status, current_step,
+                retry_count, last_retry_detail, replacement_count, blocked_wait_ms, family_wait_ms, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(run_id, slot_id) DO UPDATE SET
+                   packet_id = excluded.packet_id,
+                   selected_component_id = excluded.selected_component_id,
+                   status = excluded.status,
+                   current_step = excluded.current_step,
+                   retry_count = excluded.retry_count,
+                   last_retry_detail = excluded.last_retry_detail,
+                   replacement_count = excluded.replacement_count,
+                   blocked_wait_ms = excluded.blocked_wait_ms,
+                   family_wait_ms = excluded.family_wait_ms,
+                   updated_at = excluded.updated_at""",
+            [
+                execution.id,
+                execution.run_id,
+                execution.slot_id,
+                execution.packet_id,
+                execution.selected_component_id,
+                execution.status,
+                execution.current_step,
+                execution.retry_count,
+                execution.last_retry_detail,
+                execution.replacement_count,
+                execution.blocked_wait_ms,
+                execution.family_wait_ms,
+                execution.created_at.isoformat(),
+                execution.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one(
+            "SELECT * FROM run_slot_executions WHERE run_id = ? AND slot_id = ?",
+            [execution.run_id, execution.slot_id],
+        )
+        return _row_to_run_slot_execution(row) if row else execution
+
+    async def list_run_slot_executions(self, run_id: str) -> list[RunSlotExecution]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM run_slot_executions
+               WHERE run_id = ?
+               ORDER BY created_at ASC, updated_at ASC""",
+            [run_id],
+        )
+        return [_row_to_run_slot_execution(r) for r in rows]
+
+    async def save_run_event(self, event: RunEvent) -> RunEvent:
+        await self.engine.execute(
+            """INSERT INTO run_events
+               (id, run_id, slot_id, event_type, payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [
+                event.id,
+                event.run_id,
+                event.slot_id,
+                event.event_type,
+                _json_dumps(event.payload),
+                event.created_at.isoformat(),
+            ],
+        )
+        return event
+
+    async def list_run_events(self, run_id: str) -> list[RunEvent]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM run_events
+               WHERE run_id = ?
+               ORDER BY created_at ASC""",
+            [run_id],
+        )
+        return [_row_to_run_event(r) for r in rows]
+
+    async def save_run_action_audit(self, audit: RunActionAudit) -> RunActionAudit:
+        await self.engine.execute(
+            """INSERT INTO run_action_audits
+               (id, run_id, slot_id, action_type, actor, reason, action_payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                audit.id,
+                audit.run_id,
+                audit.slot_id,
+                audit.action_type,
+                audit.actor,
+                audit.reason,
+                _json_dumps(audit.action_payload),
+                audit.created_at.isoformat(),
+            ],
+        )
+        return audit
+
+    async def list_run_action_audits(self, run_id: str) -> list[RunActionAudit]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM run_action_audits
+               WHERE run_id = ?
+               ORDER BY created_at ASC""",
+            [run_id],
+        )
+        return [_row_to_run_action_audit(r) for r in rows]
+
+    async def save_run_connectome_edge(
+        self,
+        connectome_id: str,
+        source_node: str,
+        target_node: str,
+        edge_type: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        edge_id = str(uuid.uuid4())
+        await self.engine.execute(
+            """INSERT INTO run_connectome_edges
+               (id, connectome_id, source_node, target_node, edge_type, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [edge_id, connectome_id, source_node, target_node, edge_type, _json_dumps(metadata or {})],
+        )
+        return edge_id
+
+    async def list_run_connectome_edges(self, connectome_id: str) -> list[dict[str, Any]]:
+        rows = await self.engine.fetch_all(
+            """SELECT * FROM run_connectome_edges
+               WHERE connectome_id = ?""",
+            [connectome_id],
+        )
+        return [dict(r) for r in rows]
+
+    async def save_compiled_recipe(self, recipe: CompiledRecipe) -> CompiledRecipe:
+        await self.engine.execute(
+            """INSERT INTO compiled_recipes
+               (id, task_archetype, recipe_name, recipe_json, sample_size, is_active, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   task_archetype = excluded.task_archetype,
+                   recipe_name = excluded.recipe_name,
+                   recipe_json = excluded.recipe_json,
+                   sample_size = excluded.sample_size,
+                   is_active = excluded.is_active,
+                   updated_at = excluded.updated_at""",
+            [
+                recipe.id,
+                recipe.task_archetype,
+                recipe.recipe_name,
+                _json_dumps(recipe.recipe_json),
+                recipe.sample_size,
+                int(recipe.is_active),
+                recipe.created_at.isoformat(),
+                recipe.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one("SELECT * FROM compiled_recipes WHERE id = ?", [recipe.id])
+        return _row_to_compiled_recipe(row) if row else recipe
+
+    async def get_compiled_recipe(self, recipe_id: str) -> Optional[CompiledRecipe]:
+        row = await self.engine.fetch_one("SELECT * FROM compiled_recipes WHERE id = ?", [recipe_id])
+        return _row_to_compiled_recipe(row) if row else None
+
+    async def list_compiled_recipes(
+        self,
+        task_archetype: Optional[str] = None,
+        active_only: bool = False,
+        limit: int = 50,
+    ) -> list[CompiledRecipe]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if task_archetype:
+            clauses.append("task_archetype = ?")
+            params.append(task_archetype)
+        if active_only:
+            clauses.append("is_active = 1")
+        params.append(limit)
+        rows = await self.engine.fetch_all(
+            f"""SELECT * FROM compiled_recipes
+                WHERE {' AND '.join(clauses)}
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            params,
+        )
+        return [_row_to_compiled_recipe(r) for r in rows]
+
+    async def save_mining_mission(self, mission: MiningMission) -> MiningMission:
+        await self.engine.execute(
+            """INSERT INTO mining_missions
+               (id, run_id, slot_family, priority, reason, status, mission_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   run_id = excluded.run_id,
+                   slot_family = excluded.slot_family,
+                   priority = excluded.priority,
+                   reason = excluded.reason,
+                   status = excluded.status,
+                   mission_json = excluded.mission_json,
+                   updated_at = excluded.updated_at""",
+            [
+                mission.id,
+                mission.run_id,
+                mission.slot_family,
+                mission.priority,
+                mission.reason,
+                mission.status,
+                _json_dumps(mission.mission_json),
+                mission.created_at.isoformat(),
+                mission.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one("SELECT * FROM mining_missions WHERE id = ?", [mission.id])
+        return _row_to_mining_mission(row) if row else mission
+
+    async def list_mining_missions(
+        self,
+        run_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[MiningMission]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if run_id:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        params.append(limit)
+        rows = await self.engine.fetch_all(
+            f"""SELECT * FROM mining_missions
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC
+                LIMIT ?""",
+            params,
+        )
+        return [_row_to_mining_mission(r) for r in rows]
+
+    async def save_governance_policy(self, policy: GovernancePolicy) -> GovernancePolicy:
+        await self.engine.execute(
+            """INSERT INTO governance_policies
+               (id, run_id, task_archetype, slot_id, family_barcode, policy_kind, severity, status,
+                reason, recommendation, evidence_json, promoted_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   run_id = excluded.run_id,
+                   task_archetype = excluded.task_archetype,
+                   slot_id = excluded.slot_id,
+                   family_barcode = excluded.family_barcode,
+                   policy_kind = excluded.policy_kind,
+                   severity = excluded.severity,
+                   status = excluded.status,
+                   reason = excluded.reason,
+                   recommendation = excluded.recommendation,
+                   evidence_json = excluded.evidence_json,
+                   promoted_by = excluded.promoted_by,
+                   updated_at = excluded.updated_at""",
+            [
+                policy.id,
+                policy.run_id,
+                policy.task_archetype,
+                policy.slot_id,
+                policy.family_barcode,
+                policy.policy_kind,
+                policy.severity,
+                policy.status,
+                policy.reason,
+                policy.recommendation,
+                _json_dumps(policy.evidence_json),
+                policy.promoted_by,
+                policy.created_at.isoformat(),
+                policy.updated_at.isoformat(),
+            ],
+        )
+        row = await self.engine.fetch_one(
+            "SELECT * FROM governance_policies WHERE id = ?",
+            [policy.id],
+        )
+        return _row_to_governance_policy(row) if row else policy
+
+    async def list_governance_policies(
+        self,
+        *,
+        task_archetype: Optional[str] = None,
+        active_only: bool = False,
+        limit: int = 100,
+    ) -> list[GovernancePolicy]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if task_archetype:
+            clauses.append("task_archetype = ?")
+            params.append(task_archetype)
+        if active_only:
+            clauses.append("status = 'active'")
+        params.append(limit)
+        rows = await self.engine.fetch_all(
+            f"""SELECT * FROM governance_policies
+                WHERE {' AND '.join(clauses)}
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?""",
+            params,
+        )
+        return [_row_to_governance_policy(r) for r in rows]
+
+    async def get_governance_policy(self, policy_id: str) -> Optional[GovernancePolicy]:
+        row = await self.engine.fetch_one(
+            "SELECT * FROM governance_policies WHERE id = ?",
+            [policy_id],
+        )
+        return _row_to_governance_policy(row) if row else None
+
+
 def _row_to_project(row: dict[str, Any]) -> Project:
     tech_stack = row.get("tech_stack", "{}")
     if isinstance(tech_stack, str):
@@ -2262,6 +3216,299 @@ def _row_to_synergy_exploration(row: dict[str, Any]) -> SynergyExploration:
         edge_id=row.get("edge_id"),
         exploration_method=row.get("exploration_method"),
         details=details,
+    )
+
+
+def _row_to_receipt(row: dict[str, Any]) -> Receipt:
+    return Receipt(
+        source_barcode=row["source_barcode"],
+        family_barcode=row["family_barcode"],
+        lineage_id=row["lineage_id"],
+        repo=row["repo"],
+        commit=row.get("commit_sha"),
+        file_path=row["file_path"],
+        symbol=row.get("symbol_name"),
+        line_start=row.get("line_start"),
+        line_end=row.get("line_end"),
+        content_hash=row["content_hash"],
+        provenance_precision=row["provenance_precision"],
+    )
+
+
+def _row_to_component_lineage(row: dict[str, Any]) -> ComponentLineage:
+    return ComponentLineage(
+        id=row["id"],
+        family_barcode=row["family_barcode"],
+        canonical_content_hash=row["canonical_content_hash"],
+        canonical_title=row.get("canonical_title"),
+        language=row.get("language"),
+        lineage_size=int(row.get("lineage_size", 1) or 1),
+        deduped_support_count=int(row.get("deduped_support_count", 1) or 1),
+        clone_inflated=bool(row.get("clone_inflated", 0)),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_component_card(row: dict[str, Any]) -> ComponentCard:
+    return ComponentCard(
+        id=row["id"],
+        methodology_id=row.get("methodology_id"),
+        title=row["title"],
+        component_type=row["component_type"],
+        abstract_jobs=_json_loads(row.get("abstract_jobs_json"), []),
+        receipt=_row_to_receipt(row),
+        language=row.get("language"),
+        frameworks=_json_loads(row.get("frameworks_json"), []),
+        dependencies=_json_loads(row.get("dependencies_json"), []),
+        constraints=_json_loads(row.get("constraints_json"), []),
+        inputs=_json_loads(row.get("inputs_json"), []),
+        outputs=_json_loads(row.get("outputs_json"), []),
+        test_evidence=_json_loads(row.get("test_evidence_json"), []),
+        applicability=_json_loads(row.get("applicability_json"), []),
+        non_applicability=_json_loads(row.get("non_applicability_json"), []),
+        adaptation_notes=_json_loads(row.get("adaptation_notes_json"), []),
+        risk_notes=_json_loads(row.get("risk_notes_json"), []),
+        keywords=_json_loads(row.get("keywords_json"), []),
+        coverage_state=row.get("coverage_state", "weak"),
+        success_count=int(row.get("success_count", 0) or 0),
+        failure_count=int(row.get("failure_count", 0) or 0),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_component_card_summary(row: dict[str, Any]) -> ComponentCardSummary:
+    return ComponentCardSummary(
+        id=row["id"],
+        title=row["title"],
+        component_type=row["component_type"],
+        language=row.get("language"),
+        family_barcode=row["family_barcode"],
+        repo=row["repo"],
+        file_path=row["file_path"],
+        symbol=row.get("symbol_name"),
+        provenance_precision=row["provenance_precision"],
+        success_count=int(row.get("success_count", 0) or 0),
+        failure_count=int(row.get("failure_count", 0) or 0),
+        coverage_state=row.get("coverage_state", "weak"),
+    )
+
+
+def _row_to_component_fit(row: dict[str, Any]) -> ComponentFit:
+    return ComponentFit(
+        id=row["id"],
+        component_id=row["component_id"],
+        task_archetype=row.get("task_archetype"),
+        component_type=row.get("component_type"),
+        slot_signature=row.get("slot_signature"),
+        fit_bucket=row["fit_bucket"],
+        transfer_mode=row["transfer_mode"],
+        confidence=float(row.get("confidence", 0.0) or 0.0),
+        confidence_basis=_json_loads(row.get("confidence_basis_json"), []),
+        success_count=int(row.get("success_count", 0) or 0),
+        failure_count=int(row.get("failure_count", 0) or 0),
+        evidence_count=int(row.get("evidence_count", 0) or 0),
+        notes=_json_loads(row.get("notes_json"), []),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_application_packet_summary(row: dict[str, Any]) -> ApplicationPacketSummary:
+    packet = _json_loads(row.get("packet_json"), {})
+    if packet:
+        raw_selected = packet.get("selected", {})
+        return ApplicationPacketSummary(
+            packet_id=row["id"],
+            plan_id=row["plan_id"],
+            task_archetype=row["task_archetype"],
+            slot_id=row["slot_id"],
+            slot_name=packet.get("slot", {}).get("name", row["slot_id"]),
+            status=row.get("status", "draft"),
+            selected_component_id=row["selected_component_id"],
+            fit_bucket=raw_selected.get("fit_bucket", "may_help"),
+            transfer_mode=raw_selected.get("transfer_mode", "heuristic_fallback"),
+            confidence=float(raw_selected.get("confidence", 0.0) or 0.0),
+            review_required=bool(row.get("review_required", 0)),
+            coverage_state=row.get("coverage_state", "weak"),
+        )
+    return ApplicationPacketSummary(
+        packet_id=row["id"],
+        plan_id=row["plan_id"],
+        task_archetype=row["task_archetype"],
+        slot_id=row["slot_id"],
+        slot_name=row["slot_id"],
+        status=row.get("status", "draft"),
+        selected_component_id=row["selected_component_id"],
+        fit_bucket="may_help",
+        transfer_mode="heuristic_fallback",
+        confidence=0.0,
+        review_required=bool(row.get("review_required", 0)),
+        coverage_state=row.get("coverage_state", "weak"),
+    )
+
+
+def _row_to_task_plan_record(row: dict[str, Any]) -> TaskPlanRecord:
+    return TaskPlanRecord(
+        id=row["id"],
+        task_text=row["task_text"],
+        workspace_dir=row.get("workspace_dir"),
+        branch=row.get("branch"),
+        target_brain=row.get("target_brain"),
+        execution_mode=row.get("execution_mode"),
+        check_commands=_json_loads(row.get("check_commands_json"), []),
+        task_archetype=row["task_archetype"],
+        archetype_confidence=float(row.get("archetype_confidence", 0.0) or 0.0),
+        status=row.get("status", "draft"),
+        summary=_json_loads(row.get("summary_json"), {}),
+        approved_slot_ids=_json_loads(row.get("approved_slot_ids_json"), []),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+        plan_json=_json_loads(row.get("plan_json"), {}),
+    )
+
+
+def _row_to_compiled_recipe(row: dict[str, Any]) -> CompiledRecipe:
+    return CompiledRecipe(
+        id=row["id"],
+        task_archetype=row["task_archetype"],
+        recipe_name=row["recipe_name"],
+        recipe_json=_json_loads(row.get("recipe_json"), {}),
+        sample_size=int(row.get("sample_size", 0) or 0),
+        is_active=bool(row.get("is_active", 0)),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_mining_mission(row: dict[str, Any]) -> MiningMission:
+    return MiningMission(
+        id=row["id"],
+        run_id=row.get("run_id"),
+        slot_family=row.get("slot_family"),
+        priority=row.get("priority") or "normal",
+        reason=row.get("reason") or "",
+        status=row.get("status") or "queued",
+        mission_json=_json_loads(row.get("mission_json"), {}),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_pair_event(row: dict[str, Any]) -> PairEvent:
+    return PairEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row["slot_id"],
+        slot_barcode=row["slot_barcode"],
+        packet_id=row["packet_id"],
+        component_id=row["component_id"],
+        source_barcode=row["source_barcode"],
+        confidence=float(row.get("confidence", 0.0) or 0.0),
+        confidence_basis=_json_loads(row.get("confidence_basis_json"), []),
+        replacement_of_pair_id=row.get("replacement_of_pair_id"),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_landing_event(row: dict[str, Any]) -> LandingEvent:
+    return LandingEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row["slot_id"],
+        packet_id=row["packet_id"],
+        file_path=row["file_path"],
+        symbol=row.get("symbol_name"),
+        diff_hunk_id=row.get("diff_hunk_id"),
+        origin=row["origin"],
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_outcome_event(row: dict[str, Any]) -> OutcomeEvent:
+    return OutcomeEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row["slot_id"],
+        packet_id=row["packet_id"],
+        success=bool(row.get("success", 0)),
+        verifier_findings=_json_loads(row.get("verifier_findings_json"), []),
+        test_refs=_json_loads(row.get("test_refs_json"), []),
+        negative_memory_updates=_json_loads(row.get("negative_memory_updates_json"), []),
+        recipe_eligible=bool(row.get("recipe_eligible", 0)),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_run_connectome(row: dict[str, Any]) -> RunConnectome:
+    return RunConnectome(
+        id=row["id"],
+        run_id=row["run_id"],
+        task_archetype=row.get("task_archetype"),
+        status=row.get("status", "pending"),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_run_slot_execution(row: dict[str, Any]) -> RunSlotExecution:
+    return RunSlotExecution(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row["slot_id"],
+        packet_id=row.get("packet_id"),
+        selected_component_id=row.get("selected_component_id"),
+        status=row.get("status") or "queued",
+        current_step=row.get("current_step"),
+        retry_count=int(row.get("retry_count", 0) or 0),
+        last_retry_detail=row.get("last_retry_detail"),
+        replacement_count=int(row.get("replacement_count", 0) or 0),
+        blocked_wait_ms=int(row.get("blocked_wait_ms", 0) or 0),
+        family_wait_ms=int(row.get("family_wait_ms", 0) or 0),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_run_event(row: dict[str, Any]) -> RunEvent:
+    return RunEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row.get("slot_id"),
+        event_type=row["event_type"],
+        payload=_json_loads(row.get("payload_json"), {}),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_run_action_audit(row: dict[str, Any]) -> RunActionAudit:
+    return RunActionAudit(
+        id=row["id"],
+        run_id=row["run_id"],
+        slot_id=row.get("slot_id"),
+        action_type=row["action_type"],
+        actor=row.get("actor") or "operator",
+        reason=row.get("reason") or "",
+        action_payload=_json_loads(row.get("action_payload_json"), {}),
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+    )
+
+
+def _row_to_governance_policy(row: dict[str, Any]) -> GovernancePolicy:
+    return GovernancePolicy(
+        id=row["id"],
+        run_id=row.get("run_id"),
+        task_archetype=row.get("task_archetype"),
+        slot_id=row.get("slot_id"),
+        family_barcode=row.get("family_barcode"),
+        policy_kind=row["policy_kind"],
+        severity=row.get("severity") or "medium",
+        status=row.get("status") or "active",
+        reason=row.get("reason") or "",
+        recommendation=row.get("recommendation") or "",
+        evidence_json=_json_loads(row.get("evidence_json"), {}),
+        promoted_by=row.get("promoted_by") or "operator",
+        created_at=_parse_dt(row.get("created_at")) or datetime.now(UTC),
+        updated_at=_parse_dt(row.get("updated_at")) or datetime.now(UTC),
     )
 
 

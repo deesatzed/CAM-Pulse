@@ -10,16 +10,18 @@ Start with:  cam dashboard [--port 8420]
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
 import uuid
-from datetime import datetime as _datetime
+from datetime import UTC, datetime as _datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,9 +29,16 @@ import toml
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from claw.core.models import CompiledRecipe, ComponentLineage, GovernancePolicy, LandingEvent, LandingOrigin, MiningMission, OutcomeEvent, PacketStatus, PairEvent, ProofGate, RunActionAudit, RunConnectome, RunEvent, RunSlotExecution, TaskPlanRecord
+from claw.connectome.barcodes import build_family_barcode, build_source_barcode
 from claw.db.repository import _build_safe_fts5_query
+from claw.memory.component_ranker import rank_components_for_slot
+from claw.mining.component_extractor import extract_components_from_file
+from claw.planning.application_packet import build_application_packet, build_packet_summary
+from claw.planning.taskome import decompose_task, infer_task_archetype
+from claw.security.policy_tools import run_critical_slot_policy_checks
 
 logger = logging.getLogger("claw.web.dashboard")
 
@@ -78,6 +87,1644 @@ async def _shutdown_state() -> None:
     _state.clear()
 
 
+def _playground_plans(app: FastAPI) -> dict[str, dict[str, Any]]:
+    if not hasattr(app.state, "playground_plans"):
+        app.state.playground_plans = {}
+    return app.state.playground_plans
+
+
+def _packet_to_json(packet: Any) -> dict[str, Any]:
+    return packet.model_dump(mode="json") if hasattr(packet, "model_dump") else dict(packet)
+
+
+async def _candidate_cards_for_slot(
+    repo: Any,
+    *,
+    task_text: str,
+    slot: Any,
+    target_language: Optional[str],
+    workspace_dir: Optional[str] = None,
+) -> list[Any]:
+    query = " ".join([slot.name, slot.abstract_job, task_text]).strip()
+    summaries = await repo.search_component_cards_text(query, limit=8, language=target_language)
+    if not summaries:
+        summaries = await repo.list_component_cards(limit=12, language=target_language)
+
+    cards: list[Any] = []
+    seen: set[str] = set()
+    for summary in summaries:
+        component_id = getattr(summary, "id", None)
+        if not component_id or component_id in seen:
+            continue
+        card = await repo.get_component_card(component_id)
+        if card is None:
+            continue
+        if _is_noise_component_path(card.receipt.file_path):
+            continue
+        cards.append(card)
+        seen.add(component_id)
+    if cards:
+        return cards
+    local_cards = _local_workspace_candidate_cards_for_slot(
+        task_text=task_text,
+        slot=slot,
+        target_language=target_language,
+        workspace_dir=workspace_dir,
+    )
+    if not local_cards:
+        return []
+    return await _persist_local_candidate_cards(repo, local_cards)
+
+
+def _candidate_terms(*parts: str) -> set[str]:
+    tokens: set[str] = set()
+    for part in parts:
+        for token in re.findall(r"[a-z0-9_]+", part.lower()):
+            if len(token) >= 3:
+                tokens.add(token)
+            if "_" in token:
+                for subtoken in token.split("_"):
+                    if len(subtoken) >= 3:
+                        tokens.add(subtoken)
+    return tokens
+
+
+_SEARCH_QUERY_ALIASES: dict[str, set[str]] = {
+    "auth": {"oauth", "token", "session", "refresh", "jwt", "login", "credential"},
+    "oauth": {"auth", "token", "session", "refresh", "login"},
+    "token": {"auth", "oauth", "session", "refresh", "jwt"},
+    "session": {"auth", "oauth", "token", "refresh", "login"},
+    "login": {"auth", "oauth", "session", "credential"},
+    "jwt": {"auth", "oauth", "token"},
+}
+
+_AUTH_INTENT_TERMS = {"auth", "oauth", "jwt", "login", "credential"}
+_AUTH_STRONG_SIGNALS = {"auth", "oauth", "jwt", "login", "credential", "authenticated", "authorization", "authorize"}
+_AUTH_WEAK_SIGNALS = {"token", "session", "refresh"}
+
+
+def _search_query_terms(query: str) -> set[str]:
+    terms = _candidate_terms(query)
+    expanded = set(terms)
+    for term in list(terms):
+        expanded.update(_SEARCH_QUERY_ALIASES.get(term, set()))
+    return expanded
+
+
+def _direct_query_terms(query: str) -> set[str]:
+    return _candidate_terms(query)
+
+
+def _is_auth_intent_query(direct_terms: set[str]) -> bool:
+    return bool(direct_terms & _AUTH_INTENT_TERMS)
+
+
+def _is_weak_auth_only_match(target_terms: set[str], direct_terms: set[str]) -> bool:
+    if not _is_auth_intent_query(direct_terms):
+        return False
+    return bool(target_terms & _AUTH_WEAK_SIGNALS) and not bool(target_terms & _AUTH_STRONG_SIGNALS)
+
+
+def _workspace_root(workspace_dir: Optional[str]) -> Path:
+    if workspace_dir:
+        return Path(workspace_dir).resolve()
+    return Path.cwd()
+
+
+def _is_noise_component_path(file_path: str) -> bool:
+    normalized = file_path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.startswith(
+        (
+            ".uv-cache/",
+            "node_modules/",
+            ".next/",
+            "dist/",
+            "build/",
+            "data/",
+        )
+    )
+
+
+def _is_test_component_path(file_path: str) -> bool:
+    normalized = file_path.replace("\\", "/").lower()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return (
+        normalized.startswith("tests/")
+        or "/tests/" in normalized
+        or normalized.startswith("test_")
+        or "/test_" in normalized
+    )
+
+
+def _local_workspace_candidate_cards_for_slot(
+    *,
+    task_text: str,
+    slot: Any,
+    target_language: Optional[str],
+    workspace_dir: Optional[str],
+    max_files: int = 32,
+    max_cards: int = 16,
+) -> list[Any]:
+    workspace_root = _workspace_root(workspace_dir)
+    if not workspace_root.exists() or not workspace_root.is_dir():
+        return []
+
+    allowed_suffixes = {
+        ".py": "python",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".js": "javascript",
+        ".jsx": "javascript",
+    }
+    if target_language:
+        allowed_suffixes = {
+            suffix: language
+            for suffix, language in allowed_suffixes.items()
+            if language == target_language.lower()
+        }
+        if not allowed_suffixes:
+            return []
+
+    skip_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        ".uv-cache",
+        "node_modules",
+        ".next",
+        "dist",
+        "build",
+        "__pycache__",
+        "data",
+    }
+    task_terms = _candidate_terms(task_text, slot.name, slot.abstract_job, " ".join(slot.constraints), " ".join(slot.target_stack))
+    file_scores: list[tuple[int, int, Path]] = []
+    for path in workspace_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        language = allowed_suffixes.get(path.suffix.lower())
+        if language is None:
+            continue
+        try:
+            rel = path.relative_to(workspace_root).as_posix()
+        except Exception:
+            continue
+        rel_terms = _candidate_terms(rel)
+        overlap = len(task_terms & rel_terms)
+        file_scores.append((overlap, path))
+
+    if not file_scores:
+        return []
+
+    file_scores.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
+    selected_paths = [path for _score, path in file_scores[:max_files]]
+
+    from claw.core.models import ComponentCard, CoverageState, Receipt
+    from claw.miner import RepoMiner
+
+    candidates: list[tuple[int, ComponentCard]] = []
+    seen_source_barcodes: set[str] = set()
+    for path in selected_paths:
+        rel = path.relative_to(workspace_root).as_posix()
+        for extracted in extract_components_from_file(workspace_root, rel, max_components=12):
+            descriptor = " ".join(
+                [
+                    extracted.title,
+                    extracted.component_type,
+                    extracted.symbol_kind,
+                    extracted.file_path,
+                    extracted.note,
+                    " ".join(extracted.keywords),
+                    " ".join(extracted.imports),
+                ]
+            ).strip()
+            if not descriptor:
+                continue
+            abstract_jobs = RepoMiner._infer_abstract_jobs(extracted.component_type, descriptor)
+            content_hash = f"sha256:{hashlib.sha256('|'.join([rel, extracted.symbol_name, extracted.ast_fingerprint or descriptor]).encode('utf-8')).hexdigest()}"
+            source_barcode = build_source_barcode(
+                workspace_root.name or "workspace",
+                rel,
+                content_hash,
+                symbol_name=extracted.symbol_name or None,
+            )
+            if source_barcode in seen_source_barcodes:
+                continue
+            seen_source_barcodes.add(source_barcode)
+            family_barcode = build_family_barcode(extracted.component_type, abstract_jobs[0])
+            receipt = Receipt(
+                source_barcode=source_barcode,
+                family_barcode=family_barcode,
+                lineage_id=f"lin_local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:12]}",
+                repo=workspace_root.name or "workspace",
+                file_path=rel,
+                symbol=extracted.symbol_name or None,
+                line_start=extracted.line_start,
+                line_end=extracted.line_end,
+                content_hash=content_hash,
+                provenance_precision=("precise_symbol" if extracted.line_start is not None else ("symbol" if extracted.symbol_name else "file")),
+            )
+            overlap = len(task_terms & _candidate_terms(descriptor, *abstract_jobs))
+            card = ComponentCard(
+                id=f"local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:16]}",
+                title=extracted.title,
+                component_type=extracted.component_type,
+                abstract_jobs=abstract_jobs,
+                receipt=receipt,
+                language=extracted.language,
+                dependencies=list(dict.fromkeys(extracted.imports[:6])),
+                applicability=[descriptor[:240]],
+                adaptation_notes=[f"workspace fallback candidate from {rel}"],
+                keywords=list(dict.fromkeys([*extracted.keywords, *abstract_jobs, extracted.component_type])),
+                coverage_state=CoverageState.WEAK,
+            )
+            candidates.append((overlap, card))
+
+    candidates.sort(key=lambda item: (item[0], item[1].title.lower()), reverse=True)
+    return [card for _score, card in candidates[:max_cards]]
+
+
+async def _persist_local_candidate_cards(repo: Any, cards: list[Any]) -> list[Any]:
+    persisted: list[Any] = []
+    for card in cards:
+        existing = await repo.find_component_by_source_barcode(card.receipt.source_barcode)
+        if existing is not None:
+            persisted.append(existing)
+            continue
+
+        lineage = await repo.find_lineage_by_hash(card.receipt.content_hash)
+        if lineage is None or lineage.family_barcode != card.receipt.family_barcode:
+            lineage = ComponentLineage(
+                family_barcode=card.receipt.family_barcode,
+                canonical_content_hash=card.receipt.content_hash,
+                canonical_title=card.title,
+                language=card.language,
+            )
+            await repo.upsert_component_lineage(lineage)
+
+        persisted_card = card.model_copy(
+            update={
+                "receipt": card.receipt.model_copy(update={"lineage_id": lineage.id}),
+            }
+        )
+        persisted.append(await repo.upsert_component_card(persisted_card))
+    return persisted
+
+
+def _local_workspace_search_cards(
+    *,
+    query: str,
+    target_language: Optional[str],
+    workspace_dir: Optional[str],
+    max_files: int = 32,
+    max_cards: int = 20,
+) -> list[Any]:
+    workspace_root = _workspace_root(workspace_dir)
+    if not workspace_root.exists() or not workspace_root.is_dir():
+        return []
+
+    allowed_suffixes = {
+        ".py": "python",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".js": "javascript",
+        ".jsx": "javascript",
+    }
+    if target_language:
+        allowed_suffixes = {
+            suffix: language
+            for suffix, language in allowed_suffixes.items()
+            if language == target_language.lower()
+        }
+        if not allowed_suffixes:
+            return []
+
+    skip_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        ".uv-cache",
+        "node_modules",
+        ".next",
+        "dist",
+        "build",
+        "__pycache__",
+        "data",
+    }
+    direct_terms = _direct_query_terms(query)
+    query_terms = _search_query_terms(query)
+    if not direct_terms:
+        return []
+    allow_content_only_fallback = len(direct_terms) >= 2
+
+    file_scores: list[tuple[int, int, Path]] = []
+    for path in workspace_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        language = allowed_suffixes.get(path.suffix.lower())
+        if language is None:
+            continue
+        try:
+            rel = path.relative_to(workspace_root).as_posix()
+        except Exception:
+            continue
+        if "test" not in direct_terms and _is_test_component_path(rel):
+            continue
+        path_overlap = len(query_terms & _candidate_terms(rel))
+        content_overlap = 0
+        overlap = path_overlap
+        if overlap <= 0 and allow_content_only_fallback:
+            try:
+                if path.stat().st_size <= 256_000:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                    text_terms = _candidate_terms(text[:16_000])
+                    if _is_weak_auth_only_match(text_terms, direct_terms):
+                        continue
+                    content_overlap = len(query_terms & text_terms)
+                    overlap = content_overlap
+            except Exception:
+                overlap = 0
+        if overlap <= 0:
+            continue
+        file_scores.append((overlap, path_overlap, path))
+
+    if not file_scores:
+        return []
+
+    from claw.core.models import ComponentCard, CoverageState, Receipt
+    from claw.miner import RepoMiner
+
+    file_scores.sort(key=lambda item: (item[0], item[1], str(item[2])), reverse=True)
+    seen_source_barcodes: set[str] = set()
+    candidates: list[tuple[int, ComponentCard]] = []
+    for file_overlap, path_overlap, path in file_scores[:max_files]:
+        rel = path.relative_to(workspace_root).as_posix()
+        matched_symbol = False
+        for extracted in extract_components_from_file(workspace_root, rel, max_components=12):
+            descriptor = " ".join(
+                [
+                    extracted.title,
+                    extracted.component_type,
+                    extracted.symbol_kind,
+                    extracted.file_path,
+                    extracted.note,
+                    " ".join(extracted.keywords),
+                    " ".join(extracted.imports),
+                ]
+            ).strip()
+            descriptor_terms = _candidate_terms(descriptor)
+            abstract_jobs = RepoMiner._infer_abstract_jobs(extracted.component_type, descriptor)
+            abstract_job_terms = _candidate_terms(*abstract_jobs)
+            abstract_job_overlap = len(query_terms & abstract_job_terms)
+            descriptor_overlap = len(query_terms & descriptor_terms)
+            combined_terms = descriptor_terms | abstract_job_terms | _candidate_terms(rel)
+            if _is_weak_auth_only_match(combined_terms, direct_terms):
+                continue
+            if descriptor_overlap <= 0 and abstract_job_overlap <= 0 and path_overlap <= 0:
+                continue
+            matched_symbol = True
+            score = descriptor_overlap * 12 + abstract_job_overlap * 8 + path_overlap * 6 + file_overlap * 2
+            if "test" not in direct_terms and _is_test_component_path(rel):
+                score -= 8
+            content_hash = f"sha256:{hashlib.sha256('|'.join([rel, extracted.symbol_name, extracted.ast_fingerprint or descriptor]).encode('utf-8')).hexdigest()}"
+            source_barcode = build_source_barcode(
+                workspace_root.name or "workspace",
+                rel,
+                content_hash,
+                symbol_name=extracted.symbol_name or None,
+            )
+            if source_barcode in seen_source_barcodes:
+                continue
+            seen_source_barcodes.add(source_barcode)
+            family_barcode = build_family_barcode(extracted.component_type, abstract_jobs[0])
+            receipt = Receipt(
+                source_barcode=source_barcode,
+                family_barcode=family_barcode,
+                lineage_id=f"lin_local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:12]}",
+                repo=workspace_root.name or "workspace",
+                file_path=rel,
+                symbol=extracted.symbol_name or None,
+                line_start=extracted.line_start,
+                line_end=extracted.line_end,
+                content_hash=content_hash,
+                provenance_precision=("precise_symbol" if extracted.line_start is not None else ("symbol" if extracted.symbol_name else "file")),
+            )
+            candidates.append(
+                (
+                    score,
+                    ComponentCard(
+                        id=f"local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:16]}",
+                        title=extracted.title,
+                        component_type=extracted.component_type,
+                        abstract_jobs=abstract_jobs,
+                        receipt=receipt,
+                        language=extracted.language,
+                        dependencies=list(dict.fromkeys(extracted.imports[:6])),
+                        applicability=[descriptor[:240]],
+                        adaptation_notes=[f"workspace fallback candidate from {rel}"],
+                        keywords=list(dict.fromkeys([*extracted.keywords, *abstract_jobs, extracted.component_type])),
+                        coverage_state=CoverageState.WEAK,
+                    ),
+                )
+            )
+
+        if matched_symbol or path_overlap > 0:
+            continue
+
+        try:
+            content_hash = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+        except Exception:
+            content_hash = f"sha256:{hashlib.sha256(rel.encode('utf-8')).hexdigest()}"
+        source_barcode = build_source_barcode(
+            workspace_root.name or "workspace",
+            rel,
+            content_hash,
+            symbol_name=None,
+        )
+        if source_barcode in seen_source_barcodes:
+            continue
+        seen_source_barcodes.add(source_barcode)
+        family_barcode = build_family_barcode("module", "workspace_content_match")
+        receipt = Receipt(
+            source_barcode=source_barcode,
+            family_barcode=family_barcode,
+            lineage_id=f"lin_local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:12]}",
+            repo=workspace_root.name or "workspace",
+            file_path=rel,
+            symbol=None,
+            line_start=None,
+            line_end=None,
+            content_hash=content_hash,
+            provenance_precision="file",
+        )
+        candidates.append(
+            (
+                file_overlap * 5,
+                ComponentCard(
+                    id=f"local_{hashlib.sha256(source_barcode.encode('utf-8')).hexdigest()[:16]}",
+                    title=Path(rel).name,
+                    component_type="module",
+                    abstract_jobs=["workspace_content_match"],
+                    receipt=receipt,
+                    language=allowed_suffixes.get(path.suffix.lower()),
+                    dependencies=[],
+                    applicability=[f"workspace content matched query terms for {rel}"],
+                    adaptation_notes=[f"workspace fallback file match from {rel}"],
+                    keywords=sorted(query_terms),
+                    coverage_state=CoverageState.WEAK,
+                ),
+            )
+        )
+
+    candidates.sort(key=lambda item: (item[0], item[1].title.lower()), reverse=True)
+    return [card for _score, card in candidates[:max_cards]]
+    return cards
+
+
+async def _active_governance_policies_for_plan(repo: Any, task_archetype: str) -> list[GovernancePolicy]:
+    archetype_specific = await repo.list_governance_policies(
+        task_archetype=task_archetype,
+        active_only=True,
+        limit=200,
+    )
+    global_policies = await repo.list_governance_policies(
+        task_archetype=None,
+        active_only=True,
+        limit=200,
+    )
+    merged: dict[str, GovernancePolicy] = {}
+    for policy in [*archetype_specific, *global_policies]:
+        if policy.task_archetype and policy.task_archetype != task_archetype:
+            continue
+        merged[policy.id] = policy
+    return list(merged.values())
+
+
+async def _active_compiled_recipes_for_archetype(repo: Any, task_archetype: str) -> list[CompiledRecipe]:
+    if not task_archetype:
+        return []
+    return await repo.list_compiled_recipes(task_archetype=task_archetype, active_only=True, limit=10)
+
+
+def _detect_governance_conflicts(policies: list[GovernancePolicy]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], list[GovernancePolicy]] = {}
+    for policy in policies:
+        scope = (
+            policy.policy_kind,
+            policy.task_archetype or "",
+            policy.slot_id or "",
+            policy.family_barcode or "",
+        )
+        grouped.setdefault(scope, []).append(policy)
+
+    conflicts: list[dict[str, Any]] = []
+    for (policy_kind, task_archetype, slot_id, family_barcode), group in grouped.items():
+        if len(group) < 2:
+            continue
+        statuses = {policy.status for policy in group}
+        directives = {
+            (policy.recommendation or "").strip().lower() or (policy.reason or "").strip().lower()
+            for policy in group
+        }
+        severities = {policy.severity for policy in group}
+        reasons: list[str] = []
+        if len(statuses) > 1:
+            reasons.append("status_conflict")
+        if len({item for item in directives if item}) > 1:
+            reasons.append("directive_conflict")
+        if len(severities) > 1:
+            reasons.append("severity_conflict")
+        if not reasons:
+            continue
+        conflicts.append(
+            {
+                "policy_kind": policy_kind,
+                "task_archetype": task_archetype or None,
+                "slot_id": slot_id or None,
+                "family_barcode": family_barcode or None,
+                "conflict_reasons": reasons,
+                "policy_ids": [policy.id for policy in group],
+                "statuses": sorted(statuses),
+                "severities": sorted(severities),
+            }
+        )
+    return conflicts
+
+
+def _governance_summary_for_component(
+    component: Any,
+    policies: list[GovernancePolicy],
+) -> dict[str, Any]:
+    family_policies = [
+        policy for policy in policies
+        if policy.policy_kind == "family_policy"
+        and policy.family_barcode
+        and policy.family_barcode == component.receipt.family_barcode
+    ]
+    return {
+        "family_barcode": component.receipt.family_barcode,
+        "active_policy_count": len(family_policies),
+        "highest_severity": (
+            "high" if any(policy.severity == "high" for policy in family_policies)
+            else "medium" if any(policy.severity == "medium" for policy in family_policies)
+            else "low" if family_policies else None
+        ),
+        "policies": [
+            {
+                "id": policy.id,
+                "policy_kind": policy.policy_kind,
+                "severity": policy.severity,
+                "reason": policy.reason,
+                "recommendation": policy.recommendation,
+                "status": policy.status,
+            }
+            for policy in family_policies[:5]
+        ],
+    }
+
+
+def _score_component_search_match(
+    query: str,
+    *,
+    title: str,
+    component_type: str,
+    file_path: str,
+    symbol: Optional[str],
+    extra_terms: Optional[list[str]] = None,
+    success_count: int = 0,
+    failure_count: int = 0,
+) -> int:
+    direct_terms = _direct_query_terms(query)
+    query_terms = _search_query_terms(query)
+    if not direct_terms:
+        return 0
+    title_terms = _candidate_terms(title)
+    type_terms = _candidate_terms(component_type)
+    path_terms = _candidate_terms(file_path)
+    symbol_terms = _candidate_terms(symbol or "")
+    extra = _candidate_terms(" ".join(extra_terms or []))
+    combined_terms = title_terms | type_terms | path_terms | symbol_terms | extra
+    if _is_weak_auth_only_match(combined_terms, direct_terms):
+        return 0
+    alias_terms = query_terms - direct_terms
+
+    def _weighted_overlap(target_terms: set[str], direct_weight: int, alias_weight: int) -> int:
+        score = len(direct_terms & target_terms) * direct_weight
+        score += len(alias_terms & target_terms) * alias_weight
+        return score
+
+    score = 0
+    score += _weighted_overlap(title_terms, 14, 5)
+    score += _weighted_overlap(symbol_terms, 12, 4)
+    score += _weighted_overlap(type_terms, 6, 2)
+    score += _weighted_overlap(path_terms, 5, 2)
+    score += _weighted_overlap(extra, 4, 1)
+
+    lowered_path = file_path.lower()
+    if "test" not in direct_terms and (
+        lowered_path.startswith("tests/")
+        or "/tests/" in lowered_path
+        or lowered_path.startswith("test_")
+        or "/test_" in lowered_path
+    ):
+        score -= 8
+
+    score += min(success_count, 5) * 2
+    score -= min(failure_count, 3)
+    return score
+
+
+def _component_card_summary_payload(
+    card: Any,
+    policies: list[GovernancePolicy],
+    *,
+    search_score: Optional[int] = None,
+    source_scope: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = {
+        "id": card.id,
+        "title": card.title,
+        "component_type": card.component_type,
+        "language": card.language,
+        "family_barcode": card.receipt.family_barcode,
+        "repo": card.receipt.repo,
+        "file_path": card.receipt.file_path,
+        "symbol": card.receipt.symbol,
+        "provenance_precision": card.receipt.provenance_precision.value,
+        "success_count": card.success_count,
+        "failure_count": card.failure_count,
+        "coverage_state": card.coverage_state.value,
+        "governance_summary": {
+            "family_barcode": card.receipt.family_barcode,
+            "active_policy_count": sum(
+                1
+                for policy in policies
+                if policy.policy_kind == "family_policy"
+                and policy.family_barcode == card.receipt.family_barcode
+            ),
+        },
+    }
+    if search_score is not None:
+        payload["search_score"] = search_score
+    if source_scope is not None:
+        payload["source_scope"] = source_scope
+    return payload
+
+
+def _component_match_type(card: Any, slot: Optional[Any]) -> str:
+    if slot is None:
+        return "pattern_transfer"
+    slot_tokens = {slot.name.lower(), slot.abstract_job.lower()}
+    abstract_jobs = {str(item).lower() for item in getattr(card, "abstract_jobs", [])}
+    if any(job in slot_tokens or any(token in job for token in slot_tokens) for job in abstract_jobs):
+        return "direct_fit"
+    return "pattern_transfer"
+
+
+def _infer_specialist_task_type(description: str) -> str:
+    desc_lower = description.lower()
+    keyword_map: list[tuple[list[str], str]] = [
+        (["security", "vulnerability", "cve", "owasp", "xss", "csrf", "injection"], "security"),
+        (["architecture", "design", "structure", "system design"], "architecture"),
+        (["documentation", "docs", "readme", "docstring", "jsdoc"], "documentation"),
+        (["analysis", "analyze", "audit", "review", "inspect"], "analysis"),
+        (["refactor", "restructure", "reorganize", "clean up", "simplify"], "refactoring"),
+        (["test", "testing", "unit test", "integration test", "coverage"], "testing"),
+        (["ci", "cd", "pipeline", "github action", "workflow", "deploy"], "ci_cd"),
+        (["dependency", "dependencies", "upgrade", "update package", "npm", "pip"], "dependency_analysis"),
+        (["migration", "migrate", "port", "convert", "transfer", "cross-language"], "migration"),
+        (["quick fix", "hotfix", "patch", "typo", "small fix"], "quick_fix"),
+        (["bug", "fix", "error", "crash", "broken", "issue", "defect"], "bug_fix"),
+    ]
+    for keywords, task_type in keyword_map:
+        if any(kw in desc_lower for kw in keywords):
+            return task_type
+    return "analysis"
+
+
+def _build_retrograde_payload(
+    *,
+    run_id: str,
+    root: Optional[str],
+    failing_outcome: Any,
+    packet: Any,
+    pair: Any,
+    landing: Any,
+    slot_execution: Any,
+    runner_up: Any,
+    relevant_audits: list[Any],
+    relevant_events: list[Any],
+    task_description: Optional[str],
+) -> dict[str, Any]:
+    def _cause_id(value: Any, fallback: str) -> str:
+        if value is None:
+            return fallback
+        try:
+            return str(value)
+        except Exception:
+            return fallback
+
+    cause_chain = []
+    proof_gate_event = next((event for event in reversed(relevant_events) if event.event_type == "proof_gate_failed"), None)
+    if proof_gate_event:
+        gate_payload = proof_gate_event.payload or {}
+        gates = gate_payload.get("gates") or {}
+        failing_gates = [name for name, info in gates.items() if (info or {}).get("status") in {"failed", "fail"}]
+        cause_chain.append(
+            {
+                "kind": "proof_gate",
+                "id": _cause_id(getattr(proof_gate_event, "id", None), f"proof_gate:{run_id}"),
+                "explanation": (
+                    f"Static-analysis proof gate failure"
+                    + (f" in {', '.join(failing_gates)}" if failing_gates else "")
+                ),
+                "rank_score": 0.9 if failing_gates else 0.84,
+            }
+        )
+    for audit in relevant_audits[-3:]:
+        if audit.action_type in {"block_slot", "ban_family", "swap_candidate", "reverify_slot", "waive_proof_gate"}:
+            score = 0.55
+            if audit.action_type in {"block_slot", "ban_family"}:
+                score = 0.78
+            elif audit.action_type == "waive_proof_gate":
+                score = 0.74
+            cause_chain.append(
+                {
+                    "kind": "action",
+                    "id": _cause_id(getattr(audit, "id", None), f"action:{run_id}:{audit.action_type}"),
+                    "explanation": f"{audit.action_type}: {audit.reason or 'operator intervention'}",
+                    "rank_score": score,
+                }
+            )
+    if slot_execution and slot_execution.retry_count:
+        blocked_wait_ms = int(getattr(slot_execution, "blocked_wait_ms", 0) or 0)
+        family_wait_ms = int(getattr(slot_execution, "family_wait_ms", 0) or 0)
+        wait_bonus = min(0.2, ((blocked_wait_ms + family_wait_ms) / 1000.0) / 60.0)
+        cause_chain.append(
+            {
+                "kind": "slot_execution",
+                "id": slot_execution.slot_id,
+                "explanation": (
+                    f"Slot had {slot_execution.retry_count} retries, last step {slot_execution.current_step or 'unknown'}, "
+                    f"blocked wait {blocked_wait_ms}ms, family wait {family_wait_ms}ms"
+                ),
+                "rank_score": min(0.95, 0.62 + min(0.18, slot_execution.retry_count * 0.08) + wait_bonus),
+            }
+        )
+    retry_event = next((event for event in reversed(relevant_events) if event.event_type == "retry_delta"), None)
+    if retry_event:
+        cause_chain.append(
+            {
+                "kind": "retry",
+                "id": _cause_id(getattr(retry_event, "id", None), f"retry:{run_id}"),
+                "explanation": f"Latest retry delta before failure: {len(retry_event.payload.get('violations', []))} violations",
+                "rank_score": min(0.9, 0.58 + min(0.22, len(retry_event.payload.get("violations", [])) * 0.08)),
+            }
+        )
+    verifier_findings = list(getattr(failing_outcome, "verifier_findings", []) or [])
+    if verifier_findings:
+        cause_chain.append(
+            {
+                "kind": "outcome",
+                "id": _cause_id(getattr(failing_outcome, "id", None), f"outcome:{run_id}"),
+                "explanation": f"Verifier recorded {len(verifier_findings)} finding(s)",
+                "rank_score": min(0.88, 0.64 + min(0.2, len(verifier_findings) * 0.08)),
+            }
+        )
+    negative_memory_updates = list(getattr(failing_outcome, "negative_memory_updates", []) or [])
+    if negative_memory_updates:
+        cause_chain.append(
+            {
+                "kind": "negative_memory",
+                "id": f"negative_memory:{run_id}",
+                "explanation": f"Failure produced {len(negative_memory_updates)} negative-memory update(s)",
+                "rank_score": min(0.83, 0.6 + min(0.15, len(negative_memory_updates) * 0.08)),
+            }
+        )
+    if landing:
+        cause_chain.append({"kind": "landing", "id": _cause_id(getattr(landing, "id", None), f"landing:{run_id}"), "explanation": f"Change landed in {landing.file_path}", "rank_score": 0.66})
+    if packet:
+        cause_chain.append({"kind": "slot", "id": packet.slot.slot_id, "explanation": f"Slot {packet.slot.name}", "rank_score": 0.72})
+        selected_transfer_mode = getattr(packet.selected.transfer_mode, "value", str(packet.selected.transfer_mode))
+        slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+        if selected_transfer_mode == "pattern_transfer":
+            federation_score = 0.76 if slot_risk == "critical" else 0.61
+            explanation = "Selected component was a pattern transfer rather than direct fit"
+            if slot_risk == "critical":
+                explanation += " in a critical slot"
+            cause_chain.append(
+                {
+                    "kind": "federation",
+                    "id": f"federation:{packet.packet_id}",
+                    "explanation": explanation,
+                    "rank_score": federation_score,
+                }
+            )
+    if pair:
+        cause_chain.append({"kind": "component", "id": pair.component_id, "explanation": f"Selected component {pair.component_id}", "rank_score": 0.74})
+    if runner_up and packet:
+        runner_transfer_mode = getattr(runner_up.transfer_mode, "value", str(runner_up.transfer_mode))
+        if runner_transfer_mode == "direct_fit" and getattr(packet.selected.transfer_mode, "value", str(packet.selected.transfer_mode)) != "direct_fit":
+            cause_chain.append(
+                {
+                    "kind": "counterfactual",
+                    "id": runner_up.component_id,
+                    "explanation": "Runner-up offered a direct-fit alternative while the selected component was only a pattern transfer",
+                    "rank_score": 0.82,
+                }
+            )
+
+    has_waived_gate = any(getattr(audit, "action_type", "") == "waive_proof_gate" for audit in relevant_audits)
+    has_negative_memory = bool(negative_memory_updates)
+    has_retry_signal = retry_event is not None and bool(slot_execution and slot_execution.retry_count)
+    for item in cause_chain:
+        supports: list[str] = []
+        kind = item.get("kind")
+        score = float(item.get("rank_score", 0.0))
+        if kind == "proof_gate" and has_waived_gate:
+            score += 0.05
+            supports.append("waived_proof_gate")
+        if kind == "action" and "waive_proof_gate" in str(item.get("explanation", "")) and proof_gate_event:
+            score += 0.04
+            supports.append("proof_gate_failed")
+        if kind in {"counterfactual", "federation"} and has_negative_memory:
+            score += 0.04
+            supports.append("negative_memory")
+        if kind == "negative_memory" and runner_up is not None:
+            score += 0.03
+            supports.append("runner_up_exists")
+        if kind in {"slot_execution", "retry"} and has_retry_signal:
+            score += 0.03
+            supports.append("correlated_retry_pressure")
+        if kind == "outcome" and proof_gate_event:
+            score += 0.03
+            supports.append("proof_gate_failed")
+        if supports:
+            item["supporting_signals"] = supports
+        item["rank_score"] = min(0.98, score)
+
+    cause_chain.sort(key=lambda item: float(item.get("rank_score", 0.0)), reverse=True)
+    top_score = float(cause_chain[0].get("rank_score", 0.2)) if cause_chain else 0.2
+    primary_cause = cause_chain[0] if cause_chain else None
+    supporting_signal_union = sorted(
+        {
+            signal
+            for item in cause_chain[:3]
+            for signal in item.get("supporting_signals", [])
+        }
+    )
+    cluster_rules: dict[str, set[str]] = {
+        "proof": {"proof_gate", "outcome"},
+        "operator": {"action"},
+        "runtime": {"retry", "slot_execution", "landing"},
+        "transfer": {"federation", "counterfactual", "component", "slot"},
+        "memory": {"negative_memory"},
+    }
+    root_cause_clusters = []
+    for cluster_name, kinds in cluster_rules.items():
+        cluster_items = [item for item in cause_chain if item.get("kind") in kinds][:3]
+        if not cluster_items:
+            continue
+        root_cause_clusters.append(
+            {
+                "cluster": cluster_name,
+                "top_kind": cluster_items[0].get("kind"),
+                "score": max(float(item.get("rank_score", 0.0)) for item in cluster_items),
+                "item_count": len(cluster_items),
+            }
+        )
+    root_cause_clusters.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+    primary_kind = primary_cause.get("kind") if primary_cause else None
+    primary_explanation = primary_cause.get("explanation") if primary_cause else None
+    decision_path = [
+        {
+            "kind": item.get("kind"),
+            "explanation": item.get("explanation"),
+            "score": float(item.get("rank_score", 0.0)),
+        }
+        for item in cause_chain[:3]
+    ]
+    narrative_parts = []
+    if primary_kind and primary_explanation:
+        narrative_parts.append(f"Primary cause: {primary_kind} - {primary_explanation}.")
+    if root_cause_clusters:
+        cluster_labels = ", ".join(
+            f"{cluster['cluster']}:{cluster['top_kind']}"
+            for cluster in root_cause_clusters[:3]
+        )
+        narrative_parts.append(f"Dominant pressure clusters: {cluster_labels}.")
+    if runner_up is not None:
+        narrative_parts.append("A runnable counterfactual existed via a runner-up candidate.")
+    if proof_gate_event is not None or verifier_findings:
+        narrative_parts.append("Proof or verifier pressure was present in the failure path.")
+    recommended_action = None
+    if primary_kind == "proof_gate":
+        recommended_action = "tighten proof gates or remove the risky implementation path"
+    elif primary_kind in {"counterfactual", "federation"}:
+        recommended_action = "promote or switch to the direct-fit runner-up path"
+    elif primary_kind == "action":
+        recommended_action = "review operator intervention policy and unblock criteria"
+    elif primary_kind in {"retry", "slot_execution"}:
+        recommended_action = "reduce retry pressure by narrowing the slot adaptation scope"
+    elif primary_kind == "negative_memory":
+        recommended_action = "persist the failure pattern and ban the affected family in similar slots"
+    actionability = (
+        "immediate" if recommended_action and top_score >= 0.85 else
+        "review" if recommended_action else
+        "observe"
+    )
+    confidence_drivers = []
+    if primary_kind:
+        confidence_drivers.append(f"primary:{primary_kind}")
+    if root_cause_clusters:
+        confidence_drivers.append(f"cluster:{root_cause_clusters[0]['cluster']}")
+    if proof_gate_event is not None or verifier_findings:
+        confidence_drivers.append("pressure:proof")
+    if any(item.get("kind") == "action" for item in cause_chain[:3]):
+        confidence_drivers.append("pressure:governance")
+    if runner_up is not None:
+        confidence_drivers.append("counterfactual:available")
+    confidence_reason = None
+    if top_score >= 0.85:
+        confidence_reason = "multiple high-signal causes align on the same failure path"
+    elif top_score >= 0.65:
+        confidence_reason = "the leading cause is supported, but counterevidence remains"
+    else:
+        confidence_reason = "the current explanation is tentative and should be reviewed"
+    calibration = (
+        "stable" if top_score >= 0.85 and len(cause_chain) >= 4 and root_cause_clusters else
+        "mixed" if top_score >= 0.65 else
+        "tentative"
+    )
+    second_score = float(cause_chain[1].get("rank_score", 0.0)) if len(cause_chain) > 1 else 0.0
+    score_gap = top_score - second_score
+    stability = (
+        "stable" if score_gap >= 0.20 else
+        "competitive" if score_gap >= 0.08 else
+        "fragile"
+    )
+    stability_reason = (
+        "top evidence clearly outranks alternatives" if stability == "stable" else
+        "top evidence leads, but competing explanations remain plausible" if stability == "competitive" else
+        "multiple explanations remain close and should be reviewed together"
+    )
+    root_cause_summary = {
+        "primary_kind": primary_kind,
+        "primary_explanation": primary_explanation,
+        "supporting_signals": supporting_signal_union,
+        "counterfactual_available": runner_up is not None,
+        "governance_pressure": any(
+            item.get("kind") in {"action", "proof_gate"} for item in cause_chain[:3]
+        ),
+        "proof_pressure": proof_gate_event is not None or bool(verifier_findings),
+        "clusters": root_cause_clusters,
+        "narrative": " ".join(narrative_parts) if narrative_parts else None,
+        "confidence_band": (
+            "high" if top_score >= 0.85 else
+            "medium" if top_score >= 0.65 else
+            "low"
+        ),
+        "recommended_action": recommended_action,
+        "actionability": actionability,
+        "decision_path": decision_path,
+        "evidence_count": len(cause_chain),
+        "dominant_cluster": root_cause_clusters[0]["cluster"] if root_cause_clusters else None,
+        "confidence_drivers": confidence_drivers,
+        "confidence_score": top_score,
+        "confidence_reason": confidence_reason,
+        "calibration": calibration,
+        "stability": stability,
+        "stability_reason": stability_reason,
+        "summary_version": "v2",
+    }
+    return {
+        "root": {"kind": "run", "id": run_id if root is None else root},
+        "cause_chain": cause_chain,
+        "root_cause_summary": root_cause_summary,
+        "runner_up_analysis": (
+            {
+                "component_id": runner_up.component_id,
+                "likely_better": True,
+                "why": runner_up.why_fit[:3],
+                "transfer_mode": getattr(runner_up.transfer_mode, "value", str(runner_up.transfer_mode)),
+            }
+            if runner_up
+            else None
+        ),
+        "confidence": max(0.2, min(0.96, top_score)),
+        "violations": failing_outcome.verifier_findings,
+        "task_description": task_description,
+    }
+
+
+async def _auto_distill_compiled_recipe(repo: Any, connectome: Optional[RunConnectome], packets: list[Any]) -> Optional[CompiledRecipe]:
+    if connectome is None or not connectome.task_archetype or not packets:
+        return None
+    recipe_json = {
+        "slot_order": [packet.slot.name for packet in packets],
+        "preferred_families": [packet.selected.receipt.family_barcode for packet in packets],
+        "required_proof_gates": sorted({gate.gate_type for packet in packets for gate in packet.proof_plan}),
+        "disallowed_stretch_conditions": ["critical_slot_stretch"],
+    }
+    digest = hashlib.sha256(
+        json.dumps({"task_archetype": connectome.task_archetype, **recipe_json}, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    recipe_id = f"auto_recipe_{digest}"
+    existing = await repo.get_compiled_recipe(recipe_id)
+    sample_size = (existing.sample_size if existing else 0) + 1
+    recipe = CompiledRecipe(
+        id=recipe_id,
+        task_archetype=connectome.task_archetype,
+        recipe_name=f"{connectome.task_archetype}_auto",
+        recipe_json=recipe_json,
+        sample_size=sample_size,
+        is_active=sample_size >= 3,
+    )
+    return await repo.save_compiled_recipe(recipe)
+
+
+async def _compute_federation_trends(
+    repo: Any,
+    *,
+    task_archetype: Optional[str] = None,
+    family_barcode: Optional[str] = None,
+    limit: int = 50,
+) -> dict[str, list[dict[str, Any]]]:
+    row_limit = max(1, min(limit, 200))
+    connectome_rows = await repo.engine.fetch_all(
+        f"""SELECT run_id, task_archetype
+              FROM run_connectomes
+             {"WHERE task_archetype = ?" if task_archetype else ""}
+             ORDER BY created_at DESC
+             LIMIT ?""",
+        ([task_archetype, row_limit] if task_archetype else [row_limit]),
+    )
+
+    by_archetype: dict[str, dict[str, Any]] = {}
+    by_family: dict[str, dict[str, Any]] = {}
+    for row in connectome_rows:
+        run_id = row.get("run_id")
+        archetype = row.get("task_archetype") or "unknown"
+        outcomes = await repo.list_run_outcome_events(run_id)
+        counted_run = False
+        for outcome in outcomes:
+            packet = await repo.get_application_packet(outcome.packet_id)
+            if packet is None:
+                continue
+            family = packet.selected.receipt.family_barcode
+            if family_barcode and family != family_barcode:
+                continue
+            transfer_mode = getattr(packet.selected.transfer_mode, "value", str(packet.selected.transfer_mode))
+            slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+
+            archetype_bucket = by_archetype.setdefault(
+                archetype,
+                {
+                    "task_archetype": archetype,
+                    "runs": 0,
+                    "direct_fit": 0,
+                    "pattern_transfer": 0,
+                    "heuristic_fallback": 0,
+                    "critical_pattern_transfer": 0,
+                    "successful_packets": 0,
+                    "failed_packets": 0,
+                },
+            )
+            if not counted_run:
+                archetype_bucket["runs"] += 1
+                counted_run = True
+            archetype_bucket[transfer_mode] = archetype_bucket.get(transfer_mode, 0) + 1
+            if slot_risk == "critical" and transfer_mode != "direct_fit":
+                archetype_bucket["critical_pattern_transfer"] += 1
+            if outcome.success:
+                archetype_bucket["successful_packets"] += 1
+            else:
+                archetype_bucket["failed_packets"] += 1
+
+            family_bucket = by_family.setdefault(
+                family,
+                {
+                    "family_barcode": family,
+                    "task_archetypes": set(),
+                    "direct_fit": 0,
+                    "pattern_transfer": 0,
+                    "heuristic_fallback": 0,
+                    "critical_pattern_transfer": 0,
+                    "successful_packets": 0,
+                    "failed_packets": 0,
+                },
+            )
+            family_bucket["task_archetypes"].add(archetype)
+            family_bucket[transfer_mode] = family_bucket.get(transfer_mode, 0) + 1
+            if slot_risk == "critical" and transfer_mode != "direct_fit":
+                family_bucket["critical_pattern_transfer"] += 1
+            if outcome.success:
+                family_bucket["successful_packets"] += 1
+            else:
+                family_bucket["failed_packets"] += 1
+
+    by_family_rows = []
+    for item in by_family.values():
+        item["task_archetypes"] = sorted(item["task_archetypes"])
+        by_family_rows.append(item)
+
+    archetype_rows = sorted(
+        by_archetype.values(),
+        key=lambda item: (item["critical_pattern_transfer"], item["pattern_transfer"], item["failed_packets"]),
+        reverse=True,
+    )[:row_limit]
+    by_family_rows = sorted(
+        by_family_rows,
+        key=lambda item: (item["critical_pattern_transfer"], item["pattern_transfer"], item["failed_packets"]),
+        reverse=True,
+    )[:row_limit]
+    return {"by_archetype": archetype_rows, "by_family": by_family_rows}
+
+
+def _build_federation_policy_recommendations(
+    trends: dict[str, list[dict[str, Any]]],
+    existing_policies: list[GovernancePolicy],
+) -> list[dict[str, Any]]:
+    recommendations: list[dict[str, Any]] = []
+    active_keys = {
+        (
+            policy.policy_kind,
+            policy.task_archetype or "",
+            policy.slot_id or "",
+            policy.family_barcode or "",
+        )
+        for policy in existing_policies
+        if policy.status == "active"
+    }
+
+    for row in trends.get("by_archetype", []):
+        if row.get("critical_pattern_transfer", 0) >= 2 or (
+            row.get("heuristic_fallback", 0) >= 2 and row.get("failed_packets", 0) >= row.get("successful_packets", 0)
+        ):
+            key = ("slot_policy", row.get("task_archetype") or "", "", "")
+            recommendations.append(
+                {
+                    "policy_kind": "slot_policy",
+                    "severity": "high" if row.get("critical_pattern_transfer", 0) >= 2 else "medium",
+                    "task_archetype": row.get("task_archetype"),
+                    "slot_id": None,
+                    "family_barcode": None,
+                    "reason": (
+                        f"Cross-run federation pressure is high for {row.get('task_archetype')}: "
+                        f"{row.get('pattern_transfer', 0)} pattern-transfer packets, "
+                        f"{row.get('critical_pattern_transfer', 0)} critical non-direct packets"
+                    ),
+                    "recommendation": "Prefer direct-fit packets or require stronger review before accepting cross-brain transfer on this archetype.",
+                    "evidence_json": {"trend_scope": "archetype", "trend": row},
+                    "already_active": key in active_keys,
+                }
+            )
+
+        if row.get("heuristic_fallback", 0) >= 1 and row.get("failed_packets", 0) >= row.get("successful_packets", 0):
+            key = ("proof_policy", row.get("task_archetype") or "", "", "")
+            recommendations.append(
+                {
+                    "policy_kind": "proof_policy",
+                    "severity": "medium",
+                    "task_archetype": row.get("task_archetype"),
+                    "slot_id": None,
+                    "family_barcode": None,
+                    "reason": (
+                        f"Heuristic federation fallback remains active for {row.get('task_archetype')} "
+                        f"with {row.get('heuristic_fallback', 0)} fallback packets"
+                    ),
+                    "recommendation": "Add stronger proof gates or require human governance review when heuristic federation fallback is selected.",
+                    "evidence_json": {"trend_scope": "archetype", "trend": row},
+                    "already_active": key in active_keys,
+                }
+            )
+
+    for row in trends.get("by_family", []):
+        if row.get("critical_pattern_transfer", 0) >= 1 or (
+            row.get("pattern_transfer", 0) >= 2 and row.get("failed_packets", 0) > row.get("successful_packets", 0)
+        ):
+            primary_archetype = (row.get("task_archetypes") or [None])[0]
+            key = ("family_policy", primary_archetype or "", "", row.get("family_barcode") or "")
+            recommendations.append(
+                {
+                    "policy_kind": "family_policy",
+                    "severity": "high" if row.get("critical_pattern_transfer", 0) >= 1 else "medium",
+                    "task_archetype": primary_archetype,
+                    "slot_id": None,
+                    "family_barcode": row.get("family_barcode"),
+                    "reason": (
+                        f"Family {row.get('family_barcode')} shows repeated federation risk: "
+                        f"{row.get('pattern_transfer', 0)} pattern-transfer packets, "
+                        f"{row.get('failed_packets', 0)} failures"
+                    ),
+                    "recommendation": "Downgrade or quarantine this family for repeated federation transfer until stronger direct-fit evidence exists.",
+                    "evidence_json": {"trend_scope": "family", "trend": row},
+                    "already_active": key in active_keys,
+                }
+            )
+
+    recommendations.sort(
+        key=lambda item: (
+            2 if item["severity"] == "high" else 1,
+            0 if item["already_active"] else 1,
+        ),
+        reverse=True,
+    )
+    return recommendations
+
+
+def _build_plan_summary(plan_record: dict[str, Any], packets: list[Any]) -> dict[str, Any]:
+    weak_slots = sum(1 for packet in packets if getattr(packet.coverage_state, "value", str(packet.coverage_state)) == "weak")
+    critical_slots = sum(1 for slot in plan_record["slots"] if slot["risk"] == "critical")
+    return {
+        "total_slots": len(plan_record["slots"]),
+        "critical_slots": critical_slots,
+        "weak_evidence_slots": weak_slots,
+    }
+
+
+def _ensure_critical_policy_gates(packet: Any, enabled: bool) -> Any:
+    if not enabled:
+        return packet
+    slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+    if slot_risk != "critical":
+        return packet
+
+    existing = {gate.gate_type for gate in packet.proof_plan}
+    for gate_type in ("semgrep", "codeql"):
+        if gate_type in existing:
+            continue
+        packet.proof_plan.append(
+            ProofGate(
+                gate_id=gate_type,
+                gate_type=gate_type,
+                required=True,
+                status="pending",
+                details=["critical slot policy gate"],
+            )
+        )
+    if "critical_policy_scan_required" not in packet.review_required_reasons:
+        packet.review_required_reasons.append("critical_policy_scan_required")
+        packet.reviewer_required = True
+    return packet
+
+
+def _find_proof_gate(packet: Any, gate_type: str) -> Optional[ProofGate]:
+    return next((gate for gate in packet.proof_plan if gate.gate_type == gate_type or gate.gate_id == gate_type), None)
+
+
+def _reset_analysis_gates(packet: Any) -> Any:
+    for gate_type in ("semgrep", "codeql"):
+        gate = _find_proof_gate(packet, gate_type)
+        if gate is None or gate.status == "waived":
+            continue
+        gate.status = "pending"
+        gate.details = []
+    return packet
+
+
+def _apply_static_analysis_results(packet: Any, analysis: dict[str, dict[str, Any]]) -> tuple[list[str], bool]:
+    findings: list[str] = []
+    blocked = False
+    for gate_type in ("semgrep", "codeql"):
+        gate = _find_proof_gate(packet, gate_type)
+        result = analysis.get(gate_type, {})
+        if gate is None:
+            continue
+        if gate.status == "waived":
+            continue
+        tool_status = result.get("status", "unavailable")
+        if tool_status in {"deferred", "unavailable"}:
+            gate.status = "waived"
+            gate.details = list(result.get("details") or [f"{gate_type} deferred"])
+            continue
+        if tool_status == "pass":
+            gate.status = "pass"
+            gate.details = []
+            continue
+        gate.status = "fail"
+        details = list(result.get("details") or [])
+        formatted_findings = []
+        for finding in result.get("findings") or []:
+            rendered = f"{gate_type}:{finding.get('severity')}:{finding.get('rule_id') or 'rule'}:{finding.get('message') or ''}"
+            formatted_findings.append(rendered)
+        gate.details = (formatted_findings or details)[:5]
+        findings.extend(gate.details)
+        blocked = True
+    return findings, blocked
+
+
+async def _save_plan_record(app: FastAPI, repo: Any, plan_record: dict[str, Any]) -> TaskPlanRecord:
+    _playground_plans(app)[plan_record["plan_id"]] = plan_record
+    model = TaskPlanRecord(
+        id=plan_record["plan_id"],
+        task_text=plan_record["task_text"],
+        workspace_dir=plan_record.get("workspace_dir"),
+        branch=plan_record.get("branch"),
+        target_brain=plan_record.get("target_brain"),
+        execution_mode=plan_record.get("execution_mode"),
+        check_commands=plan_record.get("check_commands") or [],
+        task_archetype=plan_record["task_archetype"],
+        archetype_confidence=float(plan_record.get("archetype_confidence", 0.0) or 0.0),
+        status=plan_record.get("status", "draft"),
+        summary=plan_record.get("summary") or {},
+        approved_slot_ids=plan_record.get("approved_slot_ids") or [],
+        plan_json=plan_record,
+    )
+    return await repo.save_task_plan(model)
+
+
+async def _load_plan_record(app: FastAPI, repo: Any, plan_id: str) -> Optional[dict[str, Any]]:
+    cached = _playground_plans(app).get(plan_id)
+    if cached is not None:
+        return cached
+    stored = await repo.get_task_plan(plan_id)
+    if stored is None:
+        return None
+    plan_record = dict(stored.plan_json or {})
+    if not plan_record:
+        plan_record = {
+            "plan_id": stored.id,
+            "task_text": stored.task_text,
+            "workspace_dir": stored.workspace_dir,
+            "branch": stored.branch,
+            "target_brain": stored.target_brain,
+            "execution_mode": stored.execution_mode,
+            "check_commands": stored.check_commands,
+            "task_archetype": stored.task_archetype,
+            "archetype_confidence": stored.archetype_confidence,
+            "status": stored.status,
+            "summary": stored.summary,
+            "approved_slot_ids": stored.approved_slot_ids,
+            "created_at": stored.created_at.isoformat(),
+            "slots": [],
+        }
+    _playground_plans(app)[plan_id] = plan_record
+    return plan_record
+
+
+def _advance_slot_execution(job: dict[str, Any], *, step_name: Optional[str] = None, terminal_success: Optional[bool] = None) -> None:
+    slots = job.get("slot_execution", [])
+    if not slots:
+        return
+
+    current_idx = next(
+        (idx for idx, slot in enumerate(slots) if slot["status"] == "executing"),
+        None,
+    )
+    if current_idx is None:
+        current_idx = next(
+            (idx for idx, slot in enumerate(slots) if slot["status"] in {"approved", "queued"}),
+            None,
+        )
+        if current_idx is None:
+            return
+        slots[current_idx]["status"] = "executing"
+
+    current = slots[current_idx]
+    if step_name is not None:
+        current["current_step"] = step_name
+
+    if terminal_success is None:
+        return
+
+    if terminal_success:
+        current["status"] = "verified"
+        current["current_step"] = "done"
+        for idx, slot in enumerate(slots):
+            if idx == current_idx:
+                continue
+            if slot["status"] in {"approved", "queued", "executing"}:
+                slot["status"] = "verified"
+                slot["current_step"] = "done"
+    else:
+        current["status"] = "failed"
+        current["current_step"] = current.get("current_step") or "verify"
+        for idx, slot in enumerate(slots):
+            if idx > current_idx and slot["status"] in {"approved", "queued"}:
+                slot["status"] = "blocked"
+
+
+async def _persist_run_slot_execution(repo: Any, run_id: str, slot_state: dict[str, Any]) -> None:
+    await repo.save_run_slot_execution(
+        RunSlotExecution(
+            run_id=run_id,
+            slot_id=slot_state["slot_id"],
+            packet_id=slot_state.get("packet_id"),
+            selected_component_id=slot_state.get("selected_component_id"),
+            status=slot_state.get("status", "queued"),
+            current_step=slot_state.get("current_step"),
+            retry_count=int(slot_state.get("retry_count", 0)),
+            last_retry_detail=slot_state.get("last_retry_detail"),
+            replacement_count=int(slot_state.get("replacement_count", 0)),
+            blocked_wait_ms=int(slot_state.get("blocked_wait_ms", 0)),
+            family_wait_ms=int(slot_state.get("family_wait_ms", 0)),
+        )
+    )
+
+
+async def _persist_all_run_slot_execution(repo: Any, run_id: str, job: dict[str, Any]) -> None:
+    for slot_state in job.get("slot_execution", []):
+        await _persist_run_slot_execution(repo, run_id, slot_state)
+
+
+async def _record_run_event(
+    repo: Any,
+    run_id: str,
+    event_type: str,
+    *,
+    slot_id: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> RunEvent:
+    return await repo.save_run_event(
+        RunEvent(
+            run_id=run_id,
+            slot_id=slot_id,
+            event_type=event_type,
+            payload=payload or {},
+        )
+    )
+
+
+async def _record_run_action_audit(
+    repo: Any,
+    run_id: str,
+    action_type: str,
+    *,
+    slot_id: Optional[str] = None,
+    reason: str = "",
+    actor: str = "operator",
+    payload: Optional[dict[str, Any]] = None,
+) -> RunActionAudit:
+    return await repo.save_run_action_audit(
+        RunActionAudit(
+            run_id=run_id,
+            slot_id=slot_id,
+            action_type=action_type,
+            actor=actor,
+            reason=reason,
+            action_payload=payload or {},
+        )
+    )
+
+
+def _select_packet_for_file(file_path: str, packets: list[Any]) -> tuple[Optional[Any], LandingOrigin]:
+    normalized = file_path.lower()
+    for packet in packets:
+        for expected in packet.expected_landing_sites:
+            if expected.file_path.lower() == normalized:
+                return packet, LandingOrigin.ADAPTED_COMPONENT
+    basename = Path(file_path).name.lower()
+    for packet in packets:
+        for expected in packet.expected_landing_sites:
+            if Path(expected.file_path).name.lower() == basename:
+                return packet, LandingOrigin.MIXED_ANCESTRY
+    if packets:
+        return packets[0], LandingOrigin.NOVEL_SYNTHESIS
+    return None, LandingOrigin.NOVEL_SYNTHESIS
+
+
+def _event_timestamp(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        try:
+            return str(value.isoformat())
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+async def _build_run_events(repo: Any, run_id: str, job: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    persisted = await repo.list_run_events(run_id)
+    if persisted:
+        return [
+            {
+                "event_id": str(event.id),
+                "run_id": run_id,
+                "slot_id": event.slot_id,
+                "event_type": event.event_type,
+                "timestamp": _event_timestamp(event.created_at),
+                "payload": event.payload,
+            }
+            for event in persisted
+        ]
+
+    events: list[dict[str, Any]] = []
+    if job:
+        for step in job.get("steps", []):
+            events.append(
+                {
+                    "event_id": f"step:{run_id}:{step['timestamp']}:{step['step']}",
+                    "run_id": run_id,
+                    "slot_id": None,
+                    "event_type": step["step"],
+                    "timestamp": step["timestamp"],
+                    "payload": {"detail": step["detail"]},
+                }
+            )
+        for replacement in job.get("replacement_history", []):
+            events.append(
+                {
+                    "event_id": f"replacement:{run_id}:{replacement['timestamp']}:{replacement['slot_id']}",
+                    "run_id": run_id,
+                    "slot_id": replacement["slot_id"],
+                    "event_type": "candidate_swapped",
+                    "timestamp": replacement["timestamp"],
+                    "payload": {
+                        "previous_component_id": replacement.get("previous_component_id"),
+                        "new_component_id": replacement.get("new_component_id"),
+                        "reason": replacement.get("reason"),
+                    },
+                }
+            )
+        for idx, correction in enumerate(job.get("corrections", [])):
+            events.append(
+                {
+                    "event_id": f"retry:{run_id}:{idx}",
+                    "run_id": run_id,
+                    "slot_id": None,
+                    "event_type": "retry_delta",
+                    "timestamp": correction.get("created_at") or correction.get("timestamp") or f"retry-{idx}",
+                    "payload": {
+                        "attempt_number": correction.get("attempt_number"),
+                        "violations": correction.get("violations", []),
+                    },
+                }
+            )
+
+    for pair in await repo.list_run_pair_events(run_id):
+        events.append(
+            {
+                "event_id": str(pair.id),
+                "run_id": run_id,
+                "slot_id": str(pair.slot_id),
+                "event_type": "packet_selected",
+                "timestamp": _event_timestamp(pair.created_at),
+                "payload": {"packet_id": str(pair.packet_id), "component_id": str(pair.component_id)},
+            }
+        )
+    for landing in await repo.list_run_landing_events(run_id):
+        events.append(
+            {
+                "event_id": str(landing.id),
+                "run_id": run_id,
+                "slot_id": str(landing.slot_id),
+                "event_type": "landing_recorded",
+                "timestamp": _event_timestamp(landing.created_at),
+                "payload": {"file_path": str(landing.file_path), "origin": str(landing.origin.value)},
+            }
+        )
+    for outcome in await repo.list_run_outcome_events(run_id):
+        events.append(
+            {
+                "event_id": str(outcome.id),
+                "run_id": run_id,
+                "slot_id": str(outcome.slot_id),
+                "event_type": "slot_verified" if outcome.success else "slot_failed",
+                "timestamp": _event_timestamp(outcome.created_at),
+                "payload": {"packet_id": str(outcome.packet_id), "success": bool(outcome.success)},
+            }
+        )
+    events.sort(key=lambda item: item["timestamp"])
+    return events
+
+
+def _render_packetized_task_description(task_description: str, packets: list[Any]) -> str:
+    if not packets:
+        return task_description
+    lines = [
+        task_description.strip(),
+        "",
+        "CAM-SEQ APPLICATION PACKETS",
+        "Use the following reviewed slot packets as the execution plan. Respect selected components, adaptation steps, and proof requirements.",
+    ]
+    for idx, packet in enumerate(packets, start=1):
+        lines.extend(
+            [
+                f"",
+                f"SLOT {idx}: {packet.slot.name}",
+                f"- abstract_job: {packet.slot.abstract_job}",
+                f"- selected_component: {packet.selected.title}",
+                f"- receipt: {packet.selected.receipt.repo}::{packet.selected.receipt.file_path}" + (f"::{packet.selected.receipt.symbol}" if packet.selected.receipt.symbol else ""),
+                f"- fit_bucket: {packet.selected.fit_bucket.value}",
+                f"- transfer_mode: {packet.selected.transfer_mode.value}",
+                f"- adaptation_plan: {', '.join(step.title for step in packet.adaptation_plan) if packet.adaptation_plan else 'none'}",
+                f"- proof_plan: {', '.join(gate.gate_type for gate in packet.proof_plan) if packet.proof_plan else 'none'}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -117,6 +1764,7 @@ async def api_stats() -> JSONResponse:
     """Return methodology counts, lifecycle distribution, and ganglion info."""
     st = await _ensure_state(app)
     repo = st["repository"]
+    feature_flags = st["config"].feature_flags
     config = st["config"]
 
     total = await repo.count_methodologies()
@@ -211,6 +1859,456 @@ async def api_stats() -> JSONResponse:
     )
 
 
+@app.get("/api/v2/components/search")
+async def api_v2_component_search(
+    q: str = Query("", description="Free-text component query"),
+    limit: int = Query(20, ge=1, le=200),
+    language: Optional[str] = Query(None),
+    workspace_dir: Optional[str] = Query(None),
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    db_limit = max(limit * 3, 24)
+    items = await repo.search_component_cards_text(q, limit=db_limit, language=language)
+    policies = await repo.list_governance_policies(active_only=True, limit=200)
+    ranked: dict[str, tuple[int, dict[str, Any]]] = {}
+    for item in items:
+        if _is_noise_component_path(item.file_path):
+            continue
+        if "test" not in _direct_query_terms(q) and _is_test_component_path(item.file_path):
+            continue
+        score = _score_component_search_match(
+            q,
+            title=item.title,
+            component_type=item.component_type,
+            file_path=item.file_path,
+            symbol=item.symbol,
+            success_count=item.success_count,
+            failure_count=item.failure_count,
+        )
+        if score <= 0:
+            continue
+        payload = item.model_dump(mode="json")
+        payload["governance_summary"] = {
+            "family_barcode": item.family_barcode,
+            "active_policy_count": sum(
+                1
+                for policy in policies
+                if policy.policy_kind == "family_policy"
+                and policy.family_barcode == item.family_barcode
+            ),
+        }
+        payload["search_score"] = score
+        payload["source_scope"] = "memory"
+        ranked[item.id] = (score, payload)
+    if q.strip():
+        local_cards = _local_workspace_search_cards(
+            query=q,
+            target_language=language,
+            workspace_dir=workspace_dir,
+            max_cards=db_limit,
+        )
+        if local_cards:
+            persisted_cards = await _persist_local_candidate_cards(repo, local_cards)
+            for card in persisted_cards:
+                if _is_noise_component_path(card.receipt.file_path):
+                    continue
+                score = _score_component_search_match(
+                    q,
+                    title=card.title,
+                    component_type=card.component_type,
+                    file_path=card.receipt.file_path,
+                    symbol=card.receipt.symbol,
+                    extra_terms=[*getattr(card, "abstract_jobs", []), *getattr(card, "keywords", [])],
+                    success_count=getattr(card, "success_count", 0),
+                    failure_count=getattr(card, "failure_count", 0),
+                )
+                if score <= 0:
+                    continue
+                payload = _component_card_summary_payload(
+                    card,
+                    policies,
+                    search_score=score,
+                    source_scope="workspace",
+                )
+                current = ranked.get(card.id)
+                if current is None or score > current[0]:
+                    ranked[card.id] = (score, payload)
+    summarized = [
+        payload
+        for _score, payload in sorted(
+            ranked.values(),
+            key=lambda item: (
+                item[0],
+                int(item[1].get("governance_summary", {}).get("active_policy_count", 0) > 0),
+                item[1].get("success_count", 0),
+                -item[1].get("failure_count", 0),
+                item[1].get("title", "").lower(),
+            ),
+            reverse=True,
+        )[:limit]
+    ]
+    return JSONResponse({"items": summarized, "count": len(summarized), "query": q})
+
+
+@app.get("/api/v2/components/{component_id}")
+async def api_v2_component_detail(component_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    component = await repo.get_component_card(component_id)
+    if component is None:
+        return JSONResponse({"error": "component not found"}, status_code=404)
+
+    lineage = await repo.get_component_lineage(component.receipt.lineage_id)
+    fit_history = await repo.list_component_fit(component.id)
+    policies = await repo.list_governance_policies(active_only=True, limit=200)
+    related = []
+    if component.methodology_id:
+        related = await repo.list_components_for_methodology(component.methodology_id)
+    return JSONResponse(
+        {
+            "component": component.model_dump(mode="json"),
+            "lineage": lineage.model_dump(mode="json") if lineage else None,
+            "fit_history": [item.model_dump(mode="json") for item in fit_history],
+            "related_methodology_components": [item.model_dump(mode="json") for item in related],
+            "governance_summary": _governance_summary_for_component(component, policies),
+        }
+    )
+
+
+@app.get("/api/v2/components/{component_id}/history")
+async def api_v2_component_history(component_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    component = await repo.get_component_card(component_id)
+    if component is None:
+        return JSONResponse({"error": "component not found"}, status_code=404)
+
+    packet_history = await repo.list_packet_history_for_component(component_id)
+    fit_history = await repo.list_component_fit(component_id)
+    lineage_components = await repo.list_lineage_components(component.receipt.lineage_id)
+    return JSONResponse(
+        {
+            "component_id": component_id,
+            "packet_history": [item.model_dump(mode="json") for item in packet_history],
+            "fit_history": [item.model_dump(mode="json") for item in fit_history],
+            "lineage_components": [item.model_dump(mode="json") for item in lineage_components],
+        }
+    )
+
+
+@app.post("/api/v2/components/backfill")
+async def api_v2_component_backfill(request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    config = st["config"]
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    methodology_ids = body.get("methodology_ids")
+    limit = int(body.get("limit", 100))
+
+    from claw.miner import RepoMiner
+
+    miner = RepoMiner(
+        repository=repo,
+        llm_client=None,
+        semantic_memory=None,
+        config=config,
+    )
+    summary = await miner.backfill_components(
+        methodology_ids=methodology_ids,
+        limit=limit,
+        repository=repo,
+    )
+    return JSONResponse(summary)
+
+
+@app.post("/api/v2/plans")
+async def api_v2_create_plan(request: Request) -> JSONResponse:
+    body = await request.json()
+    task_text = body.get("task_text", "").strip()
+    if not task_text:
+        return JSONResponse({"error": "task_text required"}, status_code=400)
+
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    feature_flags = st["config"].feature_flags
+
+    workspace_dir = body.get("workspace_dir")
+    branch = body.get("branch")
+    target_brain = body.get("target_brain", "primary")
+    execution_mode = body.get("execution_mode", "interactive")
+    check_commands = body.get("check_commands") or []
+    target_language = body.get("target_language")
+    target_stack_hints = body.get("target_stack_hints") or []
+
+    plan = decompose_task(
+        task_text,
+        workspace_path=workspace_dir,
+        target_language=target_language,
+        target_stack_hints=target_stack_hints,
+        check_commands=check_commands,
+    )
+    governance_policies = await _active_governance_policies_for_plan(repo, plan.task_archetype)
+    compiled_recipes = await _active_compiled_recipes_for_archetype(repo, plan.task_archetype)
+
+    packets = []
+    slot_views: list[dict[str, Any]] = []
+    for slot in plan.slots:
+        cards = await _candidate_cards_for_slot(
+            repo,
+            task_text=task_text,
+            slot=slot,
+            target_language=target_language,
+            workspace_dir=workspace_dir,
+        )
+        fit_rows = await repo.find_component_fit(plan.task_archetype, slot.name, None, limit=20)
+        ranked = rank_components_for_slot(
+            slot,
+            cards,
+            fit_rows=fit_rows,
+            compiled_recipes=compiled_recipes,
+            governance_policies=governance_policies,
+            target_language=target_language,
+            target_stack_hints=target_stack_hints,
+        )
+        if not ranked:
+            return JSONResponse(
+                {"error": f"no component candidates available for slot '{slot.name}'"},
+                status_code=400,
+            )
+
+        packet = build_application_packet(
+            plan.plan_id,
+            plan.task_archetype,
+            slot,
+            ranked,
+            governance_policies=governance_policies,
+        )
+        packet = _ensure_critical_policy_gates(packet, feature_flags.critical_slot_policy)
+        await repo.save_application_packet(packet)
+        packets.append(packet)
+        slot_views.append(
+            {
+                "slot_id": slot.slot_id,
+                "name": slot.name,
+                "risk": slot.risk.value,
+                "selected_packet_id": packet.packet_id,
+                "status": packet.status.value,
+                "confidence": packet.selected.confidence,
+                "coverage_state": packet.coverage_state.value,
+            }
+        )
+
+    summary = _build_plan_summary({"slots": slot_views}, packets)
+    status = "review_required" if any(packet.reviewer_required for packet in packets) else "draft"
+    plan_record = {
+        "plan_id": plan.plan_id,
+        "task_text": task_text,
+        "workspace_dir": workspace_dir,
+        "branch": branch,
+        "target_brain": target_brain,
+        "execution_mode": execution_mode,
+        "check_commands": check_commands,
+        "task_archetype": plan.task_archetype,
+        "archetype_confidence": plan.archetype_confidence,
+        "status": status,
+        "slots": slot_views,
+        "summary": summary,
+        "approved_slot_ids": [],
+        "created_at": _datetime.now(UTC).isoformat(),
+    }
+    for slot in plan.slots:
+        await repo.save_slot_instance(slot, task_archetype=plan.task_archetype)
+    await _save_plan_record(app, repo, plan_record)
+
+    return JSONResponse(
+        {
+            "plan_id": plan.plan_id,
+            "task_archetype": plan.task_archetype,
+            "archetype_confidence": plan.archetype_confidence,
+            "status": status,
+            "slots": slot_views,
+            "summary": summary,
+        }
+    )
+
+
+@app.get("/api/v2/plans/{plan_id}")
+async def api_v2_get_plan(plan_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    plan = await _load_plan_record(app, repo, plan_id)
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+    packet_summaries = await repo.list_packets_for_plan(plan_id)
+    packets = []
+    for summary in packet_summaries:
+        packet = await repo.get_application_packet(summary.packet_id)
+        if packet is not None:
+            packets.append(packet.model_dump(mode="json"))
+
+    return JSONResponse({**plan, "packets": packets})
+
+
+@app.post("/api/v2/plans/{plan_id}/slots/{slot_id}/swap-candidate")
+async def api_v2_swap_plan_candidate(plan_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    plan = await _load_plan_record(app, repo, plan_id)
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    body = await request.json()
+    candidate_component_id = body.get("candidate_component_id")
+    if not candidate_component_id:
+        return JSONResponse({"error": "candidate_component_id required"}, status_code=400)
+
+    packet_summaries = await repo.list_packets_for_plan(plan_id)
+    packet = None
+    for summary in packet_summaries:
+        if summary.slot_id != slot_id:
+            continue
+        packet = await repo.get_application_packet(summary.packet_id)
+        break
+
+    if packet is None:
+        return JSONResponse({"error": "Slot packet not found"}, status_code=404)
+
+    replacement = next((item for item in packet.runner_ups if item.component_id == candidate_component_id), None)
+    if replacement is None:
+        return JSONResponse({"error": "Candidate not available as runner-up"}, status_code=404)
+    governance_policies = await _active_governance_policies_for_plan(repo, str(plan.get("task_archetype") or ""))
+    matching_family_policies = [
+        policy
+        for policy in governance_policies
+        if policy.policy_kind == "family_policy"
+        and policy.family_barcode
+        and policy.family_barcode == replacement.receipt.family_barcode
+    ]
+    slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+    if slot_risk == "critical" and any(policy.severity == "high" for policy in matching_family_policies):
+        return JSONResponse(
+            {
+                "error": "Candidate blocked by active high-severity family policy",
+                "policy_reasons": [policy.reason or policy.recommendation for policy in matching_family_policies],
+            },
+            status_code=400,
+        )
+
+    old_selected = packet.selected
+    packet.selected = replacement
+    packet.runner_ups = [old_selected, *[item for item in packet.runner_ups if item.component_id != candidate_component_id]][:3]
+    packet.why_selected = replacement.why_fit[:4] or ["selected by manual swap"]
+    packet.reviewer_required = True
+    packet.review_required_reasons = list(
+        dict.fromkeys(
+            packet.review_required_reasons
+            + ["manual_candidate_swap"]
+            + (["governance_family_policy"] if matching_family_policies else [])
+        )
+    )
+    packet.confidence_basis = replacement.confidence_basis
+    packet.status = PacketStatus.REVIEW_REQUIRED
+    if matching_family_policies:
+        packet.risk_notes = list(
+            dict.fromkeys(
+                packet.risk_notes
+                + [policy.recommendation or policy.reason for policy in matching_family_policies if (policy.recommendation or policy.reason)]
+            )
+        )[:4]
+    packet = _reset_analysis_gates(packet)
+    await repo.save_application_packet(packet)
+
+    replacement_history = list(plan.get("replacement_history", []))
+    replacement_history.append(
+        {
+            "slot_id": slot_id,
+            "previous_component_id": old_selected.component_id,
+            "new_component_id": replacement.component_id,
+            "reason": body.get("reason") or "manual_candidate_swap",
+            "timestamp": _datetime.now(UTC).isoformat(),
+        }
+    )
+    plan["replacement_history"] = replacement_history
+
+    for slot_view in plan["slots"]:
+        if slot_view["slot_id"] == slot_id:
+            slot_view["selected_packet_id"] = packet.packet_id
+            slot_view["status"] = packet.status.value
+            slot_view["confidence"] = packet.selected.confidence
+            slot_view["coverage_state"] = packet.coverage_state.value
+            break
+    plan["status"] = "review_required"
+    plan["approved_slot_ids"] = [item for item in plan.get("approved_slot_ids", []) if item != slot_id]
+    await _save_plan_record(app, repo, plan)
+
+    return JSONResponse({"packet": packet.model_dump(mode="json")})
+
+
+@app.post("/api/v2/plans/{plan_id}/approve")
+async def api_v2_approve_plan(plan_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    plan = await _load_plan_record(app, repo, plan_id)
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    body = await request.json()
+    slot_ids = body.get("slot_ids") or [slot["slot_id"] for slot in plan["slots"]]
+
+    packet_summaries = await repo.list_packets_for_plan(plan_id)
+    approved_slot_ids: list[str] = list(plan.get("approved_slot_ids", []))
+    for summary in packet_summaries:
+        if summary.slot_id not in slot_ids:
+            continue
+        packet = await repo.get_application_packet(summary.packet_id)
+        if packet is None:
+            continue
+        packet.status = PacketStatus.APPROVED
+        await repo.save_application_packet(packet)
+        if summary.slot_id not in approved_slot_ids:
+            approved_slot_ids.append(summary.slot_id)
+
+    plan["approved_slot_ids"] = approved_slot_ids
+    plan["status"] = "approved" if len(approved_slot_ids) == len(plan["slots"]) else "review_required"
+    await _save_plan_record(app, repo, plan)
+    return JSONResponse(
+        {
+            "plan_id": plan_id,
+            "status": plan["status"],
+            "approved_slot_ids": approved_slot_ids,
+        }
+    )
+
+
+@app.post("/api/v2/plans/{plan_id}/execute")
+async def api_v2_execute_plan(plan_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    plan = await _load_plan_record(app, repo, plan_id)
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    body = await request.json()
+    approved_slot_ids = body.get("approved_slot_ids") or plan.get("approved_slot_ids") or [slot["slot_id"] for slot in plan["slots"]]
+    if not approved_slot_ids:
+        return JSONResponse({"error": "No approved slots selected"}, status_code=400)
+
+    plan["status"] = "executing"
+    await _save_plan_record(app, repo, plan)
+    response = await _start_playground_execution(
+        request,
+        task_description=plan["task_text"],
+        project_id="playground",
+        workspace_dir=plan.get("workspace_dir"),
+        plan_id=plan_id,
+        approved_slot_ids=approved_slot_ids,
+    )
+    payload = json.loads(response.body.decode("utf-8"))
+    payload["redirect_to"] = f"/forge/run/{payload['session_id']}"
+    return JSONResponse(payload)
+
+
 @app.get("/api/search")
 async def api_search(
     q: str = Query(..., min_length=1, description="Search query"),
@@ -220,6 +2318,9 @@ async def api_search(
     st = await _ensure_state(app)
     repo = st["repository"]
     federation = st["federation"]
+    inferred_archetype, archetype_confidence, _hits = infer_task_archetype(q)
+    governance_policies = await _active_governance_policies_for_plan(repo, inferred_archetype)
+    governance_conflicts = _detect_governance_conflicts(governance_policies)
 
     t0 = time.monotonic()
     results: list[dict[str, Any]] = []
@@ -313,7 +2414,156 @@ async def api_search(
             "total_results": len(deduped),
             "elapsed_ms": round(elapsed_ms, 1),
             "ganglion_counts": ganglion_counts,
+            "governance_context": {
+                "task_archetype": inferred_archetype,
+                "archetype_confidence": archetype_confidence,
+                "active_policy_count": len(governance_policies),
+                "conflict_count": len(governance_conflicts),
+                "policies": [
+                    {
+                        "id": policy.id,
+                        "policy_kind": policy.policy_kind,
+                        "severity": policy.severity,
+                        "reason": policy.reason,
+                        "recommendation": policy.recommendation,
+                        "family_barcode": policy.family_barcode,
+                        "slot_id": policy.slot_id,
+                    }
+                    for policy in governance_policies[:5]
+                ],
+                "conflicts": governance_conflicts[:5],
+            },
             "results": deduped,
+        }
+    )
+
+
+@app.get("/api/v2/federation/packets")
+async def api_v2_federation_packets(
+    q: str = Query(..., min_length=1),
+    slot_name: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    federation = st["federation"]
+
+    inferred_archetype, archetype_confidence, _hits = infer_task_archetype(q)
+    plan = decompose_task(
+        q,
+        workspace_path=None,
+        target_language=language,
+        target_stack_hints=[],
+        check_commands=[],
+    )
+    slot = next((item for item in plan.slots if item.name == slot_name), None) if slot_name else (plan.slots[0] if plan.slots else None)
+
+    local_query = q if slot is None else f"{q} {slot.name} {slot.abstract_job}"
+    local_cards = await repo.search_component_cards_text(local_query, limit=limit, language=language)
+    local_items = []
+    for summary in local_cards:
+        card = await repo.get_component_card(summary.id)
+        if card is None:
+            continue
+        local_items.append(
+            {
+                "component_id": card.id,
+                "title": card.title,
+                "component_type": card.component_type,
+                "abstract_jobs": card.abstract_jobs,
+                "language": card.language,
+                "repo": card.receipt.repo,
+                "file_path": card.receipt.file_path,
+                "symbol": card.receipt.symbol,
+                "family_barcode": card.receipt.family_barcode,
+                "provenance_precision": getattr(card.receipt.provenance_precision, "value", str(card.receipt.provenance_precision)),
+                "source_instance": "primary",
+                "match_type": _component_match_type(card, slot),
+                "match_score": 1.0,
+                "relevance_score": 1.0,
+            }
+        )
+
+    sibling_items = []
+    if federation is not None:
+        try:
+            sibling_results = await federation.query_component_packets(
+                q,
+                slot_name=slot.name if slot else slot_name,
+                task_archetype=inferred_archetype,
+                language=language,
+                max_total=limit,
+            )
+            sibling_items = [item.as_dict() for item in sibling_results]
+        except Exception as exc:
+            logger.warning("Federation packet query failed: %s", exc)
+
+    merged = []
+    seen: set[tuple[str, str]] = set()
+    for item in [*local_items, *sibling_items]:
+        ident = (item["source_instance"], item["component_id"])
+        if ident in seen:
+            continue
+        seen.add(ident)
+        merged.append(item)
+    merged.sort(key=lambda item: item["relevance_score"] * max(item["match_score"], 0.1), reverse=True)
+
+    return JSONResponse(
+        {
+            "query": q,
+            "task_archetype": inferred_archetype,
+            "archetype_confidence": archetype_confidence,
+            "slot": slot.model_dump(mode="json") if slot else None,
+            "results": merged[:limit],
+        }
+    )
+
+
+@app.post("/api/v2/federation/specialist-packet")
+async def api_v2_federation_specialist_packet(request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    feature_flags = st["config"].feature_flags
+    if not getattr(feature_flags, "a2a_packets", False):
+        return JSONResponse({"error": "a2a packet exchange is disabled"}, status_code=403)
+
+    payload = await request.json()
+    task_text = str(payload.get("task_text", "")).strip()
+    slot_name = payload.get("slot_name")
+    preferred_agent = payload.get("preferred_agent")
+    target_language = payload.get("target_language")
+    limit = max(1, min(int(payload.get("limit", 5)), 20))
+
+    if not task_text:
+        return JSONResponse({"error": "task_text is required"}, status_code=400)
+
+    inferred_task_type = _infer_specialist_task_type(task_text)
+    from claw.dispatcher import DEFAULT_AGENT, STATIC_ROUTING
+
+    selected_agent = preferred_agent or STATIC_ROUTING.get(inferred_task_type, DEFAULT_AGENT)
+    packet_response = await api_v2_federation_packets(
+        q=task_text,
+        slot_name=slot_name,
+        language=target_language,
+        limit=limit,
+    )
+    packet_data = json.loads(packet_response.body.decode("utf-8"))
+    results = packet_data.get("results", [])
+    review_required = not results or any(item.get("match_type") != "direct_fit" for item in results[:2])
+
+    return JSONResponse(
+        {
+            "exchange_id": f"specpkt_{uuid.uuid4().hex[:12]}",
+            "task_text": task_text,
+            "selected_agent": selected_agent,
+            "inferred_task_type": inferred_task_type,
+            "preferred_agent": preferred_agent,
+            "routing_method": "static_fallback",
+            "task_archetype": packet_data.get("task_archetype"),
+            "archetype_confidence": packet_data.get("archetype_confidence"),
+            "slot": packet_data.get("slot"),
+            "results": results,
+            "review_required": review_required,
         }
     )
 
@@ -1050,6 +3300,17 @@ async def api_config_get() -> JSONResponse:
             "sweep_on_startup": getattr(gov, "sweep_on_startup", False),
         }
 
+    feature_flags = getattr(config, "feature_flags", None)
+    feature_flags_out = {}
+    if feature_flags:
+        feature_flags_out = {
+            "component_cards": feature_flags.component_cards,
+            "application_packets": feature_flags.application_packets,
+            "connectome_seq": feature_flags.connectome_seq,
+            "critical_slot_policy": feature_flags.critical_slot_policy,
+            "a2a_packets": feature_flags.a2a_packets,
+        }
+
     return JSONResponse({
         "agents": agents_out,
         "brains": brains_out,
@@ -1060,6 +3321,7 @@ async def api_config_get() -> JSONResponse:
         "local_llm": llm_out,
         "orchestrator": orch_out,
         "governance": gov_out,
+        "feature_flags": feature_flags_out,
     })
 
 
@@ -2187,6 +4449,491 @@ async def _ensure_playground_ctx() -> Any:
         return _playground_ctx
 
 
+async def _start_playground_execution(
+    request: Request,
+    *,
+    task_description: str,
+    project_id: str = "playground",
+    workspace_dir: Optional[str] = None,
+    plan_id: Optional[str] = None,
+    approved_slot_ids: Optional[list[str]] = None,
+) -> JSONResponse:
+    """Shared execution launcher for direct and plan-reviewed playground runs."""
+    session_id = str(uuid.uuid4())
+
+    if not hasattr(request.app.state, "playground_jobs"):
+        request.app.state.playground_jobs = {}
+
+    job: dict[str, Any] = {
+        "session_id": session_id,
+        "status": "starting",
+        "task_description": task_description,
+        "project_id": project_id,
+        "plan_id": plan_id,
+        "approved_slot_ids": approved_slot_ids or [],
+        "slot_execution": [],
+        "replacement_history": [],
+        "pause_requested_slot_id": None,
+        "paused_slot_id": None,
+        "reverify_requested_slots": {},
+        "blocked_slot_ids": {},
+        "banned_family_barcodes": {},
+        "steps": [],
+        "gates": [],
+        "corrections": [],
+        "result": None,
+        "error": None,
+        "error_trace": None,
+        "created_at": _datetime.now(UTC).isoformat(),
+    }
+    request.app.state.playground_jobs[session_id] = job
+
+    async def _run_playground_execution() -> None:
+        try:
+            ctx = await _ensure_playground_ctx()
+            repo = ctx.repository
+            feature_flags = ctx.config.feature_flags
+            active_packets: list[Any] = []
+            connectome: Optional[RunConnectome] = None
+            effective_task_description = task_description
+
+            if plan_id:
+                plan_record = await _load_plan_record(request.app, repo, plan_id)
+                if plan_record:
+                    job["replacement_history"] = list(plan_record.get("replacement_history", []))
+                summaries = await repo.list_packets_for_plan(plan_id)
+                approved_set = set(approved_slot_ids or [])
+                for summary in summaries:
+                    if approved_set and summary.slot_id not in approved_set:
+                        continue
+                    packet = await repo.get_application_packet(summary.packet_id)
+                    if packet is None:
+                        continue
+                    packet = _ensure_critical_policy_gates(packet, feature_flags.critical_slot_policy)
+                    packet.status = PacketStatus.EXECUTING
+                    await repo.save_application_packet(packet)
+                    await repo.save_slot_instance(packet.slot, task_archetype=packet.task_archetype)
+                    active_packets.append(packet)
+
+                if active_packets:
+                    effective_task_description = _render_packetized_task_description(task_description, active_packets)
+                    job["slot_execution"] = [
+                        {
+                            "slot_id": packet.slot.slot_id,
+                            "packet_id": packet.packet_id,
+                            "name": packet.slot.name,
+                            "status": "executing" if idx == 0 else "queued",
+                            "current_step": "pending",
+                            "retry_count": 0,
+                            "last_retry_detail": None,
+                            "replacement_count": len([r for r in job["replacement_history"] if r.get("slot_id") == packet.slot.slot_id]),
+                            "blocked_wait_ms": 0,
+                            "family_wait_ms": 0,
+                            "selected_component_id": packet.selected.component_id,
+                        }
+                        for idx, packet in enumerate(active_packets)
+                    ]
+                    await _persist_all_run_slot_execution(repo, session_id, job)
+                    connectome = await repo.save_run_connectome(
+                        RunConnectome(
+                            run_id=session_id,
+                            task_archetype=active_packets[0].task_archetype,
+                            status="running",
+                        )
+                    )
+                    for packet in active_packets:
+                        pair = await repo.save_pair_event(
+                            PairEvent(
+                                run_id=session_id,
+                                slot_id=packet.slot.slot_id,
+                                slot_barcode=packet.slot.slot_barcode,
+                                packet_id=packet.packet_id,
+                                component_id=packet.selected.component_id,
+                                source_barcode=packet.selected.receipt.source_barcode,
+                                confidence=packet.selected.confidence,
+                                confidence_basis=packet.confidence_basis,
+                            )
+                        )
+                        await repo.save_run_connectome_edge(
+                            connectome.id,
+                            source_node=packet.slot.slot_id,
+                            target_node=packet.selected.component_id,
+                            edge_type="paired",
+                            metadata={"packet_id": packet.packet_id, "pair_id": pair.id},
+                        )
+                        await _record_run_event(
+                            repo,
+                            session_id,
+                            "packet_selected",
+                            slot_id=packet.slot.slot_id,
+                            payload={"packet_id": packet.packet_id, "component_id": packet.selected.component_id},
+                        )
+
+            from claw.core.models import Project, Task
+            project = Project(
+                id=project_id,
+                name=project_id,
+                repo_path=workspace_dir or ".",
+            )
+            try:
+                await ctx.repository.create_project(project)
+            except Exception:
+                pass
+
+            from claw.cycle import MicroClaw
+            job["status"] = "running"
+
+            async def _wait_if_paused(slot_id: str) -> None:
+                while job.get("paused_slot_id") == slot_id:
+                    await asyncio.sleep(0.2)
+
+            async def _wait_if_blocked(slot_id: str) -> None:
+                wait_started: float | None = None
+                while slot_id in job.get("blocked_slot_ids", {}):
+                    if wait_started is None:
+                        wait_started = asyncio.get_event_loop().time()
+                    await asyncio.sleep(0.2)
+                if wait_started is not None:
+                    elapsed_ms = int((asyncio.get_event_loop().time() - wait_started) * 1000)
+                    slot_state = next((slot for slot in job["slot_execution"] if slot["slot_id"] == slot_id), None)
+                    if slot_state is not None:
+                        slot_state["blocked_wait_ms"] = int(slot_state.get("blocked_wait_ms", 0)) + elapsed_ms
+                        await _persist_run_slot_execution(repo, session_id, slot_state)
+                    await _record_run_action_audit(
+                        repo,
+                        session_id,
+                        "blocked_wait",
+                        slot_id=slot_id,
+                        reason="slot waited for unblock",
+                        payload={"duration_ms": elapsed_ms},
+                    )
+
+            async def _wait_for_allowed_family(packet: Any) -> Any:
+                current_packet = packet
+                wait_started: float | None = None
+                while current_packet.selected.receipt.family_barcode in job.get("banned_family_barcodes", {}):
+                    if wait_started is None:
+                        wait_started = asyncio.get_event_loop().time()
+                    slot_state = next((slot for slot in job["slot_execution"] if slot["slot_id"] == current_packet.slot.slot_id), None)
+                    if slot_state is not None:
+                        slot_state["status"] = "blocked"
+                        slot_state["current_step"] = "family_banned"
+                        await _persist_run_slot_execution(repo, session_id, slot_state)
+                    await asyncio.sleep(0.2)
+                    refreshed = await repo.get_application_packet(current_packet.packet_id)
+                    if refreshed is not None:
+                        current_packet = refreshed
+                if wait_started is not None:
+                    elapsed_ms = int((asyncio.get_event_loop().time() - wait_started) * 1000)
+                    slot_state = next((slot for slot in job["slot_execution"] if slot["slot_id"] == current_packet.slot.slot_id), None)
+                    if slot_state is not None:
+                        slot_state["family_wait_ms"] = int(slot_state.get("family_wait_ms", 0)) + elapsed_ms
+                        await _persist_run_slot_execution(repo, session_id, slot_state)
+                    await _record_run_action_audit(
+                        repo,
+                        session_id,
+                        "family_wait",
+                        slot_id=current_packet.slot.slot_id,
+                        reason="slot waited for allowed family",
+                        payload={"duration_ms": elapsed_ms, "family_barcode": current_packet.selected.receipt.family_barcode},
+                    )
+                return current_packet
+
+            async def _run_packet_cycle(packet: Any, *, reverify: bool = False) -> Any:
+                slot_state = next((slot for slot in job["slot_execution"] if slot["slot_id"] == packet.slot.slot_id), None)
+                if slot_state is not None:
+                    slot_state["status"] = "executing"
+                    slot_state["current_step"] = "reverify_pending" if reverify else "pending"
+                    await _persist_run_slot_execution(repo, session_id, slot_state)
+
+                description = _render_packetized_task_description(task_description, [packet])
+                if reverify:
+                    description = (
+                        f"{description}\n\nREVERIFY MODE\n"
+                        "Re-check the current slot implementation, apply only targeted fixes, and do not broaden scope."
+                    )
+
+                task = Task(
+                    project_id=project_id,
+                    title=f"{task_description[:96]} [{packet.slot.name}]",
+                    description=description,
+                )
+                await ctx.repository.create_task(task)
+                micro = MicroClaw(ctx=ctx, project_id=project_id, session_id=session_id)
+
+                def on_step(step_name: str, detail: str) -> None:
+                    timestamp = _datetime.now(UTC).isoformat()
+                    job["steps"].append({
+                        "step": step_name,
+                        "detail": detail,
+                        "timestamp": timestamp,
+                        "slot_id": packet.slot.slot_id,
+                    })
+                    current_slot = next((slot for slot in job["slot_execution"] if slot["slot_id"] == packet.slot.slot_id), None)
+                    if current_slot is not None:
+                        current_slot["status"] = "executing"
+                        current_slot["current_step"] = step_name
+                        asyncio.create_task(_persist_run_slot_execution(repo, session_id, current_slot))
+                    asyncio.create_task(
+                        _record_run_event(
+                            repo,
+                            session_id,
+                            step_name,
+                            slot_id=packet.slot.slot_id,
+                            payload={"detail": detail, "reverify": reverify},
+                        )
+                    )
+                    if step_name == "verify" and micro._current_verification:
+                        vr = micro._current_verification
+                        gate_names = [
+                            "dependency_jail", "style_match", "chaos_check",
+                            "placeholder_scan", "drift_alignment",
+                            "claim_validation", "llm_deep_review",
+                        ]
+                        violated_checks = {v["check"] for v in vr.violations}
+                        job["gates"] = [
+                            {
+                                "check": g,
+                                "status": "fail" if g in violated_checks else "pass",
+                                "detail": next(
+                                    (v["detail"] for v in vr.violations if v["check"] == g),
+                                    "",
+                                ),
+                            }
+                            for g in gate_names
+                        ]
+                    if step_name == "correct":
+                        if (
+                            micro._current_context_brief
+                            and micro._current_context_brief.correction_feedback
+                        ):
+                            cf = micro._current_context_brief.correction_feedback
+                            job["corrections"].append(cf.model_dump())
+                            if current_slot is not None:
+                                current_slot["retry_count"] += 1
+                                current_slot["last_retry_detail"] = "; ".join(
+                                    f"{v['check']}: {v['detail']}" for v in cf.violations[:3]
+                                ) if getattr(cf, "violations", None) else "correction requested"
+                                asyncio.create_task(_persist_run_slot_execution(repo, session_id, current_slot))
+                            asyncio.create_task(
+                                _record_run_event(
+                                    repo,
+                                    session_id,
+                                    "retry_delta",
+                                    slot_id=packet.slot.slot_id,
+                                    payload={
+                                        "attempt_number": cf.attempt_number,
+                                        "violations": cf.violations,
+                                        "reverify": reverify,
+                                    },
+                                )
+                            )
+
+                result = await micro.run_cycle(on_step=on_step)
+                findings: list[str] = []
+                test_refs: list[str] = []
+                if result.verification:
+                    findings = [f"{v.get('check')}: {v.get('detail')}" for v in result.verification.violations]
+                    if result.verification.tests_after is not None:
+                        test_refs.append(f"tests_after:{result.verification.tests_after}")
+
+                slot_success = bool(result.success)
+                if feature_flags.critical_slot_policy and getattr(packet.slot.risk, "value", str(packet.slot.risk)) == "critical":
+                    scan_paths = result.outcome.files_changed or [site.file_path for site in packet.expected_landing_sites]
+                    analysis = await run_critical_slot_policy_checks(
+                        workspace_dir or ".",
+                        scan_paths,
+                    )
+                    static_findings, policy_blocked = _apply_static_analysis_results(packet, analysis)
+                    if static_findings:
+                        findings.extend(static_findings)
+                    if policy_blocked:
+                        slot_success = False
+                        await _record_run_event(
+                            repo,
+                            session_id,
+                            "proof_gate_failed",
+                            slot_id=packet.slot.slot_id,
+                            payload={
+                                "packet_id": packet.packet_id,
+                                "gates": {
+                                    key: {
+                                        "status": value.get("status"),
+                                        "details": value.get("details"),
+                                        "finding_count": len(value.get("findings") or []),
+                                    }
+                                    for key, value in analysis.items()
+                                },
+                            },
+                        )
+
+                packet.status = PacketStatus.VERIFIED if slot_success else PacketStatus.FAILED
+                await repo.save_application_packet(packet)
+                await repo.save_outcome_event(
+                    OutcomeEvent(
+                        run_id=session_id,
+                        slot_id=packet.slot.slot_id,
+                        packet_id=packet.packet_id,
+                        success=slot_success,
+                        verifier_findings=findings,
+                        test_refs=test_refs,
+                        negative_memory_updates=[] if slot_success else packet.selected.known_failure_modes[:2],
+                        recipe_eligible=bool(slot_success),
+                    )
+                )
+                await repo.update_component_outcome(packet.selected.component_id, slot_success)
+                await _record_run_event(
+                    repo,
+                    session_id,
+                    "slot_verified" if slot_success else "slot_failed",
+                    slot_id=packet.slot.slot_id,
+                    payload={"packet_id": packet.packet_id, "success": slot_success, "reverify": reverify},
+                )
+
+                if slot_state is not None:
+                    slot_state["status"] = "verified" if slot_success else "failed"
+                    slot_state["current_step"] = "done" if slot_success else (slot_state.get("current_step") or "verify")
+                    await _persist_run_slot_execution(repo, session_id, slot_state)
+
+                for idx, file_path in enumerate(result.outcome.files_changed):
+                    matched_packet, origin = _select_packet_for_file(file_path, [packet])
+                    if matched_packet is None:
+                        continue
+                    landing = await repo.save_landing_event(
+                        LandingEvent(
+                            run_id=session_id,
+                            slot_id=matched_packet.slot.slot_id,
+                            packet_id=matched_packet.packet_id,
+                            file_path=file_path,
+                            diff_hunk_id=f"hunk_{idx + 1}",
+                            origin=origin,
+                        )
+                    )
+                    await _record_run_event(
+                        repo,
+                        session_id,
+                        "landing_recorded",
+                        slot_id=matched_packet.slot.slot_id,
+                        payload={"file_path": landing.file_path, "origin": origin.value, "packet_id": matched_packet.packet_id},
+                    )
+                    if connectome:
+                        await repo.save_run_connectome_edge(
+                            connectome.id,
+                            source_node=matched_packet.selected.component_id,
+                            target_node=landing.file_path,
+                            edge_type="landed",
+                            metadata={"packet_id": matched_packet.packet_id, "origin": origin.value},
+                        )
+                result.success = slot_success
+                return result
+
+            if active_packets:
+                last_result = None
+                for idx, packet in enumerate(active_packets):
+                    await _wait_if_paused(packet.slot.slot_id)
+                    await _wait_if_blocked(packet.slot.slot_id)
+                    packet = await _wait_for_allowed_family(packet)
+                    result = await _run_packet_cycle(packet)
+                    last_result = result
+
+                    if result.success and job["reverify_requested_slots"].pop(packet.slot.slot_id, False):
+                        await _wait_if_paused(packet.slot.slot_id)
+                        await _wait_if_blocked(packet.slot.slot_id)
+                        packet = await _wait_for_allowed_family(packet)
+                        await _record_run_event(repo, session_id, "reverify_started", slot_id=packet.slot.slot_id, payload={"packet_id": packet.packet_id})
+                        result = await _run_packet_cycle(packet, reverify=True)
+                        last_result = result
+
+                    if not result.success:
+                        for later in job["slot_execution"]:
+                            if later["slot_id"] == packet.slot.slot_id:
+                                continue
+                            if later["status"] in {"queued", "approved"}:
+                                later["status"] = "blocked"
+                                await _persist_run_slot_execution(repo, session_id, later)
+                        job["result"] = result.model_dump()
+                        job["status"] = "failed"
+                        if connectome:
+                            connectome.status = "failed"
+                            await repo.save_run_connectome(connectome)
+                        await _persist_all_run_slot_execution(repo, session_id, job)
+                        break
+
+                    next_slot = next(
+                        (slot for slot in job["slot_execution"] if slot["status"] == "queued"),
+                        None,
+                    )
+                    if next_slot is not None:
+                        next_slot["status"] = "executing"
+                        next_slot["current_step"] = "pending"
+                        await _persist_run_slot_execution(repo, session_id, next_slot)
+                else:
+                    job["result"] = last_result.model_dump() if last_result else None
+                    job["status"] = "completed"
+                    auto_recipe = await _auto_distill_compiled_recipe(repo, connectome, active_packets)
+                    if auto_recipe is not None:
+                        await _record_run_event(
+                            repo,
+                            session_id,
+                            "recipe_compiled",
+                            payload={
+                                "recipe_id": auto_recipe.id,
+                                "recipe_name": auto_recipe.recipe_name,
+                                "sample_size": auto_recipe.sample_size,
+                                "is_active": auto_recipe.is_active,
+                            },
+                        )
+                    if connectome:
+                        connectome.status = "verified"
+                        await repo.save_run_connectome(connectome)
+                    await _persist_all_run_slot_execution(repo, session_id, job)
+            else:
+                task = Task(
+                    project_id=project_id,
+                    title=task_description[:120],
+                    description=effective_task_description,
+                )
+                await ctx.repository.create_task(task)
+                micro = MicroClaw(
+                    ctx=ctx,
+                    project_id=project_id,
+                    session_id=session_id,
+                )
+
+                def on_step(step_name: str, detail: str) -> None:
+                    timestamp = _datetime.now(UTC).isoformat()
+                    job["steps"].append({
+                        "step": step_name,
+                        "detail": detail,
+                        "timestamp": timestamp,
+                    })
+                    asyncio.create_task(
+                        _record_run_event(
+                            repo,
+                            session_id,
+                            step_name,
+                            payload={"detail": detail},
+                        )
+                    )
+
+                cycle_result = await micro.run_cycle(on_step=on_step)
+                job["result"] = cycle_result.model_dump()
+                job["status"] = "completed" if cycle_result.success else "failed"
+        except Exception as exc:
+            job["status"] = "error"
+            job["error"] = str(exc)
+            import traceback
+            job["error_trace"] = traceback.format_exc()
+            await _persist_all_run_slot_execution(repo, session_id, job)
+
+    asyncio.create_task(_run_playground_execution())
+    return JSONResponse({
+        "session_id": session_id,
+        "status": "started",
+        "plan_id": plan_id,
+    })
+
+
 @app.post("/api/execute")
 async def execute_task(request: Request):
     """Submit a task for MicroClaw execution with real 7-gate verification."""
@@ -2197,114 +4944,13 @@ async def execute_task(request: Request):
 
     project_id = body.get("project_id", "playground")
     workspace_dir = body.get("workspace_dir")  # optional override (unused for now)
-
-    session_id = str(uuid.uuid4())
-
-    # Store job state
-    if not hasattr(request.app.state, "playground_jobs"):
-        request.app.state.playground_jobs = {}
-
-    job: dict[str, Any] = {
-        "session_id": session_id,
-        "status": "starting",
-        "task_description": task_description,
-        "project_id": project_id,
-        "steps": [],          # List of {"step": str, "detail": str, "timestamp": str}
-        "gates": [],          # List of {"check": str, "status": str, "detail": str}
-        "corrections": [],    # List of CorrectionFeedback dicts
-        "result": None,       # CycleResult dict when done
-        "error": None,
-        "error_trace": None,
-        "created_at": _datetime.utcnow().isoformat() + "Z",
-    }
-    request.app.state.playground_jobs[session_id] = job
-
-    # Run in background
-    async def _run_playground_execution():
-        try:
-            ctx = await _ensure_playground_ctx()
-
-            # Ensure the project exists (upsert-style: ignore duplicate)
-            from claw.core.models import Project, Task
-            project = Project(
-                id=project_id,
-                name=project_id,
-                repo_path=workspace_dir or ".",
-            )
-            try:
-                await ctx.repository.create_project(project)
-            except Exception:
-                pass  # Project already exists
-
-            # Create a pending task for MicroClaw to grab
-            task = Task(
-                project_id=project_id,
-                title=task_description[:120],
-                description=task_description,
-            )
-            await ctx.repository.create_task(task)
-
-            from claw.cycle import MicroClaw
-
-            micro = MicroClaw(
-                ctx=ctx,
-                project_id=project_id,
-                session_id=session_id,
-            )
-
-            job["status"] = "running"
-
-            def on_step(step_name: str, detail: str):
-                job["steps"].append({
-                    "step": step_name,
-                    "detail": detail,
-                    "timestamp": _datetime.utcnow().isoformat() + "Z",
-                })
-                # Track gate results from the verify step
-                if step_name == "verify" and micro._current_verification:
-                    vr = micro._current_verification
-                    gate_names = [
-                        "dependency_jail", "style_match", "chaos_check",
-                        "placeholder_scan", "drift_alignment",
-                        "claim_validation", "llm_deep_review",
-                    ]
-                    violated_checks = {v["check"] for v in vr.violations}
-                    job["gates"] = [
-                        {
-                            "check": g,
-                            "status": "fail" if g in violated_checks else "pass",
-                            "detail": next(
-                                (v["detail"] for v in vr.violations if v["check"] == g),
-                                "",
-                            ),
-                        }
-                        for g in gate_names
-                    ]
-                # Track correction attempts
-                if step_name == "correct":
-                    if (
-                        micro._current_context_brief
-                        and micro._current_context_brief.correction_feedback
-                    ):
-                        cf = micro._current_context_brief.correction_feedback
-                        job["corrections"].append(cf.model_dump())
-
-            cycle_result = await micro.run_cycle(on_step=on_step)
-            job["result"] = cycle_result.model_dump()
-            job["status"] = "completed" if cycle_result.success else "failed"
-
-        except Exception as exc:
-            job["status"] = "error"
-            job["error"] = str(exc)
-            import traceback
-            job["error_trace"] = traceback.format_exc()
-
-    asyncio.create_task(_run_playground_execution())
-
-    return JSONResponse({
-        "session_id": session_id,
-        "status": "started",
-    })
+    return await _start_playground_execution(
+        request,
+        task_description=task_description,
+        project_id=project_id,
+        workspace_dir=workspace_dir,
+        plan_id=body.get("plan_id"),
+    )
 
 
 @app.get("/api/sessions/{session_id}")
@@ -2341,6 +4987,1124 @@ async def get_session_corrections(session_id: str, request: Request):
         "corrections": job["corrections"],
         "total_attempts": len(job["corrections"]) + 1,  # +1 for initial attempt
     })
+
+
+@app.get("/api/v2/runs/{run_id}")
+async def api_v2_run_status(run_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    connectome = await repo.get_run_connectome(run_id)
+    pair_events = await repo.list_run_pair_events(run_id)
+    landing_events = await repo.list_run_landing_events(run_id)
+    outcome_events = await repo.list_run_outcome_events(run_id)
+    action_audits = await repo.list_run_action_audits(run_id)
+    persisted_slot_execution = await repo.list_run_slot_executions(run_id)
+    packets = []
+    if job and job.get("plan_id"):
+        packet_summaries = await repo.list_packets_for_plan(job["plan_id"])
+        for summary in packet_summaries:
+            packet = await repo.get_application_packet(summary.packet_id)
+            if packet is not None:
+                packets.append(packet)
+    elif persisted_slot_execution:
+        seen_packet_ids: set[str] = set()
+        for slot_state in persisted_slot_execution:
+            if not slot_state.packet_id or slot_state.packet_id in seen_packet_ids:
+                continue
+            packet = await repo.get_application_packet(slot_state.packet_id)
+            if packet is not None:
+                packets.append(packet)
+                seen_packet_ids.add(slot_state.packet_id)
+
+    if job is None and connectome is None:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    approved_slot_ids = list(job.get("approved_slot_ids", [])) if job else []
+    blocked_slot_ids = dict(job.get("blocked_slot_ids", {})) if job else {}
+    banned_family_barcodes = dict(job.get("banned_family_barcodes", {})) if job else {}
+    outcome_by_slot = {event.slot_id: event for event in outcome_events}
+    landing_counts: dict[str, int] = {}
+    for landing in landing_events:
+        landing_counts[landing.slot_id] = landing_counts.get(landing.slot_id, 0) + 1
+    slot_execution_map = (
+        {item["slot_id"]: item for item in job.get("slot_execution", [])}
+        if job and job.get("slot_execution")
+        else {
+            item.slot_id: {
+                "slot_id": item.slot_id,
+                "packet_id": item.packet_id,
+                "selected_component_id": item.selected_component_id,
+                "status": item.status,
+                "current_step": item.current_step,
+                "retry_count": item.retry_count,
+                "last_retry_detail": item.last_retry_detail,
+                "replacement_count": item.replacement_count,
+            }
+            for item in persisted_slot_execution
+        }
+    )
+    slot_summaries = []
+    current_slot_id = None
+    for packet in packets:
+        outcome = outcome_by_slot.get(packet.slot.slot_id)
+        slot_exec = slot_execution_map.get(packet.slot.slot_id, {})
+        slot_status = slot_exec.get("status", packet.status.value)
+        if outcome:
+            slot_status = "verified" if outcome.success else "failed"
+        elif not slot_exec and packet.slot.slot_id in approved_slot_ids:
+            slot_status = "executing"
+        if current_slot_id is None and slot_status in {"executing", "review_required", "approved"}:
+            current_slot_id = packet.slot.slot_id
+        slot_summaries.append(
+            {
+                "slot_id": packet.slot.slot_id,
+                "name": packet.slot.name,
+                "status": slot_status,
+                "confidence": packet.selected.confidence,
+                "landing_count": landing_counts.get(packet.slot.slot_id, 0),
+                "retry_count": int(slot_exec.get("retry_count", 0)),
+                "last_retry_detail": slot_exec.get("last_retry_detail"),
+                "current_step": slot_exec.get("current_step"),
+                "replacement_count": int(slot_exec.get("replacement_count", 0)),
+                "blocked_wait_ms": int(slot_exec.get("blocked_wait_ms", 0)),
+                "family_wait_ms": int(slot_exec.get("family_wait_ms", 0)),
+                "selected_component_id": slot_exec.get("selected_component_id", packet.selected.component_id),
+                "block_reason": blocked_slot_ids.get(packet.slot.slot_id),
+                "review_required": packet.reviewer_required,
+                "coverage_state": packet.coverage_state.value,
+            }
+        )
+    if current_slot_id is None and approved_slot_ids:
+        current_slot_id = approved_slot_ids[0]
+
+    return JSONResponse(
+        {
+            "run_id": run_id,
+            "status": job["status"] if job else (connectome.status if connectome else "unknown"),
+            "plan_id": job.get("plan_id") if job else None,
+            "task_description": job.get("task_description") if job else None,
+            "current_slot_id": current_slot_id,
+            "retry_count": len(job.get("corrections", [])) if job else 0,
+            "replacement_history": job.get("replacement_history", []) if job else [],
+            "blocked_slot_ids": blocked_slot_ids,
+            "banned_family_barcodes": banned_family_barcodes,
+            "summary": {
+                "completed_slots": len(outcome_events),
+                "total_slots": len(pair_events) or len(slot_execution_map) or len(approved_slot_ids),
+                "failed_gates": len(job.get("gates", [])) if job else 0,
+                "pair_events": len(pair_events),
+                "landing_events": len(landing_events),
+                "outcome_events": len(outcome_events),
+                "action_audits": len(action_audits),
+                "blocked_slots": len(blocked_slot_ids),
+                "banned_families": len(banned_family_barcodes),
+                "blocked_wait_ms": sum(int(slot.get("blocked_wait_ms", 0)) for slot in slot_execution_map.values()),
+                "family_wait_ms": sum(int(slot.get("family_wait_ms", 0)) for slot in slot_execution_map.values()),
+            },
+            "slots": slot_summaries,
+            "steps": job.get("steps", []) if job else [],
+            "gates": job.get("gates", []) if job else [],
+            "result": job.get("result") if job else None,
+        }
+    )
+
+
+@app.get("/api/v2/runs/{run_id}/connectome")
+async def api_v2_run_connectome(run_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    connectome = await repo.get_run_connectome(run_id)
+    if connectome is None:
+        return JSONResponse({"nodes": [], "edges": []})
+
+    pair_events = await repo.list_run_pair_events(run_id)
+    landing_events = await repo.list_run_landing_events(run_id)
+    outcome_events = await repo.list_run_outcome_events(run_id)
+    stored_edges = await repo.list_run_connectome_edges(connectome.id)
+
+    nodes: dict[str, dict[str, str]] = {run_id: {"id": run_id, "kind": "run"}}
+    edges = []
+    for event in pair_events:
+        nodes.setdefault(event.slot_id, {"id": event.slot_id, "kind": "slot"})
+        nodes.setdefault(event.component_id, {"id": event.component_id, "kind": "component"})
+        edges.append({"source": event.slot_id, "target": event.component_id, "type": "paired"})
+    for event in landing_events:
+        nodes.setdefault(event.file_path, {"id": event.file_path, "kind": "landing"})
+        edges.append({"source": event.packet_id, "target": event.file_path, "type": "landed"})
+    for event in outcome_events:
+        outcome_id = f"outcome:{event.id}"
+        nodes.setdefault(outcome_id, {"id": outcome_id, "kind": "outcome"})
+        edges.append({"source": event.packet_id, "target": outcome_id, "type": "verified"})
+    for edge in stored_edges:
+        edges.append({
+            "source": edge["source_node"],
+            "target": edge["target_node"],
+            "type": edge["edge_type"],
+            "metadata": json.loads(edge["metadata_json"]) if edge.get("metadata_json") else {},
+        })
+    return JSONResponse({"nodes": list(nodes.values()), "edges": edges})
+
+
+@app.get("/api/v2/runs/{run_id}/landings")
+async def api_v2_run_landings(run_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    landings = await repo.list_run_landing_events(run_id)
+    return JSONResponse(
+        {
+            "landings": [
+                {
+                    "locus_barcode": event.id,
+                    "file_path": event.file_path,
+                    "symbol": event.symbol,
+                    "diff_hunk_id": event.diff_hunk_id,
+                    "slot_id": event.slot_id,
+                    "packet_id": event.packet_id,
+                    "origin": event.origin.value,
+                }
+                for event in landings
+            ]
+        }
+    )
+
+
+@app.get("/api/v2/runs/{run_id}/events")
+async def api_v2_run_events(run_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    events = await _build_run_events(repo, run_id, job)
+    return JSONResponse({"events": events})
+
+
+@app.get("/api/v2/runs/{run_id}/audits")
+async def api_v2_run_audits(run_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    audits = await repo.list_run_action_audits(run_id)
+    return JSONResponse(
+        {
+            "audits": [
+                {
+                    "id": str(audit.id),
+                    "run_id": str(audit.run_id),
+                    "slot_id": str(audit.slot_id) if audit.slot_id is not None else None,
+                    "action_type": str(audit.action_type),
+                    "actor": str(audit.actor),
+                    "reason": str(audit.reason),
+                    "action_payload": audit.action_payload,
+                    "created_at": audit.created_at.isoformat(),
+                }
+                for audit in audits
+            ]
+        }
+    )
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/swap-candidate")
+async def api_v2_run_swap_candidate(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None or not job.get("plan_id"):
+        return JSONResponse({"error": "Active reviewed run not found"}, status_code=404)
+
+    body = await request.json()
+    candidate_component_id = body.get("candidate_component_id")
+    if not candidate_component_id:
+        return JSONResponse({"error": "candidate_component_id required"}, status_code=400)
+
+    plan = await _load_plan_record(app, repo, job["plan_id"])
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    packet_summaries = await repo.list_packets_for_plan(plan["plan_id"])
+    packet = None
+    for summary in packet_summaries:
+        if summary.slot_id != slot_id:
+            continue
+        packet = await repo.get_application_packet(summary.packet_id)
+        break
+    if packet is None:
+        return JSONResponse({"error": "Slot packet not found"}, status_code=404)
+
+    replacement = next((item for item in packet.runner_ups if item.component_id == candidate_component_id), None)
+    if replacement is None:
+        return JSONResponse({"error": "Candidate not available as runner-up"}, status_code=404)
+    if replacement.receipt.family_barcode in job.get("banned_family_barcodes", {}):
+        return JSONResponse({"error": "Candidate family is banned for this run"}, status_code=400)
+    governance_policies = await _active_governance_policies_for_plan(repo, str(plan.get("task_archetype") or ""))
+    matching_family_policies = [
+        policy
+        for policy in governance_policies
+        if policy.policy_kind == "family_policy"
+        and policy.family_barcode
+        and policy.family_barcode == replacement.receipt.family_barcode
+    ]
+    slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+    if slot_risk == "critical" and any(policy.severity == "high" for policy in matching_family_policies):
+        return JSONResponse(
+            {
+                "error": "Candidate blocked by active high-severity family policy",
+                "policy_reasons": [policy.reason or policy.recommendation for policy in matching_family_policies],
+            },
+            status_code=400,
+        )
+
+    old_selected = packet.selected
+    packet.selected = replacement
+    packet.runner_ups = [old_selected, *[item for item in packet.runner_ups if item.component_id != candidate_component_id]][:3]
+    packet.why_selected = replacement.why_fit[:4] or ["selected by active run swap"]
+    packet.reviewer_required = True
+    packet.review_required_reasons = list(
+        dict.fromkeys(
+            packet.review_required_reasons
+            + ["active_run_candidate_swap"]
+            + (["governance_family_policy"] if matching_family_policies else [])
+        )
+    )
+    packet.confidence_basis = replacement.confidence_basis
+    packet.status = PacketStatus.EXECUTING
+    if matching_family_policies:
+        packet.risk_notes = list(
+            dict.fromkeys(
+                packet.risk_notes
+                + [policy.recommendation or policy.reason for policy in matching_family_policies if (policy.recommendation or policy.reason)]
+            )
+        )[:4]
+    packet = _reset_analysis_gates(packet)
+    await repo.save_application_packet(packet)
+
+    pair_events = await repo.list_run_pair_events(run_id)
+    previous_pair = next((event for event in reversed(pair_events) if event.slot_id == slot_id), None)
+    connectome = await repo.get_run_connectome(run_id)
+    new_pair = await repo.save_pair_event(
+        PairEvent(
+            run_id=run_id,
+            slot_id=packet.slot.slot_id,
+            slot_barcode=packet.slot.slot_barcode,
+            packet_id=packet.packet_id,
+            component_id=packet.selected.component_id,
+            source_barcode=packet.selected.receipt.source_barcode,
+            confidence=packet.selected.confidence,
+            confidence_basis=packet.confidence_basis,
+            replacement_of_pair_id=previous_pair.id if previous_pair else None,
+        )
+    )
+    if connectome:
+        await repo.save_run_connectome_edge(
+            connectome.id,
+            source_node=packet.slot.slot_id,
+            target_node=packet.selected.component_id,
+            edge_type="re_paired",
+            metadata={"packet_id": packet.packet_id, "pair_id": new_pair.id},
+        )
+
+    replacement_entry = {
+        "slot_id": slot_id,
+        "previous_component_id": old_selected.component_id,
+        "new_component_id": replacement.component_id,
+        "reason": body.get("reason") or "active_run_candidate_swap",
+        "timestamp": _datetime.now(UTC).isoformat(),
+    }
+    job["replacement_history"].append(replacement_entry)
+    plan["replacement_history"] = list(job["replacement_history"])
+    await _save_plan_record(app, repo, plan)
+    await _record_run_event(
+        repo,
+        run_id,
+        "candidate_swapped",
+        slot_id=slot_id,
+        payload={
+            "previous_component_id": old_selected.component_id,
+            "new_component_id": replacement.component_id,
+            "reason": replacement_entry["reason"],
+        },
+    )
+    await _record_run_action_audit(
+        repo,
+        run_id,
+        "swap_candidate",
+        slot_id=slot_id,
+        reason=replacement_entry["reason"],
+        payload={
+            "previous_component_id": old_selected.component_id,
+            "new_component_id": replacement.component_id,
+            "packet_id": packet.packet_id,
+        },
+    )
+
+    for slot_state in job.get("slot_execution", []):
+        if slot_state["slot_id"] == slot_id:
+            slot_state["selected_component_id"] = replacement.component_id
+            slot_state["replacement_count"] = int(slot_state.get("replacement_count", 0)) + 1
+            await _persist_run_slot_execution(repo, run_id, slot_state)
+            break
+
+    return JSONResponse({"packet": packet.model_dump(mode="json"), "pair_id": new_pair.id})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/block")
+async def api_v2_run_block_slot(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    body = await request.json() if request.headers.get("content-length") not in {None, "0"} else {}
+    reason = body.get("reason") or "operator_blocked_slot"
+    slot_state = next((slot for slot in job.get("slot_execution", []) if slot["slot_id"] == slot_id), None)
+    if slot_state is None:
+        return JSONResponse({"error": "Slot execution not found"}, status_code=404)
+
+    job.setdefault("blocked_slot_ids", {})[slot_id] = reason
+    slot_state["status"] = "blocked"
+    slot_state["current_step"] = "blocked"
+    await _persist_run_slot_execution(repo, run_id, slot_state)
+    await _record_run_event(repo, run_id, "slot_blocked", slot_id=slot_id, payload={"reason": reason})
+    await _record_run_action_audit(repo, run_id, "block_slot", slot_id=slot_id, reason=reason, payload={"status": "blocked"})
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "status": "blocked", "reason": reason})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/unblock")
+async def api_v2_run_unblock_slot(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    body = await request.json() if request.headers.get("content-length") not in {None, "0"} else {}
+    reason = body.get("reason") or "operator_unblocked_slot"
+    slot_state = next((slot for slot in job.get("slot_execution", []) if slot["slot_id"] == slot_id), None)
+    if slot_state is None:
+        return JSONResponse({"error": "Slot execution not found"}, status_code=404)
+
+    job.setdefault("blocked_slot_ids", {}).pop(slot_id, None)
+    if slot_state["status"] == "blocked":
+        slot_state["status"] = "queued"
+        slot_state["current_step"] = "pending"
+    await _persist_run_slot_execution(repo, run_id, slot_state)
+    await _record_run_event(repo, run_id, "slot_unblocked", slot_id=slot_id, payload={"reason": reason})
+    await _record_run_action_audit(repo, run_id, "unblock_slot", slot_id=slot_id, reason=reason, payload={"status": slot_state["status"]})
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "status": slot_state["status"]})
+
+
+@app.post("/api/v2/runs/{run_id}/families/{family_barcode}/ban")
+async def api_v2_run_ban_family(run_id: str, family_barcode: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    body = await request.json() if request.headers.get("content-length") not in {None, "0"} else {}
+    reason = body.get("reason") or "operator_banned_family"
+    job.setdefault("banned_family_barcodes", {})[family_barcode] = reason
+    await _record_run_event(repo, run_id, "family_banned", payload={"family_barcode": family_barcode, "reason": reason})
+    await _record_run_action_audit(repo, run_id, "ban_family", reason=reason, payload={"family_barcode": family_barcode})
+    return JSONResponse({"run_id": run_id, "family_barcode": family_barcode, "status": "banned", "reason": reason})
+
+
+@app.post("/api/v2/runs/{run_id}/families/{family_barcode}/unban")
+async def api_v2_run_unban_family(run_id: str, family_barcode: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    body = await request.json() if request.headers.get("content-length") not in {None, "0"} else {}
+    reason = body.get("reason") or "operator_unbanned_family"
+    job.setdefault("banned_family_barcodes", {}).pop(family_barcode, None)
+    await _record_run_event(repo, run_id, "family_unbanned", payload={"family_barcode": family_barcode, "reason": reason})
+    await _record_run_action_audit(repo, run_id, "unban_family", reason=reason, payload={"family_barcode": family_barcode})
+    return JSONResponse({"run_id": run_id, "family_barcode": family_barcode, "status": "allowed"})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/pause")
+async def api_v2_run_pause_slot(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    slot_state = next((slot for slot in job.get("slot_execution", []) if slot["slot_id"] == slot_id), None)
+    if slot_state is None:
+        return JSONResponse({"error": "Slot execution not found"}, status_code=404)
+
+    job["paused_slot_id"] = slot_id
+    slot_state["status"] = "paused"
+    slot_state["current_step"] = slot_state.get("current_step") or "paused"
+    await _persist_run_slot_execution(repo, run_id, slot_state)
+    await _record_run_event(repo, run_id, "slot_paused", slot_id=slot_id, payload={"current_step": slot_state.get("current_step")})
+    await _record_run_action_audit(repo, run_id, "pause_slot", slot_id=slot_id, payload={"current_step": slot_state.get("current_step")})
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "status": "paused"})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/resume")
+async def api_v2_run_resume_slot(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    slot_state = next((slot for slot in job.get("slot_execution", []) if slot["slot_id"] == slot_id), None)
+    if slot_state is None:
+        return JSONResponse({"error": "Slot execution not found"}, status_code=404)
+
+    if job.get("paused_slot_id") == slot_id:
+        job["paused_slot_id"] = None
+    slot_state["status"] = "executing"
+    slot_state["current_step"] = slot_state.get("current_step") if slot_state.get("current_step") not in {None, "paused"} else "pending"
+    await _persist_run_slot_execution(repo, run_id, slot_state)
+    await _record_run_event(repo, run_id, "slot_resumed", slot_id=slot_id, payload={"current_step": slot_state.get("current_step")})
+    await _record_run_action_audit(repo, run_id, "resume_slot", slot_id=slot_id, payload={"current_step": slot_state.get("current_step")})
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "status": "executing"})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/reverify")
+async def api_v2_run_reverify_slot(run_id: str, slot_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None:
+        return JSONResponse({"error": "Active run not found"}, status_code=404)
+
+    slot_state = next((slot for slot in job.get("slot_execution", []) if slot["slot_id"] == slot_id), None)
+    if slot_state is None:
+        return JSONResponse({"error": "Slot execution not found"}, status_code=404)
+
+    job.setdefault("reverify_requested_slots", {})[slot_id] = True
+    await _record_run_event(repo, run_id, "reverify_requested", slot_id=slot_id, payload={"selected_component_id": slot_state.get("selected_component_id")})
+    await _record_run_action_audit(repo, run_id, "reverify_slot", slot_id=slot_id, payload={"selected_component_id": slot_state.get("selected_component_id")})
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "status": "queued_for_reverify"})
+
+
+@app.post("/api/v2/runs/{run_id}/slots/{slot_id}/proof-gates/{gate_id}/waive")
+async def api_v2_run_waive_proof_gate(run_id: str, slot_id: str, gate_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    if job is None or not job.get("plan_id"):
+        return JSONResponse({"error": "Active reviewed run not found"}, status_code=404)
+
+    plan = await _load_plan_record(app, repo, job["plan_id"])
+    if plan is None:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    packet_summaries = await repo.list_packets_for_plan(plan["plan_id"])
+    packet = None
+    for summary in packet_summaries:
+        if summary.slot_id != slot_id:
+            continue
+        packet = await repo.get_application_packet(summary.packet_id)
+        break
+    if packet is None:
+        return JSONResponse({"error": "Slot packet not found"}, status_code=404)
+
+    gate = _find_proof_gate(packet, gate_id)
+    if gate is None:
+        return JSONResponse({"error": "Proof gate not found"}, status_code=404)
+
+    body = await request.json() if request.headers.get("content-length") not in {None, "0"} else {}
+    reason = body.get("reason") or "operator_waived_proof_gate"
+    gate.status = "waived"
+    gate.details = [reason]
+    await repo.save_application_packet(packet)
+    await _record_run_event(
+        repo,
+        run_id,
+        "proof_gate_waived",
+        slot_id=slot_id,
+        payload={"gate_id": gate_id, "reason": reason, "packet_id": packet.packet_id},
+    )
+    await _record_run_action_audit(
+        repo,
+        run_id,
+        "waive_proof_gate",
+        slot_id=slot_id,
+        reason=reason,
+        payload={"gate_id": gate_id, "packet_id": packet.packet_id},
+    )
+    return JSONResponse({"run_id": run_id, "slot_id": slot_id, "gate_id": gate_id, "status": "waived"})
+
+
+@app.get("/api/v2/runs/{run_id}/events/stream")
+async def api_v2_run_events_stream(
+    run_id: str,
+    request: Request,
+    once: bool = Query(False),
+) -> StreamingResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+
+    async def event_generator():
+        seen: set[str] = set()
+        while True:
+            jobs = getattr(request.app.state, "playground_jobs", {})
+            job = jobs.get(run_id)
+            events = await _build_run_events(repo, run_id, job)
+            fresh = [event for event in events if event["event_id"] not in seen]
+            for event in fresh:
+                seen.add(event["event_id"])
+                yield f"id: {event['event_id']}\n"
+                yield f"event: {event['event_type']}\n"
+                yield f"data: {json.dumps(event)}\n\n"
+            if once:
+                break
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/v2/runs/{run_id}/retrograde")
+async def api_v2_run_retrograde(
+    run_id: str,
+    root: Optional[str] = Query(None),
+    request: Request = None,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {}) if request is not None else {}
+    job = jobs.get(run_id)
+    outcome_events = await repo.list_run_outcome_events(run_id)
+    landing_events = await repo.list_run_landing_events(run_id)
+    pair_events = await repo.list_run_pair_events(run_id)
+    run_events = await repo.list_run_events(run_id)
+    slot_executions = await repo.list_run_slot_executions(run_id)
+    action_audits = await repo.list_run_action_audits(run_id)
+
+    failing_outcome = next((event for event in outcome_events if not event.success), outcome_events[0] if outcome_events else None)
+    if failing_outcome is None:
+        return JSONResponse(
+            {
+                "root": {"kind": "run", "id": run_id if root is None else root},
+                "cause_chain": [],
+                "runner_up_analysis": None,
+                "confidence": 0.0,
+            }
+        )
+
+    packet = await repo.get_application_packet(failing_outcome.packet_id)
+    pair = next((event for event in pair_events if event.packet_id == failing_outcome.packet_id), None)
+    landing = next((event for event in landing_events if event.packet_id == failing_outcome.packet_id), None)
+    slot_execution = next((item for item in slot_executions if item.slot_id == failing_outcome.slot_id), None)
+    runner_up = packet.runner_ups[0] if packet and packet.runner_ups else None
+    relevant_audits = [audit for audit in action_audits if audit.slot_id in {None, failing_outcome.slot_id}]
+    relevant_events = [event for event in run_events if event.slot_id in {None, failing_outcome.slot_id}]
+    return JSONResponse(
+        _build_retrograde_payload(
+            run_id=run_id,
+            root=root,
+            failing_outcome=failing_outcome,
+            packet=packet,
+            pair=pair,
+            landing=landing,
+            slot_execution=slot_execution,
+            runner_up=runner_up,
+            relevant_audits=relevant_audits,
+            relevant_events=relevant_events,
+            task_description=job.get("task_description") if job else None,
+        )
+    )
+
+
+@app.get("/api/v2/runs/{run_id}/distill")
+async def api_v2_run_distill(run_id: str) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    connectome = await repo.get_run_connectome(run_id)
+    outcome_events = await repo.list_run_outcome_events(run_id)
+    pair_events = await repo.list_run_pair_events(run_id)
+    slot_executions = await repo.list_run_slot_executions(run_id)
+    action_audits = await repo.list_run_action_audits(run_id)
+    compiled_recipes = await repo.list_compiled_recipes(task_archetype=connectome.task_archetype if connectome else None, limit=10)
+
+    promotions = []
+    downgrades = []
+    negative_memory_updates = []
+    packet_transfer_summary = {"direct_fit": 0, "pattern_transfer": 0, "heuristic_fallback": 0}
+    federation_recommendations = []
+    for outcome in outcome_events:
+        packet = await repo.get_application_packet(outcome.packet_id)
+        if outcome.success and packet:
+            promotions.append(
+                {
+                    "kind": "packet_pattern",
+                    "slot_id": packet.slot.slot_id,
+                    "component_id": packet.selected.component_id,
+                    "reason": "successful packet application",
+                }
+            )
+        if not outcome.success and packet:
+            downgrades.append(
+                {
+                    "component_id": packet.selected.component_id,
+                    "reason": "failed packet application",
+                }
+            )
+            negative_memory_updates.extend(outcome.negative_memory_updates)
+        if packet:
+            transfer_mode = getattr(packet.selected.transfer_mode, "value", str(packet.selected.transfer_mode))
+            packet_transfer_summary[transfer_mode] = packet_transfer_summary.get(transfer_mode, 0) + 1
+
+    blocked_wait_ms = sum(int(getattr(item, "blocked_wait_ms", 0) or 0) for item in slot_executions)
+    family_wait_ms = sum(int(getattr(item, "family_wait_ms", 0) or 0) for item in slot_executions)
+    block_actions = [audit for audit in action_audits if audit.action_type == "block_slot"]
+    ban_actions = [audit for audit in action_audits if audit.action_type == "ban_family"]
+    reverify_actions = [audit for audit in action_audits if audit.action_type == "reverify_slot"]
+
+    governance_recommendations = []
+    if blocked_wait_ms >= 5000 or len(block_actions) >= 2:
+        governance_recommendations.append(
+            {
+                "kind": "slot_policy",
+                "severity": "medium" if blocked_wait_ms < 15000 else "high",
+                "reason": f"Blocked wait reached {blocked_wait_ms}ms across {len(block_actions)} block actions",
+                "recommendation": "Promote stronger pre-mutation review or automatic critical-slot blocking.",
+            }
+        )
+    if family_wait_ms >= 5000 or len(ban_actions) >= 1:
+        governance_recommendations.append(
+            {
+                "kind": "family_policy",
+                "severity": "medium" if family_wait_ms < 15000 else "high",
+                "reason": f"Family-ban wait reached {family_wait_ms}ms across {len(ban_actions)} bans",
+                "recommendation": "Downgrade or quarantine the affected family barcode until stronger direct-fit evidence exists.",
+            }
+        )
+    if len(reverify_actions) >= 2:
+        governance_recommendations.append(
+            {
+                "kind": "proof_policy",
+                "severity": "medium",
+                "reason": f"Repeated reverify requests ({len(reverify_actions)}) indicate unstable proof confidence",
+                "recommendation": "Strengthen proof gates or promote a stricter proof-first recipe.",
+            }
+        )
+
+    critical_pattern_transfer = []
+    for outcome in outcome_events:
+        packet = await repo.get_application_packet(outcome.packet_id)
+        if not packet:
+            continue
+        transfer_mode = getattr(packet.selected.transfer_mode, "value", str(packet.selected.transfer_mode))
+        slot_risk = getattr(packet.slot.risk, "value", str(packet.slot.risk))
+        if slot_risk == "critical" and transfer_mode != "direct_fit":
+            critical_pattern_transfer.append(packet.slot.name)
+
+    if packet_transfer_summary.get("pattern_transfer", 0) >= 1:
+        federation_recommendations.append(
+            {
+                "kind": "federation_policy",
+                "severity": "high" if critical_pattern_transfer else "medium",
+                "reason": (
+                    f"{packet_transfer_summary.get('pattern_transfer', 0)} selected packets relied on pattern transfer"
+                    + (f", including critical slots: {', '.join(sorted(set(critical_pattern_transfer)))}" if critical_pattern_transfer else "")
+                ),
+                "recommendation": "Prioritize direct-fit federation packet retrieval or queue mining missions for the weak slot families.",
+            }
+        )
+    if packet_transfer_summary.get("heuristic_fallback", 0) >= 1:
+        federation_recommendations.append(
+            {
+                "kind": "federation_policy",
+                "severity": "high",
+                "reason": f"{packet_transfer_summary.get('heuristic_fallback', 0)} selected packets used heuristic fallback",
+                "recommendation": "Escalate weak packet evidence before reuse and strengthen component/federation coverage.",
+            }
+        )
+
+    return JSONResponse(
+        {
+            "run_id": run_id,
+            "task_archetype": connectome.task_archetype if connectome else None,
+            "promotions": promotions,
+            "downgrades": downgrades,
+            "negative_memory_updates": negative_memory_updates,
+            "governance_recommendations": governance_recommendations,
+            "federation_recommendations": federation_recommendations,
+            "packet_transfer_summary": packet_transfer_summary,
+            "recipe_candidates": [
+                {
+                    "task_archetype": connectome.task_archetype if connectome else None,
+                    "sample_size": len([event for event in outcome_events if event.success]),
+                    "pair_count": len(pair_events),
+                }
+            ],
+            "compiled_recipes": [recipe.model_dump(mode="json") for recipe in compiled_recipes],
+        }
+    )
+
+
+@app.post("/api/v2/runs/{run_id}/governance/promote")
+async def api_v2_promote_governance_policy(run_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    body = await request.json()
+    connectome = await repo.get_run_connectome(run_id)
+    evidence_json = dict(body.get("evidence_json") or {})
+    evidence_json.setdefault("source_run_id", run_id)
+    evidence_json.setdefault("source_route", f"/evolution/run/{run_id}")
+    evidence_json.setdefault("source_kind", "run_distill")
+    if connectome and connectome.task_archetype:
+        evidence_json.setdefault("task_archetype", connectome.task_archetype)
+    if body.get("family_barcode"):
+        evidence_json.setdefault("family_barcode", body.get("family_barcode"))
+    if body.get("slot_id"):
+        evidence_json.setdefault("slot_id", body.get("slot_id"))
+    policy = GovernancePolicy(
+        run_id=run_id,
+        task_archetype=(connectome.task_archetype if connectome else None),
+        slot_id=body.get("slot_id"),
+        family_barcode=body.get("family_barcode"),
+        policy_kind=str(body.get("policy_kind") or body.get("kind") or "governance_policy"),
+        severity=str(body.get("severity") or "medium"),
+        status=str(body.get("status") or "active"),
+        reason=str(body.get("reason") or ""),
+        recommendation=str(body.get("recommendation") or ""),
+        evidence_json=evidence_json,
+        promoted_by=str(body.get("promoted_by") or "operator"),
+    )
+    saved = await repo.save_governance_policy(policy)
+    return JSONResponse({"policy": saved.model_dump(mode="json")})
+
+
+@app.get("/api/v2/governance/policies")
+async def api_v2_governance_policies(
+    task_archetype: Optional[str] = None,
+    active_only: bool = False,
+    status: Optional[str] = None,
+    family_barcode: Optional[str] = None,
+    limit: int = 100,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    policies = await repo.list_governance_policies(
+        task_archetype=task_archetype,
+        active_only=active_only,
+        limit=max(1, min(limit, 250)),
+    )
+    if status:
+        policies = [policy for policy in policies if policy.status == status]
+    if family_barcode:
+        policies = [policy for policy in policies if policy.family_barcode == family_barcode]
+    return JSONResponse({"policies": [policy.model_dump(mode="json") for policy in policies]})
+
+
+@app.get("/api/v2/governance/conflicts")
+async def api_v2_governance_conflicts(
+    task_archetype: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 100,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    policies = await repo.list_governance_policies(
+        task_archetype=task_archetype,
+        active_only=active_only,
+        limit=max(1, min(limit, 250)),
+    )
+    conflicts = _detect_governance_conflicts(policies)
+    return JSONResponse({"conflicts": conflicts, "policy_count": len(policies)})
+
+
+@app.post("/api/v2/governance/policies/{policy_id}/status")
+async def api_v2_governance_policy_status(policy_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    body = await request.json()
+    policy = await repo.get_governance_policy(policy_id)
+    if policy is None:
+        return JSONResponse({"error": "policy not found"}, status_code=404)
+    new_status = str(body.get("status") or "").strip()
+    if new_status not in {"active", "inactive", "superseded", "waived"}:
+        return JSONResponse({"error": "invalid status"}, status_code=400)
+    policy.status = new_status
+    if body.get("reason"):
+        policy.reason = str(body.get("reason"))
+    evidence = dict(policy.evidence_json or {})
+    if body.get("supersedes_policy_id"):
+        evidence["supersedes_policy_id"] = str(body.get("supersedes_policy_id"))
+    if body.get("waiver_note"):
+        evidence["waiver_note"] = str(body.get("waiver_note"))
+    policy.evidence_json = evidence
+    policy.updated_at = _datetime.now(UTC)
+    saved = await repo.save_governance_policy(policy)
+    return JSONResponse({"policy": saved.model_dump(mode="json")})
+
+
+@app.get("/api/v2/governance/trends")
+async def api_v2_governance_trends(
+    task_archetype: Optional[str] = None,
+    family_barcode: Optional[str] = None,
+    limit: int = 50,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    row_limit = max(1, min(limit, 200))
+
+    archetype_rows = await repo.engine.fetch_all(
+        """
+        SELECT rc.task_archetype AS task_archetype,
+               COUNT(DISTINCT rc.run_id) AS runs,
+               COALESCE(SUM(rse.blocked_wait_ms), 0) AS blocked_wait_ms,
+               COALESCE(SUM(rse.family_wait_ms), 0) AS family_wait_ms
+          FROM run_connectomes rc
+          LEFT JOIN run_slot_executions rse ON rse.run_id = rc.run_id
+         GROUP BY rc.task_archetype
+         ORDER BY blocked_wait_ms DESC, family_wait_ms DESC
+         LIMIT ?
+        """,
+        [row_limit],
+    )
+    audit_rows = await repo.engine.fetch_all(
+        """
+        SELECT rc.task_archetype AS task_archetype, raa.action_type AS action_type, COUNT(*) AS count
+          FROM run_connectomes rc
+          JOIN run_action_audits raa ON raa.run_id = rc.run_id
+         GROUP BY rc.task_archetype, raa.action_type
+        """
+    )
+    family_audits = await repo.list_governance_policies(limit=row_limit)
+    ban_rows = await repo.engine.fetch_all(
+        """
+        SELECT action_type, action_payload_json
+          FROM run_action_audits
+         WHERE action_type IN ('ban_family', 'unban_family', 'family_wait')
+         ORDER BY created_at DESC
+         LIMIT ?
+        """,
+        [row_limit * 10],
+    )
+
+    action_counts_by_archetype: dict[str, dict[str, int]] = {}
+    for row in audit_rows:
+        archetype = row.get("task_archetype") or "unknown"
+        bucket = action_counts_by_archetype.setdefault(archetype, {})
+        bucket[row.get("action_type") or "unknown"] = int(row.get("count") or 0)
+
+    by_archetype = []
+    for row in archetype_rows:
+        archetype = row.get("task_archetype") or "unknown"
+        counts = action_counts_by_archetype.get(archetype, {})
+        by_archetype.append(
+            {
+                "task_archetype": archetype,
+                "runs": int(row.get("runs") or 0),
+                "blocked_wait_ms": int(row.get("blocked_wait_ms") or 0),
+                "family_wait_ms": int(row.get("family_wait_ms") or 0),
+                "block_actions": int(counts.get("block_slot", 0)),
+                "ban_actions": int(counts.get("ban_family", 0)),
+                "reverify_actions": int(counts.get("reverify_slot", 0)),
+            }
+        )
+
+    family_counts: dict[str, dict[str, Any]] = {}
+    for row in ban_rows:
+        payload = json.loads(row.get("action_payload_json") or "{}")
+        family_barcode = payload.get("family_barcode")
+        if not family_barcode:
+            continue
+        bucket = family_counts.setdefault(
+            family_barcode,
+            {"family_barcode": family_barcode, "ban_actions": 0, "unban_actions": 0, "wait_events": 0, "policy_count": 0},
+        )
+        action_type = row.get("action_type") or ""
+        if action_type == "ban_family":
+            bucket["ban_actions"] += 1
+        elif action_type == "unban_family":
+            bucket["unban_actions"] += 1
+        else:
+            bucket["wait_events"] += 1
+    for policy in family_audits:
+        if policy.family_barcode:
+            bucket = family_counts.setdefault(
+                policy.family_barcode,
+                {
+                    "family_barcode": policy.family_barcode,
+                    "ban_actions": 0,
+                    "unban_actions": 0,
+                    "wait_events": 0,
+                    "policy_count": 0,
+                },
+            )
+            bucket["policy_count"] += 1
+
+    by_family = sorted(
+        family_counts.values(),
+        key=lambda item: (item["policy_count"], item["ban_actions"], item["wait_events"]),
+        reverse=True,
+    )[:row_limit]
+
+    if task_archetype:
+        by_archetype = [item for item in by_archetype if item["task_archetype"] == task_archetype]
+    if family_barcode:
+        by_family = [item for item in by_family if item["family_barcode"] == family_barcode]
+
+    return JSONResponse({"by_archetype": by_archetype, "by_family": by_family})
+
+
+@app.get("/api/v2/federation/trends")
+async def api_v2_federation_trends(
+    task_archetype: Optional[str] = None,
+    family_barcode: Optional[str] = None,
+    limit: int = 50,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    trends = await _compute_federation_trends(
+        repo,
+        task_archetype=task_archetype,
+        family_barcode=family_barcode,
+        limit=limit,
+    )
+    return JSONResponse(trends)
+
+
+@app.get("/api/v2/federation/policy-recommendations")
+async def api_v2_federation_policy_recommendations(
+    task_archetype: Optional[str] = None,
+    family_barcode: Optional[str] = None,
+    limit: int = 50,
+) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    trends = await _compute_federation_trends(
+        repo,
+        task_archetype=task_archetype,
+        family_barcode=family_barcode,
+        limit=limit,
+    )
+    policies = await repo.list_governance_policies(task_archetype=task_archetype, active_only=True, limit=200)
+    recommendations = _build_federation_policy_recommendations(trends, policies)
+    return JSONResponse(
+        {
+            "recommendations": recommendations,
+            "trend_summary": {
+                "archetype_count": len(trends.get("by_archetype", [])),
+                "family_count": len(trends.get("by_family", [])),
+            },
+        }
+    )
+
+
+@app.post("/api/v2/federation/policies/promote")
+async def api_v2_promote_federation_policy(request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    body = await request.json()
+    evidence_json = dict(body.get("evidence_json") or {})
+    evidence_json.setdefault("source_route", "/api/v2/federation/policy-recommendations")
+    evidence_json.setdefault("source_kind", "federation_trend")
+    policy = GovernancePolicy(
+        task_archetype=body.get("task_archetype"),
+        slot_id=body.get("slot_id"),
+        family_barcode=body.get("family_barcode"),
+        policy_kind=body.get("policy_kind", "family_policy"),
+        severity=body.get("severity", "medium"),
+        reason=body.get("reason", ""),
+        recommendation=body.get("recommendation", ""),
+        evidence_json=evidence_json,
+        promoted_by=body.get("promoted_by", "federation_loop"),
+    )
+    saved = await repo.save_governance_policy(policy)
+    return JSONResponse({"policy": saved.model_dump(mode="json")})
+
+
+@app.post("/api/v2/runs/{run_id}/recipes/promote")
+async def api_v2_promote_recipe(run_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    jobs = getattr(request.app.state, "playground_jobs", {})
+    job = jobs.get(run_id)
+    body = await request.json()
+    recipe_name = body.get("recipe_name", f"{run_id}_recipe")
+    minimum_sample_size = int(body.get("minimum_sample_size", 1))
+
+    connectome = await repo.get_run_connectome(run_id)
+    if connectome is None or not connectome.task_archetype:
+        return JSONResponse({"error": "Run connectome not found"}, status_code=404)
+
+    pair_events = await repo.list_run_pair_events(run_id)
+    outcome_events = await repo.list_run_outcome_events(run_id)
+    if len([event for event in outcome_events if event.success]) < minimum_sample_size:
+        return JSONResponse({"error": "Not enough successful evidence for promotion"}, status_code=400)
+
+    packets = []
+    for event in pair_events:
+        packet = await repo.get_application_packet(event.packet_id)
+        if packet is not None:
+            packets.append(packet)
+
+    recipe = await repo.save_compiled_recipe(
+        CompiledRecipe(
+            task_archetype=connectome.task_archetype,
+            recipe_name=recipe_name,
+            recipe_json={
+                "run_id": run_id,
+                "task_description": job.get("task_description") if job else None,
+                "slot_order": [packet.slot.name for packet in packets],
+                "preferred_components": [
+                    {
+                        "slot_id": packet.slot.slot_id,
+                        "component_id": packet.selected.component_id,
+                        "family_barcode": packet.selected.receipt.family_barcode,
+                    }
+                    for packet in packets
+                ],
+                "proof_gates": sorted({gate.gate_type for packet in packets for gate in packet.proof_plan}),
+            },
+            sample_size=len([event for event in outcome_events if event.success]),
+            is_active=True,
+        )
+    )
+    return JSONResponse({"recipe": recipe.model_dump(mode="json")})
+
+
+@app.post("/api/v2/runs/{run_id}/gaps/create-mining-mission")
+async def api_v2_create_mining_mission(run_id: str, request: Request) -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    body = await request.json()
+    mission = await repo.save_mining_mission(
+        MiningMission(
+            id=f"mission_{uuid.uuid4().hex[:10]}",
+            run_id=run_id,
+            slot_family=body.get("slot_family"),
+            priority=body.get("priority", "normal"),
+            reason=body.get("reason", "unspecified"),
+            status="queued",
+            mission_json=body,
+        )
+    )
+    return JSONResponse({"mission": mission.model_dump(mode="json")})
+
+
+@app.get("/api/v2/missions/mining")
+async def api_v2_list_mining_missions() -> JSONResponse:
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    missions = await repo.list_mining_missions()
+    return JSONResponse({"missions": [mission.model_dump(mode="json") for mission in missions]})
 
 # ---------------------------------------------------------------------------
 # HTML UI — single-page, no npm required

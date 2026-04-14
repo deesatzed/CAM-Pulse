@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from claw.core.models import Methodology, Task
+from claw.core.models import ComponentCard, ComponentCardSummary, Methodology, Task
 from claw.db.embeddings import EmbeddingEngine
 from claw.db.repository import Repository
 from claw.memory.fitness import compute_fitness, log_fitness_change
@@ -296,6 +296,41 @@ class SemanticMemory:
         # Search text for the task ID reference
         all_results = await self.repository.search_methodologies_text(str(task_id), limit=20)
         return [m for m, _rank in all_results if m.source_task_id == task_id]
+
+    # -------------------------------------------------------------------
+    # CAM-SEQ: Component memory bridge
+    # -------------------------------------------------------------------
+
+    async def search_components(
+        self,
+        query: str,
+        limit: int = 20,
+        language: Optional[str] = None,
+    ) -> list[ComponentCardSummary]:
+        """Search component memory without changing methodology retrieval behavior."""
+        return await self.repository.search_component_cards_text(
+            query,
+            limit=limit,
+            language=language,
+        )
+
+    async def get_component(self, component_id: str) -> Optional[ComponentCard]:
+        """Fetch a component card by ID."""
+        return await self.repository.get_component_card(component_id)
+
+    async def get_component_history(self, component_id: str) -> dict[str, Any]:
+        """Return component packet/fit/lineage history for future planning surfaces."""
+        component = await self.repository.get_component_card(component_id)
+        if component is None:
+            return {}
+        return {
+            "component": component,
+            "fit_history": await self.repository.list_component_fit(component_id),
+            "packet_history": await self.repository.list_packet_history_for_component(component_id),
+            "lineage_components": await self.repository.list_lineage_components(
+                component.receipt.lineage_id
+            ),
+        }
 
     # -------------------------------------------------------------------
     # MEE: Outcome feedback loop
