@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import struct
 import uuid
 from datetime import UTC, datetime
@@ -28,16 +29,91 @@ SEED_DIR = Path(__file__).resolve().parent.parent / "data" / "seed"
 
 SEED_TAG = "origin:seed"
 
+# Default pack name when no explicit selection is given. Previously the
+# discovery helper returned every pack it found which became a footgun as
+# more packs were added — the CLI layer now requests core_v1 by default
+# and exposes an opt-in escape hatch for "all packs".
+DEFAULT_SEED_PACK = "core_v1"
 
-def discover_seed_packs() -> list[Path]:
-    """Find all .jsonl files in the seed directory, sorted by name."""
+# Domain → pack list mapping used by ``cam kb bootstrap``.
+#
+# These are curated first-run bundles. The Python brain is the most
+# mature, so ``webdev`` supplements the tiny webdev pack with the
+# Python starter. Polyglot support (Go/Rust/TS) is deferred until
+# their ganglia have enough viable methodologies to promote — don't
+# add them here as a workaround.
+DOMAIN_PACKS: dict[str, list[str]] = {
+    "python": ["core_v1", "starter_python_v1"],
+    "devsecops": ["core_v1", "starter_devsecops_v1"],
+    "webdev": ["core_v1", "starter_webdev_v1", "starter_python_v1"],
+    "all": [
+        "core_v1",
+        "starter_python_v1",
+        "starter_devsecops_v1",
+        "starter_webdev_v1",
+    ],
+}
+DEFAULT_DOMAIN = "python"
+
+
+def discover_seed_packs(names: Optional[list[str]] = None) -> list[Path]:
+    """Find seed-pack files (``*.jsonl``) inside :data:`SEED_DIR`.
+
+    Parameters
+    ----------
+    names:
+        Optional list of pack stems (no ``.jsonl`` suffix) to select. When
+        ``None`` the function returns every pack it can discover (the raw
+        on-disk view, intentionally unchanged from pre-filter behavior —
+        callers that want the safe default should pass ``names=[DEFAULT_SEED_PACK]``
+        or the list from :func:`list_available_packs`).
+
+    Returns
+    -------
+    list[pathlib.Path]
+        Packs sorted by filename. Non-existent names in ``names`` are
+        ignored (they just contribute nothing to the result). Callers that
+        need to know about unknown names should check
+        :func:`list_available_packs` first.
+    """
     if not SEED_DIR.exists():
         logger.debug("Seed directory not found: %s", SEED_DIR)
         return []
-    packs = sorted(SEED_DIR.glob("*.jsonl"))
-    if packs:
-        logger.info("Discovered %d seed pack(s) in %s", len(packs), SEED_DIR)
-    return packs
+
+    all_packs = sorted(SEED_DIR.glob("*.jsonl"))
+
+    if names is None:
+        if all_packs:
+            logger.info("Discovered %d seed pack(s) in %s", len(all_packs), SEED_DIR)
+        return all_packs
+
+    wanted = set(names)
+    filtered = [p for p in all_packs if p.stem in wanted]
+    logger.info(
+        "Filtered seed packs: requested=%s, matched=%d/%d",
+        sorted(wanted), len(filtered), len(all_packs),
+    )
+    return filtered
+
+
+def list_available_packs() -> list[dict[str, Any]]:
+    """Return metadata for every pack on disk.
+
+    Used by CLI ``--list-packs``. Never touches the database.
+
+    Each entry has keys: ``name`` (stem), ``path`` (str), ``records`` (int).
+    Malformed / unreadable packs show ``records=-1``.
+    """
+    packs = discover_seed_packs(names=None)
+    out: list[dict[str, Any]] = []
+    for p in packs:
+        try:
+            count = sum(1 for line in p.read_text().splitlines() if line.strip())
+        except Exception as exc:  # pragma: no cover - I/O edge case
+            logger.warning("Could not read pack %s: %s", p, exc)
+            count = -1
+        out.append({"name": p.stem, "path": str(p), "records": count})
+    return out
 
 
 def load_seed_records(packs: list[Path]) -> list[dict[str, Any]]:
@@ -242,18 +318,46 @@ async def run_seed(
     embedding_engine: Optional[Any] = None,
     force: bool = False,
     config: Optional[object] = None,
+    names: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Execute the seed import pipeline.
 
-    1. Discover seed packs
-    2. Check if seeding is needed
-    3. Load records
-    4. Insert each record (with dedup)
-    5. Return summary
+    Parameters
+    ----------
+    engine:
+        Async DB engine (Claw ``DatabaseEngine`` or a test fake).
+    embedding_engine:
+        Optional embedding engine — if provided, each seeded record gets
+        a vector written to ``methodology_embeddings``.
+    force:
+        If ``True``, re-import records even if the DB already has seed rows.
+    config:
+        Optional ``ClawConfig`` — used to mark the CAG cache stale after
+        a successful import.
+    names:
+        Optional list of seed-pack stems to load. When ``None`` the full
+        discovery result is used (same as pre-filter behavior). The CLI
+        passes an explicit list so that the default ``cam kb seed``
+        invocation only touches the canonical ``core_v1`` pack.
+
+    Steps:
+      1. Discover seed packs (filtered by ``names`` when supplied)
+      2. Check if seeding is needed
+      3. Load records
+      4. Insert each record (with dedup)
+      5. Return summary
     """
     result = {"imported": 0, "skipped": 0, "rejected": 0, "errors": [], "details": [], "reason": ""}
 
-    packs = discover_seed_packs()
+    # Escape hatch for test environments and fast-path CLI smoke tests.
+    # Validation gate's `_gate_cli_smoke` sets CAM_SKIP_AUTO_SEED=1 so that
+    # `cam status` / `cam doctor status` don't trigger a 38s Gemini embedding
+    # seed run on an empty temp DB (see T7 investigation 2026-04-10).
+    if os.environ.get("CAM_SKIP_AUTO_SEED") == "1":
+        result["reason"] = "skipped_env"
+        return result
+
+    packs = discover_seed_packs(names=names)
     if not packs:
         result["reason"] = "no_seed_packs"
         return result

@@ -134,6 +134,21 @@ class Repository:
             return None
         return _row_to_project(row)
 
+    async def get_project_by_repo_path(self, repo_path: str) -> Optional[Project]:
+        """Get a project by its repo_path.
+
+        Used by CLI commands (evaluate, enhance) to reuse an existing
+        project row instead of creating a duplicate when the same
+        repository is processed more than once.
+        """
+        row = await self.engine.fetch_one(
+            "SELECT * FROM projects WHERE repo_path = ? ORDER BY created_at ASC LIMIT 1",
+            [repo_path],
+        )
+        if row is None:
+            return None
+        return _row_to_project(row)
+
     # -------------------------------------------------------------------
     # Tasks
     # -------------------------------------------------------------------

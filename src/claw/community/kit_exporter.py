@@ -1,9 +1,11 @@
-"""Export methodologies as JourneyKits-compatible directory packages.
+"""Kit packaging — export top methodologies as a JourneyKits-compatible directory.
 
-Produces a directory with:
-    journey.json   — manifest with name, count, and methodology list
-    README.md      — human-readable overview
-    prompts/       — one .md per methodology + system.md
+Generates a portable knowledge kit containing methodology prompts, a manifest,
+and a README.  All text is scrubbed for secrets before export.
+
+Usage:
+    from claw.community.kit_exporter import export_kit
+    result = await export_kit(engine, Path("/tmp/my-kit"), brain="python", category="testing", top_n=5)
 """
 
 from __future__ import annotations
@@ -11,133 +13,203 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from claw.community.packer import _sanitize_text, compute_content_hash
+
 logger = logging.getLogger("claw.community.kit_exporter")
-
-# Patterns that indicate secrets — redact from exported text
-_SECRET_PATTERNS = [
-    re.compile(r"sk-[a-zA-Z0-9]{20,}"),
-    re.compile(r"Bearer\s+[a-zA-Z0-9._\-]+"),
-]
-
-
-def _strip_secrets(text: str) -> str:
-    """Replace secret patterns with [REDACTED]."""
-    for pat in _SECRET_PATTERNS:
-        text = pat.sub("[REDACTED]", text)
-    return text
 
 
 async def export_kit(
     engine: Any,
     output_dir: Path,
-    brain: str,
+    brain: str = "python",
     category: Optional[str] = None,
-    top_n: int = 5,
-) -> dict[str, Any]:
-    """Export top methodologies as a JourneyKit directory.
+    top_n: int = 10,
+    instance_name: str = "",
+    force: bool = False,
+) -> dict:
+    """Export top methodologies as a JourneyKits-compatible directory.
 
     Args:
-        engine: DatabaseEngine instance with fetch_all/execute.
-        output_dir: Target directory (created if needed).
-        brain: Brain name (e.g. 'python', 'typescript').
-        category: Optional category tag filter (matches 'category:<value>' in tags).
-        top_n: Maximum number of methodologies to export.
+        engine: DatabaseEngine instance for DB access.
+        output_dir: Where to create the kit directory.
+        brain: Brain name to filter by (via source: tag or ganglion).
+        category: Optional category filter (e.g. "testing", "architecture").
+        top_n: Maximum number of methodologies to include.
+        instance_name: Instance name for the manifest.
+        force: If True, overwrite existing output_dir.
 
     Returns:
-        Dict with 'methodology_count' and 'kit_name'.
+        Dict with kit_name, methodology_count, output_path, manifest_hash.
 
     Raises:
-        ValueError: If no viable methodologies match the query.
+        ValueError: If brain has no methodologies or output_dir exists without --force.
     """
-    # Build query — filter by lifecycle_state='viable' and optional category tag
-    if category is not None:
-        tag_pattern = f"%category:{category}%"
-        rows = await engine.fetch_all(
-            "SELECT id, problem_description, solution_code, tags, fitness_vector "
-            "FROM methodologies "
-            "WHERE lifecycle_state = 'viable' AND tags LIKE ? "
-            "ORDER BY json_extract(fitness_vector, '$.total') DESC "
-            "LIMIT ?",
-            [tag_pattern, top_n],
+    if output_dir.exists() and not force:
+        raise ValueError(
+            f"Output directory already exists: {output_dir}. Use --force to overwrite."
         )
-    else:
-        rows = await engine.fetch_all(
-            "SELECT id, problem_description, solution_code, tags, fitness_vector "
-            "FROM methodologies "
-            "WHERE lifecycle_state = 'viable' "
-            "ORDER BY json_extract(fitness_vector, '$.total') DESC "
-            "LIMIT ?",
-            [top_n],
-        )
+
+    # Build query to find top methodologies by fitness
+    conditions = ["m.lifecycle_state IN ('viable', 'thriving')"]
+    params: list[Any] = []
+
+    if category:
+        conditions.append("m.tags LIKE ?")
+        params.append(f'%"category:{category}"%')
+
+    where_clause = " AND ".join(conditions)
+    query = (
+        f"SELECT m.id, m.problem_description, m.solution_code, "
+        f"m.methodology_notes, m.tags, m.language, m.lifecycle_state, "
+        f"m.fitness_vector, m.success_count, m.failure_count, m.retrieval_count "
+        f"FROM methodologies m "
+        f"WHERE {where_clause} "
+        f"ORDER BY json_extract(m.fitness_vector, '$.total') DESC "
+        f"LIMIT ?"
+    )
+    params.append(top_n)
+
+    rows = await engine.fetch_all(query, params)
 
     if not rows:
         raise ValueError(
-            f"No methodologies found for brain={brain!r}, category={category!r}"
+            f"No methodologies found for brain='{brain}'"
+            + (f", category='{category}'" if category else "")
+            + ". Cannot create empty kit."
         )
-
-    kit_name = f"cam-{brain}-{category}" if category else f"cam-{brain}"
 
     # Create directory structure
     output_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(exist_ok=True)
 
-    # Build methodology list for manifest
-    methodologies: list[dict[str, Any]] = []
-    for row in rows:
-        methodologies.append({
+    # Generate prompts
+    methodologies_meta: list[dict] = []
+    for idx, row in enumerate(rows, 1):
+        tags_raw = row.get("tags") or "[]"
+        try:
+            tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+
+        fv_raw = row.get("fitness_vector") or "{}"
+        try:
+            fv = json.loads(fv_raw) if isinstance(fv_raw, str) else fv_raw
+        except (json.JSONDecodeError, TypeError):
+            fv = {}
+
+        problem = _sanitize_text(row.get("problem_description") or "")
+        solution = _sanitize_text(row.get("solution_code") or "")
+        notes = _sanitize_text(row.get("methodology_notes") or "")
+
+        # Create slug from problem description
+        slug = re.sub(r'[^a-z0-9]+', '-', problem[:60].lower()).strip('-') or f"method-{idx}"
+
+        # Write prompt file
+        prompt_content = f"## Problem\n\n{problem}\n\n## Solution\n\n{solution}\n"
+        if notes:
+            prompt_content += f"\n## Notes\n\n{notes}\n"
+        if tags:
+            prompt_content += f"\n## Tags\n\n{', '.join(str(t) for t in tags)}\n"
+
+        prompt_path = prompts_dir / f"{idx:03d}-{slug}.md"
+        prompt_path.write_text(prompt_content)
+
+        methodologies_meta.append({
             "id": row["id"],
-            "problem_description": _strip_secrets(row["problem_description"]),
-            "solution_code": _strip_secrets(row["solution_code"]),
-            "tags": json.loads(row["tags"]) if isinstance(row["tags"], str) else row["tags"],
+            "problem": problem[:200],
+            "fitness": fv.get("total", 0.0),
+            "tags": tags,
+            "language": row.get("language"),
+            "success_count": row.get("success_count", 0),
+            "failure_count": row.get("failure_count", 0),
+            "retrieval_count": row.get("retrieval_count", 0),
         })
 
-    # Write journey.json
+    # Generate system prompt
+    system_prompt_path = prompts_dir / "system.md"
+    system_prompt_path.write_text(
+        f"# CAM-PULSE Knowledge Kit: {brain}\n\n"
+        f"This kit contains {len(rows)} curated methodologies"
+        + (f" in the '{category}' category" if category else "")
+        + f" from the '{brain}' brain.\n\n"
+        f"Each methodology represents a proven pattern, fix, or technique "
+        f"extracted from real codebases and validated through usage.\n"
+    )
+
+    # Generate journey.json manifest
+    kit_name = f"cam-{brain}" + (f"-{category}" if category else "")
     manifest = {
         "name": kit_name,
-        "methodology_count": len(methodologies),
-        "methodologies": methodologies,
+        "version": "1.0.0",
+        "description": f"CAM-PULSE knowledge kit: {brain}"
+        + (f" / {category}" if category else ""),
+        "author": instance_name or "cam-pulse",
+        "brain": brain,
+        "category": category,
+        "methodology_count": len(rows),
+        "tools": [
+            {"name": "claw_query_memory", "ref": "cam-pulse-mcp"},
+            {"name": "claw_store_finding", "ref": "cam-pulse-mcp"},
+        ],
+        "model_preferences": {
+            "reasoning": "claude-sonnet",
+            "generation": "gpt-4o",
+        },
+        "methodologies": methodologies_meta,
     }
-    (output_dir / "journey.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False)
-    )
 
-    # Write README.md
+    manifest_path = output_dir / "journey.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    # Generate README
     readme_lines = [
-        f"# {kit_name}",
-        "",
-        f"Exported {len(methodologies)} methodologies from CAM-PULSE.",
-        "",
-        "## Methodologies",
-        "",
+        f"# {kit_name}\n",
+        f"CAM-PULSE Knowledge Kit — {len(rows)} methodologies from the `{brain}` brain",
     ]
-    for m in methodologies:
-        readme_lines.append(f"- **{m['id']}**: {m['problem_description'][:80]}")
-    (output_dir / "README.md").write_text("\n".join(readme_lines) + "\n")
-
-    # Write prompts/system.md
-    system_prompt = (
-        f"You are an expert using the {kit_name} knowledge kit.\n"
-        f"You have access to {len(methodologies)} proven methodologies.\n"
-    )
-    (prompts_dir / "system.md").write_text(system_prompt)
-
-    # Write one prompt per methodology
-    for m in methodologies:
-        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", m["id"])
-        content = (
-            f"# {m['id']}\n\n"
-            f"## Problem\n{m['problem_description']}\n\n"
-            f"## Solution\n```\n{m['solution_code']}\n```\n"
+    if category:
+        readme_lines.append(f"filtered to the `{category}` category.")
+    readme_lines.extend([
+        "",
+        "## Contents",
+        "",
+        f"- `journey.json` — Kit manifest",
+        f"- `prompts/system.md` — System prompt with brain context",
+        f"- `prompts/NNN-*.md` — {len(rows)} methodology prompts",
+        "",
+        "## Methodology Summary",
+        "",
+        "| # | Problem | Fitness | Language |",
+        "|---|---------|---------|----------|",
+    ])
+    for idx, m in enumerate(methodologies_meta, 1):
+        prob = m["problem"][:60].replace("|", "\\|")
+        readme_lines.append(
+            f"| {idx} | {prob} | {m['fitness']:.2f} | {m.get('language') or '-'} |"
         )
-        (prompts_dir / f"{slug}.md").write_text(_strip_secrets(content))
+    readme_lines.extend([
+        "",
+        "---",
+        f"Generated by CAM-PULSE ({instance_name or 'anonymous'})",
+    ])
 
-    logger.info("Exported kit %s with %d methodologies to %s", kit_name, len(methodologies), output_dir)
+    readme_path = output_dir / "README.md"
+    readme_path.write_text("\n".join(readme_lines))
+
+    manifest_hash = compute_content_hash(kit_name, json.dumps(manifest))
+
+    logger.info(
+        "Exported kit '%s' with %d methodologies to %s",
+        kit_name, len(rows), output_dir,
+    )
 
     return {
-        "methodology_count": len(methodologies),
         "kit_name": kit_name,
+        "methodology_count": len(rows),
+        "output_path": str(output_dir),
+        "manifest_hash": manifest_hash,
     }

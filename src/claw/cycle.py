@@ -941,6 +941,12 @@ class MicroClaw(ClawCycle):
         self._current_verification: Optional[VerificationResult] = None
         self._ablation_label: Optional[str] = None
         self._suppress_cag_for_control = False
+        # Path C Fix 2: maps methodology_id -> source db_path for rows
+        # that came from federation.  Outcome writes use this to route
+        # retrieval/outcome/fitness/lifecycle updates back to the source
+        # ganglion instead of the primary DB.  Cleared at the start of
+        # every task.
+        self._current_source_map: dict[str, str] = {}
 
     async def grab(self) -> Optional[Task]:
         """Get the next pending task for the project."""
@@ -991,6 +997,9 @@ class MicroClaw(ClawCycle):
         retrieval_conflicts: list[str] = []
         primary_methodology_id: str | None = None
         context_methodology_ids: list[str] = []
+        # Path C Fix 2: reset source map for this task.  Federation merges
+        # below will populate it for every ganglion-sourced methodology.
+        self._current_source_map = {}
         if self.ctx.semantic_memory is not None:
             try:
                 similar, signals = await self.ctx.semantic_memory.find_similar_with_signals(
@@ -1157,6 +1166,25 @@ class MicroClaw(ClawCycle):
                 for fr in fed_results:
                     if fr.methodology not in past_solutions:
                         past_solutions.append(fr.methodology)
+                        # Path C Fix 2: remember the source DB so learn()
+                        # can write outcomes back to the ganglion, not main.
+                        # ``primary_db`` is already resolved absolute above.
+                        ganglion_source: Optional[str] = None
+                        if fr.source_db_path and fr.source_db_path != primary_db:
+                            self._current_source_map[fr.methodology.id] = fr.source_db_path
+                            ganglion_source = fr.source_db_path
+                        # Bump retrieval_count on the *source* DB so the
+                        # row's usage history accumulates where it lives.
+                        try:
+                            await self.ctx.semantic_memory.record_retrieval(
+                                fr.methodology.id,
+                                source_db_path=ganglion_source,
+                            )
+                        except Exception as _e:
+                            logger.debug(
+                                "Federation record_retrieval failed for %s: %s",
+                                fr.methodology.id, _e,
+                            )
                         if fr.methodology.methodology_notes:
                             hints.append(
                                 f"[from {fr.source_instance}] {fr.methodology.methodology_notes}"
@@ -1807,6 +1835,7 @@ class MicroClaw(ClawCycle):
                             methodology_id,
                             success=methodology_success,
                             retrieval_relevance=relevance,
+                            source_db_path=self._current_source_map.get(methodology_id),
                         )
                     except Exception as e:
                         logger.warning(
@@ -1939,6 +1968,7 @@ class MicroClaw(ClawCycle):
                                 methodology_id,
                                 success=False,
                                 retrieval_relevance=relevance,
+                                source_db_path=self._current_source_map.get(methodology_id),
                             )
                     except Exception as e:
                         logger.warning(

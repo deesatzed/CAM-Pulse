@@ -53,6 +53,28 @@ _IDEA_DIR = ROOT_DIR / "data" / "ideation"
 _PREFLIGHT_DIR = ROOT_DIR / "data" / "preflights"
 _CAMIFY_DIR = ROOT_DIR / "data" / "camify"
 
+
+def _find_default_claw_toml() -> Optional[Path]:
+    """Locate a default claw.toml by walking up from this file, then cwd.
+
+    Returns the first existing claw.toml found in any ancestor of this
+    source file, falling back to ``Path.cwd() / "claw.toml"`` if it
+    exists. Returns None if no claw.toml can be located.
+
+    This is robust to editable installs where ``__file__`` lives under
+    ``src/claw/cli/`` — the repo root (containing claw.toml) is not a
+    fixed number of ``.parent`` hops away.
+    """
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        candidate = ancestor / "claw.toml"
+        if candidate.exists():
+            return candidate
+    cwd_candidate = Path.cwd() / "claw.toml"
+    if cwd_candidate.exists():
+        return cwd_candidate
+    return None
+
 learn_app = typer.Typer(
     name="learn",
     help="Learning lifecycle tools — delta, continuum report, reassessment, synergies",
@@ -1650,6 +1672,433 @@ def _chat_handle_mine(initial_text: str, config: Optional[str]) -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# cam init — guided first-run setup wizard (top-level command)
+# ---------------------------------------------------------------------------
+#
+# This is the recommended entry point for brand-new users. It walks through
+# config creation, API-key checks, domain selection, curated seed-pack
+# bootstrap (via ``run_seed`` — not a subprocess), and a smoke test. The
+# wizard is interactive by default but fully scriptable via ``--non-interactive``.
+
+_INIT_DEFAULT_CLAW_TOML = """\
+# CAM-PULSE configuration
+# See docs/ for full options
+
+[database]
+db_path = "data/claw.db"
+
+[embeddings]
+provider = "google"
+model = "gemini-embedding-2-preview"
+
+[local_llm]
+provider = "ollama"
+kv_cache_quantization = "q8_0"
+
+[governance]
+sweep_interval_cycles = 10
+
+[cag]
+token_budget_max = 16000
+"""
+
+
+def _init_parse_domain_input(raw: str, valid_domains: list[str]) -> list[str]:
+    """Parse a user-supplied domain selection string.
+
+    Accepts numbers (1..N, in the order of ``valid_domains``), domain names,
+    or a comma-separated mix. Returns a de-duplicated list preserving input
+    order. Raises ``ValueError`` on any unresolvable token.
+    """
+    tokens = [t.strip().lower() for t in raw.replace(";", ",").split(",") if t.strip()]
+    if not tokens:
+        raise ValueError("no domains specified")
+
+    selected: list[str] = []
+    for t in tokens:
+        if t.isdigit():
+            idx = int(t) - 1
+            if idx < 0 or idx >= len(valid_domains):
+                raise ValueError(f"index out of range: {t}")
+            name = valid_domains[idx]
+        elif t in valid_domains:
+            name = t
+        else:
+            raise ValueError(f"unknown domain: {t!r}")
+        if name not in selected:
+            selected.append(name)
+
+    # Collapse: if "all" is selected, that trumps everything else.
+    if "all" in selected:
+        return ["all"]
+    return selected
+
+
+@app.command(name="init")
+def init_cmd(
+    domain: Optional[list[str]] = typer.Option(
+        None,
+        "--domain",
+        "-d",
+        help=(
+            "Domain(s) to bootstrap (repeatable). Values: python, devsecops, "
+            "webdev, all. If omitted in interactive mode, you'll be prompted."
+        ),
+    ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        "--yes",
+        "-y",
+        help="Skip all prompts. Uses --domain flags or defaults. For CI/scripts.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run even if already initialized."
+    ),
+    skip_smoke_test: bool = typer.Option(
+        False, "--skip-smoke-test", help="Skip the final federation smoke test."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Guided first-run setup for CAM-PULSE.
+
+    Walks a new user through:
+      1. Checking for claw.toml config (creates from template if missing)
+      2. Verifying API keys (GOOGLE_API_KEY for embeddings, OPENROUTER_API_KEY for LLM)
+      3. Selecting domains to bootstrap
+      4. Loading curated starter packs via cam kb bootstrap
+      5. A smoke test via cam federate
+      6. Printing next-step recommendations
+
+    Use --non-interactive for scripts and CI.
+    """
+    _setup_logging(verbose)
+
+    from rich.panel import Panel
+    from claw.community.seeder import DOMAIN_PACKS, DEFAULT_DOMAIN, list_available_packs
+
+    valid_domains = sorted(DOMAIN_PACKS.keys())  # deterministic order
+
+    # ── Step 1: Welcome banner ───────────────────────────────────────────
+    if not non_interactive:
+        console.print(
+            Panel.fit(
+                "[bold cyan]CAM-PULSE First-Run Setup[/bold cyan]\n\n"
+                "This wizard will prepare a working knowledge base and verify your\n"
+                "environment. It is safe to re-run; use [bold]--force[/bold] to re-seed.",
+                border_style="cyan",
+                title="cam init",
+            )
+        )
+
+    # ── Step 2: Config check ─────────────────────────────────────────────
+    if config:
+        config_path = Path(config).resolve()
+    else:
+        config_path = (Path.cwd() / "claw.toml").resolve()
+
+    if config_path.exists():
+        console.print(f"[green]OK[/green] Found claw.toml at [dim]{config_path}[/dim]")
+    else:
+        if non_interactive:
+            console.print(
+                f"[red]No claw.toml found at {config_path}.[/red] In --non-interactive mode "
+                f"the wizard will not auto-create a config."
+            )
+            console.print(
+                "[dim]Create one manually (or run without --non-interactive) and retry.[/dim]"
+            )
+            raise typer.Exit(1)
+
+        create_it = typer.confirm(
+            f"No claw.toml found at {config_path}. Create a default one?",
+            default=True,
+        )
+        if not create_it:
+            console.print(
+                "[yellow]Aborting.[/yellow] Create a claw.toml manually, then re-run "
+                "[cyan]cam init[/cyan]."
+            )
+            raise typer.Exit(0)
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_INIT_DEFAULT_CLAW_TOML)
+        console.print(
+            f"[green]OK[/green] Wrote default claw.toml to [dim]{config_path}[/dim]"
+        )
+
+    # Load the config we now know exists. Any config error is a hard fail.
+    from claw.core.config import load_config
+    try:
+        cfg = load_config(config_path)
+    except Exception as exc:
+        console.print(f"[red]Failed to load {config_path}: {exc}[/red]")
+        raise typer.Exit(1)
+
+    # ── Step 3: API key check ────────────────────────────────────────────
+    missing_keys: list[tuple[str, str, str]] = []
+    if not os.environ.get("GOOGLE_API_KEY"):
+        missing_keys.append((
+            "GOOGLE_API_KEY",
+            "Google Gemini embeddings (dense retrieval)",
+            "export GOOGLE_API_KEY=your-key-here",
+        ))
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        missing_keys.append((
+            "OPENROUTER_API_KEY",
+            "OpenRouter LLM routing (mining, synthesis, preflight)",
+            "export OPENROUTER_API_KEY=your-key-here",
+        ))
+
+    if missing_keys:
+        for name, purpose, export in missing_keys:
+            console.print(f"[yellow]!  {name} is not set[/yellow]  — {purpose}")
+            console.print(f"   [dim]{export}[/dim]")
+
+    if len(missing_keys) == 2:
+        console.print(
+            "\n[red]Both API keys are missing.[/red] Some features "
+            "(dense retrieval, LLM mining) will be degraded."
+        )
+        if non_interactive:
+            console.print("[yellow]Continuing anyway (--non-interactive).[/yellow]")
+        else:
+            proceed = typer.confirm("Continue anyway?", default=False)
+            if not proceed:
+                console.print("[yellow]Aborting.[/yellow] Set the API keys and re-run.")
+                raise typer.Exit(0)
+    elif len(missing_keys) == 1:
+        console.print(
+            "[yellow]One key missing — the wizard will continue, but set it "
+            "before using the affected features.[/yellow]"
+        )
+    else:
+        console.print("[green]OK[/green] Required API keys are present")
+
+    # ── Step 4: Domain selection ─────────────────────────────────────────
+    selected_domains: list[str]
+    if domain:
+        # Normalize & validate the flag-supplied values.
+        try:
+            selected_domains = _init_parse_domain_input(",".join(domain), valid_domains)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --domain: {exc}[/red]")
+            console.print(f"[dim]Valid: {', '.join(valid_domains)}[/dim]")
+            raise typer.Exit(2)
+    elif non_interactive:
+        selected_domains = [DEFAULT_DOMAIN]
+        console.print(
+            f"[dim]Non-interactive: defaulting to domain [bold]{DEFAULT_DOMAIN}[/bold][/dim]"
+        )
+    else:
+        console.print("\n[bold]Which domains should CAM bootstrap knowledge for?[/bold]")
+        # Hand-written descriptions per domain. The display order is curated
+        # (most common first) but every name is still validated against the
+        # canonical sorted ``valid_domains`` list above.
+        display_order = ["python", "devsecops", "webdev", "all"]
+        descriptions = {
+            "python": "Python-primary starter (default)",
+            "devsecops": "Security + CI/CD patterns",
+            "webdev": "Web development (small, supplemented with python)",
+            "all": "Load every available starter pack",
+        }
+        # Defensive: include any new domain that wasn't in the curated order.
+        for name in valid_domains:
+            if name not in display_order:
+                display_order.append(name)
+        for i, name in enumerate(display_order, start=1):
+            desc = descriptions.get(name, "")
+            console.print(f"  {i}. [cyan]{name:<10}[/cyan] — {desc}")
+
+        while True:
+            raw = typer.prompt(
+                "Select one or more (numbers, names, or comma-separated)",
+                default=DEFAULT_DOMAIN,
+            )
+            try:
+                # Use the display_order for numeric resolution so the user's
+                # "1" matches what they saw on screen.
+                selected_domains = _init_parse_domain_input(raw, display_order)
+                break
+            except ValueError as exc:
+                console.print(f"[red]Invalid selection: {exc}[/red]")
+
+    console.print(
+        f"[green]OK[/green] Domains selected: [cyan]{', '.join(selected_domains)}[/cyan]"
+    )
+
+    # ── Idempotency check (before we touch any pack) ─────────────────────
+    # We open the engine once, check DB state, and reuse it for the bootstrap
+    # + smoke test so we don't thrash connections.
+    from claw.db.engine import DatabaseEngine
+    from claw.db.repository import Repository
+
+    engine = DatabaseEngine(cfg.database)
+
+    async def _run() -> int:
+        await engine.connect()
+        await engine.apply_migrations()
+        await engine.initialize_schema()
+
+        repository = Repository(engine)
+
+        # Count current methodologies. ``count_methodologies`` is the public
+        # API on Repository; use it rather than raw SQL.
+        try:
+            current_count = await repository.count_methodologies()
+        except Exception:
+            current_count = 0
+
+        if current_count > 0 and not force:
+            console.print(
+                f"\n[yellow]CAM appears to be already initialized "
+                f"({current_count} methodologies in DB).[/yellow] "
+                f"Use [bold]--force[/bold] to re-run."
+            )
+            return 0
+
+        # ── Step 5: Bootstrap each domain via run_seed ───────────────────
+        # Resolve packs across the selected domains, preserving order and
+        # de-duplicating (don't re-seed the same pack twice in one run).
+        requested_packs: list[str] = []
+        for d in selected_domains:
+            for p in DOMAIN_PACKS[d]:
+                if p not in requested_packs:
+                    requested_packs.append(p)
+
+        on_disk = {e["name"]: e for e in list_available_packs()}
+        missing_packs = [p for p in requested_packs if p not in on_disk]
+        if missing_packs:
+            console.print(
+                f"\n[red]Missing seed pack(s): {', '.join(missing_packs)}[/red]"
+            )
+            if on_disk:
+                console.print(
+                    f"[dim]Available on disk: {', '.join(sorted(on_disk.keys()))}[/dim]"
+                )
+            return 1
+
+        # Optional embedding engine — same pattern as kb_bootstrap.
+        from claw.community.seeder import run_seed
+        from claw.db.embeddings import EmbeddingEngine
+
+        embedding_engine = None
+        try:
+            embedding_engine = EmbeddingEngine(cfg.embeddings)
+            console.print(
+                f"\n[bold]Bootstrapping knowledge[/bold] "
+                f"(embeddings via [dim]{cfg.embeddings.model}[/dim])"
+            )
+        except Exception as exc:
+            console.print(
+                f"\n[yellow]!  Embeddings unavailable ({exc}) — "
+                f"seeding without vectors.[/yellow]"
+            )
+
+        console.print(f"  Packs: [dim]{', '.join(requested_packs)}[/dim]")
+
+        summary = await run_seed(
+            engine=engine,
+            embedding_engine=embedding_engine,
+            force=force,
+            config=cfg,
+            names=requested_packs,
+        )
+
+        reason = summary.get("reason", "")
+        imported = int(summary.get("imported", 0))
+        skipped = int(summary.get("skipped", 0))
+        rejected = int(summary.get("rejected", 0))
+
+        if reason == "already_seeded" and not force:
+            # Safety net — ``run_seed`` guards this too but the top-level
+            # idempotency check above should have caught it first.
+            console.print(
+                "\n[yellow]Knowledge base already seeded.[/yellow] "
+                "Use [bold]--force[/bold] to re-seed."
+            )
+        elif imported > 0:
+            console.print(f"\n[green]OK[/green] Imported [bold]{imported}[/bold] methodologies")
+            if skipped:
+                console.print(f"  Skipped (dedup): {skipped}")
+            if rejected:
+                console.print(f"  [yellow]Rejected: {rejected}[/yellow]")
+        elif skipped > 0:
+            console.print("\n[green]All seed records already present (idempotent).[/green]")
+        else:
+            console.print(
+                f"\n[yellow]No records imported (reason: {reason or '?'}).[/yellow]"
+            )
+
+        # ── Step 6: Smoke test ───────────────────────────────────────────
+        if not skip_smoke_test:
+            smoke_query_map = {
+                "python": "refactor long function",
+                "devsecops": "detect SQL injection",
+                "webdev": "handle form validation",
+                "all": "error handling patterns",
+            }
+            first = selected_domains[0]
+            query = smoke_query_map.get(first, "error handling patterns")
+            console.print(f"\n[bold]Smoke test:[/bold] query = [cyan]{query!r}[/cyan]")
+
+            try:
+                if cfg.instances.enabled and cfg.instances.siblings:
+                    # Federated path — mirrors cam federate.
+                    from claw.community.cross_language import CrossLanguageAnalyzer
+                    primary_db = str(Path(cfg.database.db_path).resolve())
+                    analyzer = CrossLanguageAnalyzer(
+                        cfg.instances, primary_db_path=primary_db
+                    )
+                    report = await analyzer.analyze(query)
+                    console.print(
+                        f"  [green]OK[/green] Federation returned "
+                        f"{report.metrics.total_results} results across "
+                        f"{report.metrics.brains_queried} brain(s)"
+                    )
+                else:
+                    # Fallback smoke test: direct count from the primary DB.
+                    total = await repository.count_methodologies()
+                    console.print(
+                        f"  [green]OK[/green] Fallback smoke test: "
+                        f"{total} methodologies in primary DB"
+                    )
+            except Exception as exc:
+                console.print(
+                    f"  [yellow]!  Smoke test failed: {exc}[/yellow] "
+                    "(init will continue)"
+                )
+
+        # ── Step 7: Next steps ───────────────────────────────────────────
+        console.print(
+            Panel.fit(
+                "[bold green]CAM-PULSE is ready.[/bold green]\n\n"
+                "Next steps:\n"
+                "  1. Verify more: [cyan]cam federate \"your query here\"[/cyan]\n"
+                "  2. Expand KB:   [cyan]cam pulse ingest https://github.com/<repo>[/cyan]\n"
+                "  3. Playbooks:   [cyan]docs/KB_BOOTSTRAP_PLAYBOOKS.md[/cyan]\n"
+                "  4. Build:       [cyan]cam create /path/to/new-repo --execute --request \"...\"[/cyan]",
+                border_style="green",
+                title="Done",
+            )
+        )
+        return 0
+
+    try:
+        rc = asyncio.run(_run())
+    finally:
+        try:
+            asyncio.run(engine.close())
+        except Exception:
+            pass
+
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
 @app.command()
 def chat(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
@@ -2502,12 +2951,14 @@ async def _evaluate_async(repo_path: Path, config_path: Optional[str], mode: str
     ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
 
     try:
-        # Create or get project
-        project = Project(
-            name=repo_path.name,
-            repo_path=str(repo_path),
-        )
-        await ctx.repository.create_project(project)
+        # Reuse an existing project row for this repo_path, or create one.
+        project = await ctx.repository.get_project_by_repo_path(str(repo_path))
+        if project is None:
+            project = Project(
+                name=repo_path.name,
+                repo_path=str(repo_path),
+            )
+            await ctx.repository.create_project(project)
 
         # Resolve "auto" mode based on whether agents are available
         effective_mode = mode
@@ -2650,6 +3101,7 @@ def _display_evaluation_report(report) -> None:
     table.add_column("Agent", style="yellow", width=10)
     table.add_column("Status", width=10)
     table.add_column("Duration", justify="right", width=10)
+    table.add_column("Error", style="red", max_width=60)
 
     for phase in report.phases:
         for pr in phase.prompt_results:
@@ -2679,12 +3131,22 @@ def _display_evaluation_report(report) -> None:
             else:
                 dur_str = "<0.01s"
 
+            # Error summary: only populated when the prompt failed
+            if pr.error:
+                error_text = " ".join(str(pr.error).split())
+                if len(error_text) > 60:
+                    error_text = error_text[:57] + "..."
+                error_display = error_text
+            else:
+                error_display = ""
+
             table.add_row(
                 phase_display,
                 pr.prompt_name,
                 agent_display,
                 status_display,
                 dur_str,
+                error_display,
             )
 
     console.print(table)
@@ -3022,12 +3484,14 @@ async def _enhance_async(
     ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
 
     try:
-        # Create or get project
-        project = Project(
-            name=repo_path.name,
-            repo_path=str(repo_path),
-        )
-        await ctx.repository.create_project(project)
+        # Reuse an existing project row for this repo_path, or create one.
+        project = await ctx.repository.get_project_by_repo_path(str(repo_path))
+        if project is None:
+            project = Project(
+                name=repo_path.name,
+                repo_path=str(repo_path),
+            )
+            await ctx.repository.create_project(project)
 
         console.print(f"\n[bold]CLAW Enhancement: {repo_path.name}[/bold]")
         console.print(f"  Repository: {repo_path}")
@@ -3165,11 +3629,13 @@ async def _enhance_battery_async(
     ctx = await ClawFactory.create(config_path=config_p, workspace_dir=repo_path)
 
     try:
-        project = Project(
-            name=repo_path.name,
-            repo_path=str(repo_path),
-        )
-        await ctx.repository.create_project(project)
+        project = await ctx.repository.get_project_by_repo_path(str(repo_path))
+        if project is None:
+            project = Project(
+                name=repo_path.name,
+                repo_path=str(repo_path),
+            )
+            await ctx.repository.create_project(project)
 
         console.print(f"\n[bold]CLAW Enhancement (Battery Mode): {repo_path.name}[/bold]")
         console.print(f"  Repository: {repo_path}")
@@ -3648,12 +4114,17 @@ async def _fleet_enhance_async(
                     console.print(f"  [dim]Continuing on current branch.[/dim]")
                     await fleet.update_repo_status(repo_id, "enhancing")
 
-                # 5b: Create project in DB
-                project = Project(
-                    name=repo_name,
-                    repo_path=repo_path_str,
-                )
-                await ctx.repository.create_project(project)
+                # 5b: Create project in DB (idempotent — re-runs of fleet
+                # enhance must not duplicate rows for the same repo path).
+                existing = await ctx.repository.get_project_by_repo_path(repo_path_str)
+                if existing is not None:
+                    project = existing
+                else:
+                    project = Project(
+                        name=repo_name,
+                        repo_path=repo_path_str,
+                    )
+                    await ctx.repository.create_project(project)
 
                 # 5c: Run structural analysis
                 console.print(f"  [dim]Analyzing repository...[/dim]")
@@ -4052,6 +4523,60 @@ async def _status_async(config_path: Optional[str]) -> None:
             console.print("    [red]executable agents: none[/red]")
         if readonly_agents:
             console.print(f"    reasoning-only agents: {', '.join(readonly_agents)}")
+
+        # Knowledge base health — warn if empty (T11, punch list #6)
+        try:
+            kb_row = await ctx.engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM methodologies"
+            )
+            kb_count = kb_row["cnt"] if kb_row else 0
+            seed_row = await ctx.engine.fetch_one(
+                "SELECT COUNT(*) as cnt FROM methodologies WHERE tags LIKE ?",
+                ['%"origin:seed"%'],
+            )
+            seed_count = seed_row["cnt"] if seed_row else 0
+            console.print("\n  Knowledge base:")
+            if kb_count == 0:
+                console.print(
+                    "    [red]methodologies: 0[/red]  "
+                    "[dim](run [bold]cam kb bootstrap[/bold] to seed)[/dim]"
+                )
+            else:
+                console.print(
+                    f"    methodologies: {kb_count} "
+                    f"([dim]{seed_count} seed[/dim])"
+                )
+        except Exception as kb_exc:
+            console.print(f"  [yellow]Knowledge base check failed: {kb_exc}[/yellow]")
+
+        # Local LLM (Ollama) health — optional check (T11, punch list #10)
+        try:
+            local_cfg = getattr(ctx.config, "local_llm", None)
+            if local_cfg and getattr(local_cfg, "provider", "") == "ollama":
+                import httpx
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.get("http://localhost:11434/api/tags")
+                    if resp.status_code == 200:
+                        tags_data = resp.json()
+                        model_count = len(tags_data.get("models", []))
+                        console.print(
+                            f"  Local LLM (Ollama): "
+                            f"[green]running[/green] "
+                            f"([dim]{model_count} models[/dim])"
+                        )
+                    else:
+                        console.print(
+                            f"  Local LLM (Ollama): "
+                            f"[yellow]HTTP {resp.status_code}[/yellow]"
+                        )
+                except Exception:
+                    console.print(
+                        "  Local LLM (Ollama): [red]not responding[/red]  "
+                        "[dim](start with [bold]ollama serve[/bold])[/dim]"
+                    )
+        except Exception:
+            pass  # Ollama check is optional; don't break status
 
         # Task summary
         summary = await ctx.repository.get_task_status_summary()
@@ -4529,7 +5054,8 @@ async def _quickstart_async(
         if execute:
             if not ctx.agents:
                 console.print("\n[red]No agents available to execute. Enable at least one agent in claw.toml.[/red]")
-                return
+                console.print("[dim]Run [bold]cam init[/bold] or [bold]cam doctor status[/bold] to diagnose.[/dim]")
+                raise typer.Exit(code=1)
 
             selected_agent = ctx.agents.get(recommended)
             if selected_agent is not None and not _agent_supports_workspace_execution(selected_agent):
@@ -4539,7 +5065,7 @@ async def _quickstart_async(
                 console.print(
                     f"[red]Agent '{recommended}' must run in CLI mode for quickstart/create execution.[/red]"
                 )
-                return
+                raise typer.Exit(code=1)
 
             console.print("\n[cyan]Executing quickstart task...[/cyan]")
 
@@ -6381,8 +6907,9 @@ def _mine_self_quick(project_path: Path) -> None:
     console.print(f"  Path: {project_path}")
     console.print()
 
-    # Collect metadata
-    file_count, last_commit_ts, total_bytes, scan_signature = _collect_repo_metadata(project_path)
+    # Collect metadata (miner returns 5-tuple: file_count, last_commit_ts,
+    # total_bytes, scan_signature, content_hash)
+    file_count, last_commit_ts, total_bytes, scan_signature, _content_hash = _collect_repo_metadata(project_path)
 
     if total_bytes >= 1024 * 1024:
         size_str = f"{total_bytes / (1024 * 1024):.1f} MB"
@@ -6938,8 +7465,15 @@ def setup(
     """
     import toml as _toml
 
-    config_path = Path(config) if config else Path(__file__).parent.parent.parent / "claw.toml"
-    config_path = config_path.resolve()
+    if config:
+        config_path = Path(config).resolve()
+    else:
+        resolved = _find_default_claw_toml()
+        if resolved is None:
+            console.print("[red]Config file not found: claw.toml[/red]")
+            console.print("[dim]Run from the multiclaw directory or pass --config path/to/claw.toml[/dim]")
+            raise typer.Exit(1)
+        config_path = resolved.resolve()
 
     if not config_path.exists():
         console.print(f"[red]Config file not found: {config_path}[/red]")
@@ -8201,8 +8735,14 @@ def doctor_keycheck(
 def doctor_status(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
-    """Preferred grouped alias for `cam status`."""
-    status(config=config)
+    """Preferred grouped alias for `cam status`.
+
+    Calls _status_async directly rather than the top-level `status`
+    function, because `status` is re-bound later in the module by
+    `@cag_app.command() def status(...)` (Python namespace shadowing).
+    """
+    _setup_logging(False)
+    asyncio.run(_status_async(config))
 
 
 @doctor_app.command(name="expectations")
@@ -8280,8 +8820,32 @@ async def _doctor_routing_async(config_path: Optional[str]) -> None:
     try:
         rows = await repository.get_agent_scores()
         if not rows:
-            console.print("[dim]No agent_scores data yet. Run some tasks first.[/dim]")
+            console.print(
+                "[yellow]Cold-start mode:[/yellow] no agent_scores data yet."
+            )
+            console.print(
+                "  [dim]The dispatcher is falling back to static routing priors "
+                "until agents have historical performance data.[/dim]"
+            )
+            console.print(
+                "  [dim]Run a few tasks ([bold]cam create[/bold], "
+                "[bold]cam quickstart[/bold], or [bold]cam evaluate[/bold]) "
+                "to warm up Kelly routing.[/dim]"
+            )
             return
+
+        # Cold-start warning for under-sampled agents (punch list #4)
+        cold_agents = [
+            r for r in rows
+            if r.get("total_attempts", r.get("successes", 0) + r.get("failures", 0)) < 5
+        ]
+        if cold_agents:
+            count = len(cold_agents)
+            console.print(
+                f"[yellow]Warning:[/yellow] {count} agent-task combo(s) "
+                f"have <5 attempts. Kelly sizing is unreliable at low sample "
+                f"count — expect static fallback for those rows.\n"
+            )
 
         sizer = BayesianKellySizer(
             kappa=cfg.kelly.kappa,
@@ -8909,31 +9473,110 @@ async def _kb_engine():
 def kb_seed(
     force: bool = typer.Option(False, "--force", help="Re-seed even if seed records already exist"),
     repair_embeddings: bool = typer.Option(False, "--repair-embeddings", help="Generate missing embeddings for existing methodologies"),
+    pack: list[str] = typer.Option(
+        [],
+        "--pack",
+        "-p",
+        help="Seed pack name to load (without .jsonl suffix). Repeatable. Default: core_v1 only.",
+    ),
+    all_packs: bool = typer.Option(
+        False,
+        "--all-packs",
+        help="Escape hatch: load every pack discovered under src/claw/data/seed/.",
+    ),
+    list_packs: bool = typer.Option(
+        False,
+        "--list-packs",
+        help="List available seed packs with record counts and exit (does not touch the DB).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
 ) -> None:
     """Load built-in seed knowledge into the methodology store.
 
-    Runs automatically on first startup. Use --force to re-seed after
-    accidental deletion. Use --repair-embeddings to generate missing
+    Default behaviour loads only the canonical ``core_v1`` pack — this is
+    a change from earlier releases which loaded every pack discovered on
+    disk. Use ``--pack NAME`` (repeatable) to load specific packs,
+    ``--all-packs`` to restore the old "load everything" behaviour, or
+    ``--list-packs`` to inspect what is available without touching the DB.
+
+    Runs automatically on first startup. Use ``--force`` to re-seed after
+    accidental deletion. Use ``--repair-embeddings`` to generate missing
     vectors for methodologies that were saved without embeddings.
     """
     _setup_logging(verbose)
 
+    # --list-packs is DB-free: short-circuit before touching the engine.
+    if list_packs:
+        from claw.community.seeder import list_available_packs
+
+        entries = list_available_packs()
+        console.print("\n[bold]Available seed packs[/bold]\n")
+        if not entries:
+            console.print("  [yellow]No seed packs found in package.[/yellow]")
+            return
+        for e in entries:
+            count_str = str(e["records"]) if e["records"] >= 0 else "?"
+            console.print(f"  {e['name']}  ({count_str} records)  [dim]{e['path']}[/dim]")
+        return
+
+    # Resolve which pack names the user wants.
+    if all_packs and pack:
+        console.print(
+            "[red]--all-packs and --pack are mutually exclusive. Pick one.[/red]"
+        )
+        raise typer.Exit(2)
+
+    if all_packs:
+        selected_names: Optional[list[str]] = None  # None == every discovered pack
+    elif pack:
+        selected_names = list(pack)
+    else:
+        from claw.community.seeder import DEFAULT_SEED_PACK
+
+        selected_names = [DEFAULT_SEED_PACK]
+
     async def _run() -> None:
-        from claw.community.seeder import discover_seed_packs, repair_missing_embeddings, run_seed
+        from claw.community.seeder import discover_seed_packs, list_available_packs, repair_missing_embeddings, run_seed
         from claw.core.config import load_config
         from claw.db.embeddings import EmbeddingEngine
 
         cfg = load_config(Path(config) if config else None)
         engine, _repo = await _kb_engine()
 
-        # Show available packs
-        packs = discover_seed_packs()
-        if not packs:
+        # Surface what the user asked for vs what is on disk so missing
+        # --pack names are visible instead of silently producing no-ops.
+        on_disk = {e["name"]: e for e in list_available_packs()}
+        if not on_disk:
             console.print("[red]No seed packs found in package.[/red]")
+            try:
+                await engine.close()
+            except Exception:
+                pass
             return
 
+        if selected_names is None:
+            resolved = list(on_disk.keys())
+        else:
+            resolved = [n for n in selected_names if n in on_disk]
+            missing = [n for n in selected_names if n not in on_disk]
+            if missing:
+                console.print(
+                    f"[yellow]Unknown pack name(s) ignored: {', '.join(missing)}[/yellow]"
+                )
+                console.print(
+                    f"[dim]Known packs: {', '.join(sorted(on_disk.keys()))}[/dim]"
+                )
+
+        if not resolved:
+            console.print("[red]No matching seed packs to load.[/red]")
+            try:
+                await engine.close()
+            except Exception:
+                pass
+            return
+
+        packs = discover_seed_packs(names=resolved)
         console.print(f"\n[bold]CAM Seed Knowledge Loader[/bold]\n")
         for p in packs:
             line_count = sum(1 for line in p.read_text().strip().splitlines() if line.strip())
@@ -8952,6 +9595,7 @@ def kb_seed(
             embedding_engine=embedding_engine,
             force=force,
             config=cfg,
+            names=resolved,
         )
 
         if summary.get("reason") == "already_seeded" and not force:
@@ -8982,6 +9626,231 @@ def kb_seed(
             pass
 
     asyncio.run(_run())
+
+
+@kb_app.command(name="bootstrap")
+def kb_bootstrap(
+    domain: str = typer.Option(
+        "python",
+        "--domain",
+        "-d",
+        help="Domain to bootstrap: python, devsecops, webdev, all",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-seed even if the knowledge base already has seed records",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Bootstrap the CAM knowledge base with a curated starter pack.
+
+    This is the recommended first-run command for new users. It loads
+    a domain-specific curated seed pack, verifies the DB is populated,
+    and prints next-step recommendations for expanding the KB.
+
+    Domains:
+      python     - Python-primary starter (51 methodologies across
+                   code_quality, architecture, security, design_patterns)
+      devsecops  - Security + CI/CD focus (12 methodologies)
+      webdev     - Web development focus (small pack, supplemented with Python starter)
+      all        - Load every available starter pack
+    """
+    _setup_logging(verbose)
+
+    from claw.community.seeder import DOMAIN_PACKS, list_available_packs
+
+    # 1. Validate domain
+    if domain not in DOMAIN_PACKS:
+        console.print(f"[red]Unknown domain: {domain!r}[/red]")
+        console.print(
+            f"[dim]Available domains: {', '.join(sorted(DOMAIN_PACKS.keys()))}[/dim]"
+        )
+        raise typer.Exit(2)
+
+    required_packs = list(DOMAIN_PACKS[domain])
+
+    # 2. Verify every required pack is present on disk (DB-free check)
+    on_disk = {e["name"]: e for e in list_available_packs()}
+    missing = [p for p in required_packs if p not in on_disk]
+    if missing:
+        console.print(
+            f"[red]Missing seed pack(s) for domain {domain!r}: "
+            f"{', '.join(missing)}[/red]"
+        )
+        if on_disk:
+            console.print(
+                f"[dim]Available packs on disk: {', '.join(sorted(on_disk.keys()))}[/dim]"
+            )
+        else:
+            console.print("[dim]No seed packs found in package.[/dim]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]CAM Knowledge Bootstrap[/bold] - Domain: [cyan]{domain}[/cyan]")
+    console.print(f"Loading packs: [dim]{', '.join(required_packs)}[/dim]\n")
+
+    async def _run() -> None:
+        from claw.community.seeder import run_seed
+        from claw.core.config import load_config
+        from claw.db.embeddings import EmbeddingEngine
+
+        cfg = load_config(Path(config) if config else None)
+        engine, _repo = await _kb_engine()
+
+        try:
+            # Try to create embedding engine (same pattern as kb_seed)
+            embedding_engine = None
+            try:
+                embedding_engine = EmbeddingEngine(cfg.embeddings)
+                console.print(f"  Embedding model: [dim]{cfg.embeddings.model}[/dim]")
+            except Exception as e:
+                console.print(
+                    f"  [yellow]Embeddings unavailable ({e}) - seeding without vectors[/yellow]"
+                )
+
+            # 3. Delegate to run_seed - do NOT duplicate its logic
+            summary = await run_seed(
+                engine=engine,
+                embedding_engine=embedding_engine,
+                force=force,
+                config=cfg,
+                names=required_packs,
+            )
+
+            reason = summary.get("reason", "")
+
+            # 4. Idempotent path - already seeded
+            if reason == "already_seeded" and not force:
+                console.print(
+                    "\n[green]Already bootstrapped.[/green] Use [bold]--force[/bold] to re-seed."
+                )
+                # Still show category breakdown so the user sees current state
+                await _print_category_breakdown(engine)
+                _print_next_steps(domain)
+                return
+
+            # 5. Report import results
+            if summary.get("imported", 0) > 0:
+                parts = []
+                # We know which packs we asked for - report actual counts
+                for pack_name in required_packs:
+                    pack_meta = on_disk.get(pack_name)
+                    if pack_meta and pack_meta["records"] >= 0:
+                        parts.append(f"{pack_meta['records']} from {pack_name}")
+                detail = f" ({', '.join(parts)})" if parts else ""
+                console.print(
+                    f"\n[green]OK[/green] Imported {summary['imported']} methodologies{detail}"
+                )
+                if summary.get("skipped", 0):
+                    console.print(f"  Skipped (dedup): {summary['skipped']}")
+                if summary.get("rejected", 0):
+                    console.print(f"  [yellow]Rejected: {summary['rejected']}[/yellow]")
+            elif summary.get("skipped", 0) > 0:
+                console.print(
+                    f"\n[green]All seed records already present (idempotent).[/green]"
+                )
+            else:
+                console.print(
+                    f"\n[yellow]No records imported (reason: {reason or '?'}).[/yellow]"
+                )
+
+            # 6. Category breakdown
+            await _print_category_breakdown(engine)
+
+            # 7. Next-step recommendations
+            _print_next_steps(domain)
+
+        finally:
+            try:
+                await engine.close()
+            except Exception:
+                pass
+
+    asyncio.run(_run())
+
+
+async def _print_category_breakdown(engine: Any) -> None:
+    """Query methodologies grouped by category tag and print a Rich table.
+
+    Uses the ``tags LIKE '%"category:X"%'`` pattern consistent with the
+    rest of the codebase. Only prints when there are rows to show.
+    """
+    # Discover distinct category:* tags then count each one.
+    rows = await engine.fetch_all(
+        "SELECT tags FROM methodologies WHERE tags IS NOT NULL"
+    )
+    if not rows:
+        return
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        raw = r["tags"] if isinstance(r, dict) else r[0]
+        if not raw:
+            continue
+        try:
+            tags = json.loads(raw) if isinstance(raw, str) else list(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for t in tags:
+            if isinstance(t, str) and t.startswith("category:"):
+                cat = t.split(":", 1)[1]
+                counts[cat] = counts.get(cat, 0) + 1
+
+    if not counts:
+        return
+
+    console.print("\n[bold]Category breakdown:[/bold]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Category", style="cyan")
+    table.add_column("Count", justify="right", style="bold")
+    for cat, cnt in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        table.add_row(cat, str(cnt))
+    console.print(table)
+
+
+def _print_next_steps(domain: str) -> None:
+    """Print domain-specific next-step recommendations."""
+    console.print("\n[bold]Next steps:[/bold]")
+    sample_query = "refactor long function"
+
+    if domain == "python":
+        console.print(f'  1. Verify: [cyan]cam federate "{sample_query}" --limit 5[/cyan]')
+        console.print(
+            "  2. Expand: [cyan]cam pulse ingest https://github.com/tiangolo/fastapi[/cyan]"
+        )
+        console.print(
+            "  3. Mine more Python repos to grow the knowledge base further."
+        )
+    elif domain == "devsecops":
+        console.print(f'  1. Verify: [cyan]cam federate "secret scanning ci" --limit 5[/cyan]')
+        console.print(
+            "  2. Expand with DevSecOps repos:"
+        )
+        console.print("     - [cyan]cam pulse ingest https://github.com/trufflesecurity/trufflehog[/cyan]")
+        console.print("     - [cyan]cam pulse ingest https://github.com/aquasecurity/trivy[/cyan]")
+        console.print("     - [cyan]cam pulse ingest https://github.com/returntocorp/semgrep[/cyan]")
+        console.print("     - [cyan]cam pulse ingest https://github.com/gitleaks/gitleaks[/cyan]")
+    elif domain == "webdev":
+        console.print(f'  1. Verify: [cyan]cam federate "http middleware" --limit 5[/cyan]')
+        console.print(
+            "  2. Expand with Python web frameworks:"
+        )
+        console.print("     - [cyan]cam pulse ingest https://github.com/tiangolo/fastapi[/cyan]")
+        console.print("     - [cyan]cam pulse ingest https://github.com/encode/starlette[/cyan]")
+        console.print(
+            "  [dim]Note: the TypeScript ganglion is currently empty - polyglot support is planned.[/dim]"
+        )
+    elif domain == "all":
+        console.print(f'  1. Verify: [cyan]cam federate "{sample_query}" --limit 5[/cyan]')
+        console.print(
+            "  2. Full playbook: see [cyan]docs/KB_BOOTSTRAP_PLAYBOOKS.md[/cyan]"
+        )
+        console.print(
+            "  3. Continue expanding with [cyan]cam pulse ingest <url>[/cyan]"
+        )
+    else:  # pragma: no cover - validated upstream
+        console.print(f'  1. Verify: [cyan]cam federate "{sample_query}" --limit 5[/cyan]')
 
 
 @kb_app.command()
