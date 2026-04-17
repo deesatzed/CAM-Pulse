@@ -40,6 +40,12 @@ DORMANT_DAYS = 180
 DEAD_DAYS = 365
 NICHE_COLLISION_SIMILARITY = 0.92
 ATTRIBUTED_FAILURE_DECLINE_MINIMUM = 2
+# Zombie demotion: retrieved many times but never actually applied/attributed.
+# Distinct from the failure-count path because these methodologies accumulate
+# zero attributed_success_count AND zero attributed_failure_count — the agent
+# saw them but never used them, so they clog retrieval slots without earning
+# their keep.
+ZOMBIE_RETRIEVED_MINIMUM = 5
 
 
 def evaluate_transition(
@@ -204,8 +210,15 @@ async def _evaluate_attributed_transition(
 ) -> Optional[str]:
     """Apply high-trust demotion based on attributed evidence.
 
-    High-trust methodologies should not remain thriving/global if repeated
-    attributed outcomes fail and no attributed success exists yet.
+    Two rules here:
+
+    1. **High-trust failure demotion**: thriving/global methodologies demote
+       to declining if repeated attributed outcomes fail and no attributed
+       success exists yet.
+    2. **Zombie demotion**: any viable methodology that has been retrieved
+       many times (``ZOMBIE_RETRIEVED_MINIMUM``+) but never applied at all
+       (``used_count`` == 0) transitions to declining. These are pure
+       retrieval-clogging weight and should be pruned from active rotation.
     """
     current = methodology.lifecycle_state
     if current in (
@@ -215,6 +228,28 @@ async def _evaluate_attributed_transition(
     ):
         return None
 
+    # Rule 2: Zombie demotion (runs for any non-terminal state including viable).
+    # Uses the real attribution log — independent of the legacy success/failure
+    # counters on the methodology row itself.
+    retrieved = int(usage_stats.get("retrieved_count", 0) or 0)
+    used = int(usage_stats.get("used_count", 0) or 0)
+    attributed = int(usage_stats.get("attributed_count", 0) or 0)
+    if (
+        current == LifecycleState.VIABLE.value
+        and retrieved >= ZOMBIE_RETRIEVED_MINIMUM
+        and used == 0
+        and attributed == 0
+    ):
+        # Don't demote seeded or novelty-protected methodologies.
+        if "origin:seed" in (methodology.tags or []):
+            return None
+        logger.info(
+            "Zombie demotion: methodology %s retrieved %d× but never applied",
+            methodology.id, retrieved,
+        )
+        return LifecycleState.DECLINING.value
+
+    # Rule 1: High-trust failure demotion (original behavior).
     if current != LifecycleState.THRIVING.value and methodology.scope != "global":
         return None
 

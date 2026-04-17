@@ -910,6 +910,8 @@ class ContextBrief(BaseModel):
     primary_methodology_id: Optional[str] = None
     # Context methodology IDs (rank 2-3, lighter weight in prompt)
     context_methodology_ids: list[str] = Field(default_factory=list)
+    # CAM-SEQ: ApplicationPackets built during evaluate (structured component guidance)
+    application_packets: list["ApplicationPacket"] = Field(default_factory=list)
 
 
 class ExecutionState(BaseModel):

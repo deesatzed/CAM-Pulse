@@ -155,6 +155,139 @@ def _register_sibling_if_needed(
         f.write(entry)
     logger.info("Auto-registered ganglion '%s' in claw.toml", name)
 
+# ---------------------------------------------------------------------------
+# Application-domain keywords for automatic classification
+# ---------------------------------------------------------------------------
+
+_APPLICATION_DOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "medical": [
+        "fhir", "hl7", "hipaa", "dicom", "ehr", "emr", "clinical",
+        "patient", "diagnosis", "pharmacy", "icd10", "snomed", "loinc",
+        "healthcare", "medical", "radiology", "pathology",
+    ],
+    "finance": [
+        "trading", "portfolio", "hedge", "market", "ticker", "forex",
+        "fintech", "banking", "payment", "ledger", "accounting",
+        "blockchain", "defi", "invoice", "kyc", "aml",
+    ],
+    "ai_ml": [
+        "transformer", "embedding", "llm", "rag", "vector", "agent",
+        "diffusion", "tokenizer", "fine-tune", "finetune", "lora",
+        "langchain", "openai", "anthropic", "huggingface",
+    ],
+    "devtools": [
+        "cli", "linter", "formatter", "bundler", "compiler", "debugger",
+        "profiler", "repl", "scaffold", "boilerplate", "template",
+        "plugin", "extension", "vscode", "neovim",
+    ],
+    "infrastructure": [
+        "kubernetes", "docker", "terraform", "ansible", "helm",
+        "ci-cd", "pipeline", "deploy", "monitor", "observability",
+        "prometheus", "grafana", "nginx", "caddy",
+    ],
+    "web_apps": [
+        "nextjs", "react", "vue", "angular", "svelte", "remix",
+        "express", "fastapi", "django", "flask", "rails",
+        "graphql", "rest-api", "oauth", "jwt",
+    ],
+    "data_science": [
+        "pandas", "numpy", "scipy", "matplotlib", "seaborn",
+        "jupyter", "notebook", "etl", "warehouse", "spark",
+        "airflow", "dbt", "bigquery", "snowflake",
+    ],
+}
+
+
+@dataclass
+class RepoProfile:
+    """Classification + scoring metadata for a repo candidate."""
+    candidate: RepoCandidate
+    primary_brain: str = "python"
+    technical_domains: list[str] = field(default_factory=list)
+    application_domain: str = "general"
+    complexity: str = "medium"
+    yield_score: float = 0.5
+    gap_score: float = 0.0
+    ledger_status: str = "new"  # "new", "changed", "unchanged", "content-duplicate"
+
+
+def classify_repo_domain(
+    repo_path: Path,
+    readme_text: str = "",
+) -> str:
+    """Classify a repo's application domain using keyword matching."""
+    # Combine readme + filenames for classification
+    readme_lower = readme_text.lower()
+    filenames = ""
+    try:
+        for entry in os.scandir(repo_path):
+            filenames += entry.name.lower() + " "
+    except (PermissionError, OSError):
+        pass
+    corpus = f"{readme_lower} {filenames}"
+
+    scores: dict[str, int] = {}
+    for domain, keywords in _APPLICATION_DOMAIN_KEYWORDS.items():
+        scores[domain] = sum(1 for kw in keywords if kw in corpus)
+
+    if not scores or max(scores.values()) == 0:
+        return "general"
+    return max(scores, key=lambda d: scores[d])
+
+
+async def ensure_domain_ganglion(
+    domain_name: str,
+    primary_repository: Repository,
+    primary_semantic: SemanticMemory,
+    config: ClawConfig,
+) -> tuple[Repository, SemanticMemory]:
+    """Get or create a ganglion DB for an application domain.
+
+    Modeled on ensure_language_ganglion but for domain-specific ganglia
+    (e.g., data/instances/domain-medical/claw.db).
+    """
+    ganglion_name = f"domain-{domain_name}"
+    project_root = Path(config.database.db_path).parent.parent
+    ganglion_dir = project_root / "instances" / ganglion_name
+    ganglion_db_path = ganglion_dir / "claw.db"
+
+    needs_init = not ganglion_db_path.exists()
+
+    db_config = DatabaseConfig(db_path=str(ganglion_db_path))
+    engine = DatabaseEngine(db_config)
+    await engine.connect()
+
+    if needs_init:
+        await engine.initialize_schema()
+        logger.info(
+            "Auto-provisioned domain ganglion '%s' at %s",
+            ganglion_name, ganglion_db_path,
+        )
+        _register_sibling_if_needed(
+            ganglion_name, str(ganglion_db_path.resolve()), config,
+        )
+    else:
+        logger.debug(
+            "Reusing existing domain ganglion '%s' at %s",
+            ganglion_name, ganglion_db_path,
+        )
+
+    repo = Repository(engine)
+
+    from claw.memory.hybrid_search import HybridSearch
+    hybrid = HybridSearch(
+        repository=repo,
+        embedding_engine=primary_semantic.embedding_engine,
+    )
+    sem = SemanticMemory(
+        repository=repo,
+        embedding_engine=primary_semantic.embedding_engine,
+        hybrid_search=hybrid,
+    )
+
+    return repo, sem
+
+
 # Extensions to include when serializing a repo for mining.
 _CODE_EXTENSIONS: set[str] = {
     ".py", ".js", ".ts", ".tsx", ".jsx",
@@ -174,6 +307,17 @@ _SKIP_DIRS: set[str] = {
 
 # Maximum serialized repo size in bytes (900 KB).
 _MAX_REPO_BYTES: int = 900 * 1024
+
+# Maximum bytes for a single file to be included in full during serialization.
+# Files larger than this are reduced to a skeleton (signatures + docstrings).
+_MAX_FILE_BYTES_FULL: int = 60 * 1024
+
+# First-N-lines included verbatim in skeleton extraction (imports/docstring/module-level).
+_SKELETON_HEAD_LINES: int = 30
+
+# Max per-mining-call LLM timeout in seconds (prevents indefinite stalls
+# from huge or malformed inputs). Wraps llm_client.complete() via asyncio.wait_for.
+_MINING_LLM_TIMEOUT_SECONDS: float = 300.0  # 5 minutes
 
 # Maximum bytes to read per file for content hashing (4 KB).
 _CONTENT_HASH_CHUNK: int = 4096
@@ -911,6 +1055,75 @@ def _file_priority(rel_path: Path) -> int:
     return 2
 
 
+def _extract_skeleton(content: str, rel_path: Path) -> str:
+    """Extract a compact skeleton from an oversized source file.
+
+    Skeleton = first N lines verbatim (imports/docstring/module-level code)
+    + all top-level class/function/def signatures with their docstrings
+    + total line count + truncation marker.
+
+    Supported languages: Python (.py), TypeScript/JavaScript (.ts/.tsx/.js/.jsx),
+    Go (.go), Rust (.rs). For others, falls back to head-only truncation.
+    """
+    lines = content.splitlines()
+    total_lines = len(lines)
+    suffix = rel_path.suffix.lower()
+
+    parts: list[str] = []
+    parts.append(f"[SKELETON — full file is {total_lines} lines, "
+                 f"{len(content.encode('utf-8')) // 1024}KB; showing head + signatures]")
+
+    # Head: first N lines (imports, module docstring, top-level constants)
+    head_lines = lines[:_SKELETON_HEAD_LINES]
+    parts.append("\n".join(head_lines))
+    parts.append(f"\n# ... ({total_lines - _SKELETON_HEAD_LINES} more lines) ...\n")
+
+    # Signature extraction — language-specific regex
+    sig_patterns: list[re.Pattern[str]] = []
+    if suffix == ".py":
+        # class Foo: / def bar( / async def baz(
+        sig_patterns.append(re.compile(r"^(class\s+\w+|(?:async\s+)?def\s+\w+)"))
+    elif suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        # class Foo / export class Foo / function bar / export function bar / const baz = (
+        sig_patterns.append(re.compile(
+            r"^(export\s+)?(abstract\s+)?(class|interface|type|function|async\s+function)\s+\w+"
+        ))
+        sig_patterns.append(re.compile(r"^(export\s+)?const\s+\w+\s*[:=]\s*(async\s+)?\("))
+    elif suffix == ".go":
+        # func Foo( / type Foo struct { / type Foo interface {
+        sig_patterns.append(re.compile(r"^(func\s+(\(\w+\s+\*?\w+\)\s+)?\w+|type\s+\w+\s+(struct|interface))"))
+    elif suffix == ".rs":
+        # fn foo( / pub fn foo( / impl Foo { / struct Foo / enum Foo / trait Foo
+        sig_patterns.append(re.compile(r"^(pub\s+)?(fn\s+\w+|impl(\s+<.*>)?\s+\w+|struct\s+\w+|enum\s+\w+|trait\s+\w+)"))
+
+    if sig_patterns:
+        signatures: list[str] = []
+        for idx, line in enumerate(lines[_SKELETON_HEAD_LINES:], start=_SKELETON_HEAD_LINES):
+            stripped = line.lstrip()
+            # Skip deeply nested definitions (keep top-level + one indent level)
+            indent = len(line) - len(stripped)
+            if indent > 4:
+                continue
+            if any(p.match(stripped) for p in sig_patterns):
+                # Take the signature line (may span multiple lines if args wrap)
+                sig = line.rstrip()
+                # Grab next line if docstring
+                if idx + 1 < total_lines:
+                    next_line = lines[idx + 1].lstrip()
+                    if next_line.startswith(('"""', "'''", "//", "///", "/*")):
+                        sig += "\n" + lines[idx + 1].rstrip()
+                signatures.append(sig)
+                if len(signatures) >= 80:  # Cap at 80 signatures per file
+                    signatures.append("# ... (more signatures truncated) ...")
+                    break
+
+        if signatures:
+            parts.append("\n# --- Top-level signatures ---")
+            parts.append("\n".join(signatures))
+
+    return "\n".join(parts) + "\n"
+
+
 def serialize_repo(
     repo_path: str | Path,
     max_bytes: int = _MAX_REPO_BYTES,
@@ -997,6 +1210,19 @@ def serialize_repo(
         except (OSError, PermissionError) as exc:
             logger.debug("Skipping unreadable file %s: %s", filepath, exc)
             continue
+
+        # Pre-screen oversized files: replace with a compact skeleton
+        # (head + signatures) to avoid a single file eating the whole budget
+        # and to prevent LLM stalls on monolithic modules.
+        raw_bytes = len(content.encode("utf-8"))
+        if raw_bytes > _MAX_FILE_BYTES_FULL:
+            skeleton = _extract_skeleton(content, rel)
+            skeleton_bytes = len(skeleton.encode("utf-8"))
+            logger.info(
+                "Skeleton-extracting oversized file %s (%.0fKB -> %.0fKB)",
+                rel, raw_bytes / 1024, skeleton_bytes / 1024,
+            )
+            content = skeleton
 
         header = f"--- FILE: {rel} ---\n"
         chunk = header + content + "\n"
@@ -1765,9 +1991,12 @@ class RepoMiner:
         if not recovery.enabled:
             agent_name, model = await model_selector.select_best_model(estimated_tokens)
             try:
-                resp = await self.llm_client.complete(
-                    messages=[LLMMessage(role="user", content=prompt)],
-                    model=model, temperature=0.3, max_tokens=token_budget,
+                resp = await asyncio.wait_for(
+                    self.llm_client.complete(
+                        messages=[LLMMessage(role="user", content=prompt)],
+                        model=model, temperature=0.3, max_tokens=token_budget,
+                    ),
+                    timeout=_MINING_LLM_TIMEOUT_SECONDS,
                 )
                 findings = parse_findings(resp.content, repo_name)
                 await self._record_mining_outcome(
@@ -1807,9 +2036,12 @@ class RepoMiner:
             )
 
             try:
-                resp = await self.llm_client.complete(
-                    messages=[LLMMessage(role="user", content=prompt)],
-                    model=model, temperature=0.3, max_tokens=token_budget,
+                resp = await asyncio.wait_for(
+                    self.llm_client.complete(
+                        messages=[LLMMessage(role="user", content=prompt)],
+                        model=model, temperature=0.3, max_tokens=token_budget,
+                    ),
+                    timeout=_MINING_LLM_TIMEOUT_SECONDS,
                 )
             except Exception as e:
                 logger.warning(
@@ -1882,10 +2114,13 @@ class RepoMiner:
 
             if best_model:
                 try:
-                    resp = await self.llm_client.complete(
-                        messages=[LLMMessage(role="user", content=reduced_prompt)],
-                        model=best_model, temperature=0.3,
-                        max_tokens=token_budget,
+                    resp = await asyncio.wait_for(
+                        self.llm_client.complete(
+                            messages=[LLMMessage(role="user", content=reduced_prompt)],
+                            model=best_model, temperature=0.3,
+                            max_tokens=token_budget,
+                        ),
+                        timeout=_MINING_LLM_TIMEOUT_SECONDS,
                     )
                     findings = parse_findings(resp.content, repo_name)
                     success = bool(findings)
@@ -2037,9 +2272,12 @@ class RepoMiner:
                 break
 
             try:
-                resp = await self.llm_client.complete(
-                    messages=[LLMMessage(role="user", content=chunk_prompt)],
-                    model=best_model, temperature=0.3, max_tokens=token_budget,
+                resp = await asyncio.wait_for(
+                    self.llm_client.complete(
+                        messages=[LLMMessage(role="user", content=chunk_prompt)],
+                        model=best_model, temperature=0.3, max_tokens=token_budget,
+                    ),
+                    timeout=_MINING_LLM_TIMEOUT_SECONDS,
                 )
                 chunk_findings = parse_findings(resp.content, repo_name)
                 await self._record_mining_outcome(

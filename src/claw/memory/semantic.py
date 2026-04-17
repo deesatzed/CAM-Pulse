@@ -48,18 +48,39 @@ class SemanticMemory:
         self.hybrid_search = hybrid_search
         self.prism_engine = prism_engine
         self.governance = governance
-        # Path C Fix 2: GanglionRepositoryPool injected by factory so that
-        # record_retrieval / record_outcome can route writes back to the
-        # source ganglion DB when a methodology came from federation.
         self._ganglion_pool: Any = None
 
     def set_ganglion_pool(self, pool: Any) -> None:
-        """Attach a GanglionRepositoryPool for federation write-back.
-
-        Called by the factory after construction so SemanticMemory can
-        resolve ``source_db_path`` → ganglion Repository at outcome time.
-        """
+        """Attach a GanglionRepositoryPool for federation write-back."""
         self._ganglion_pool = pool
+
+    async def _resolve_repository(
+        self, source_db_path: Optional[str]
+    ) -> Repository:
+        """Return the correct Repository based on source_db_path.
+
+        If source_db_path is None or matches the primary DB, returns
+        the primary repository.  Otherwise opens the ganglion DB via
+        the pool and returns its Repository.
+        """
+        if not source_db_path or self._ganglion_pool is None:
+            return self.repository
+        if self._ganglion_pool.is_primary(source_db_path):
+            return self.repository
+        try:
+            ganglion_repo = await self._ganglion_pool.get_repository(source_db_path)
+        except FileNotFoundError as e:
+            logger.warning(
+                "Ganglion DB missing; falling back to primary: %s", e
+            )
+            return self.repository
+        except Exception as e:
+            logger.warning(
+                "Failed to open ganglion repository %s; falling back to primary: %s",
+                source_db_path, e,
+            )
+            return self.repository
+        return ganglion_repo if ganglion_repo is not None else self.repository
 
     # Quality filter thresholds (Item 5)
     MIN_SOLUTION_LENGTH = 50
@@ -348,38 +369,6 @@ class SemanticMemory:
     # MEE: Outcome feedback loop
     # -------------------------------------------------------------------
 
-    async def _resolve_repository(
-        self, source_db_path: Optional[str]
-    ) -> Repository:
-        """Return the correct Repository to write to for a given source.
-
-        Path C Fix 2: if ``source_db_path`` points at a ganglion DB,
-        return the pooled ganglion Repository so outcome writes land in
-        the right place; otherwise return the primary Repository.
-
-        Failures to open a ganglion (missing file, schema error) fall
-        back to the primary repository and log a warning — the primary
-        write is still preferable to silently dropping the outcome.
-        """
-        if not source_db_path or self._ganglion_pool is None:
-            return self.repository
-        if self._ganglion_pool.is_primary(source_db_path):
-            return self.repository
-        try:
-            ganglion_repo = await self._ganglion_pool.get_repository(source_db_path)
-        except FileNotFoundError as e:
-            logger.warning(
-                "Ganglion DB missing for outcome write, falling back to primary: %s", e,
-            )
-            return self.repository
-        except Exception as e:
-            logger.warning(
-                "Failed to open ganglion repository (%s); falling back to primary: %s",
-                source_db_path, e,
-            )
-            return self.repository
-        return ganglion_repo if ganglion_repo is not None else self.repository
-
     async def record_retrieval(
         self,
         methodology_id: str,
@@ -389,12 +378,7 @@ class SemanticMemory:
 
         Increments retrieval_count and updates last_retrieved_at.
         Called by the orchestrator after Librarian returns past_solutions.
-
-        Args:
-            methodology_id: The methodology that was retrieved.
-            source_db_path: Optional absolute path to the source DB when
-                the methodology came from a sibling ganglion via federation.
-                When None, writes go to the primary repository.
+        Routes to the correct ganglion DB when source_db_path is provided.
         """
         try:
             repo = await self._resolve_repository(source_db_path)
@@ -417,23 +401,20 @@ class SemanticMemory:
         """Record the outcome of using a retrieved methodology.
 
         Updates success/failure counters, recalculates fitness vector,
-        and evaluates lifecycle transitions.
+        and evaluates lifecycle transitions.  Routes to the correct
+        ganglion DB when source_db_path is provided.
 
         Args:
             methodology_id: The methodology that was used.
             success: True if the task succeeded, False if it failed.
             retrieval_relevance: The combined_score from the retrieval.
-            source_db_path: Optional absolute path to the source DB when
-                the methodology came from a sibling ganglion via federation.
-                When None or pointing at the primary DB, writes go to
-                ``self.repository``; otherwise they route through the
-                injected GanglionRepositoryPool.
+            source_db_path: Path to the source ganglion DB (for federation write-back).
         """
         try:
             repo = await self._resolve_repository(source_db_path)
             await repo.update_methodology_outcome(methodology_id, success)
 
-            # Reload to get updated counters from the *correct* DB
+            # Reload from the *correct* DB to get updated counters
             methodology = await repo.get_methodology(methodology_id)
             if methodology is None:
                 return
@@ -460,18 +441,17 @@ class SemanticMemory:
                 trigger_event=trigger,
             )
 
-            # Evaluate lifecycle transition against the correct repository.
-            # apply_transition persists the new state via repo.update_*,
-            # so ganglion rows get promoted in the ganglion DB — not main.
+            # Evaluate lifecycle transition in the source ganglion
             from claw.memory.lifecycle import apply_transition
             await apply_transition(methodology, repo)
 
             logger.debug(
-                "Recorded outcome (success=%s) for methodology %s in %s, fitness=%.3f",
+                "Recorded outcome (success=%s) for methodology %s, fitness=%.3f (source=%s)",
                 success,
                 methodology_id,
                 source_db_path or "primary",
                 fitness_vector.get("total", 0.0),
+                source_db_path or "primary",
             )
         except Exception as e:
             logger.warning(

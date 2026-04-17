@@ -79,11 +79,18 @@ If the plan looks good:
 cam enhance /path/to/existing-repo --max-tasks 5
 ```
 
+If you already have a specific pending task id (for example, one seeded by `cam ab-test start` or created manually) and want to run **only** that task, skipping evaluate and plan:
+
+```bash
+cam enhance /path/to/existing-repo --task-id <pending-task-uuid>
+```
+
 Use this when you want to:
 - modernize structure
 - improve security
 - future-proof architecture
 - troubleshoot or repair an existing codebase
+- exercise one specific pre-seeded task (A/B experiments, regression reruns)
 
 If you want outside-repo learning first:
 

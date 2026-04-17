@@ -2351,6 +2351,27 @@ class Repository:
             )
         return [_row_to_component_card_summary(r) for r in rows]
 
+    async def list_component_cards_full(
+        self, limit: int = 100, language: Optional[str] = None
+    ) -> list[ComponentCard]:
+        """Return full ComponentCard objects (used by component ranker)."""
+        if language:
+            rows = await self.engine.fetch_all(
+                """SELECT * FROM component_cards
+                   WHERE language = ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                [language, limit],
+            )
+        else:
+            rows = await self.engine.fetch_all(
+                """SELECT * FROM component_cards
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                [limit],
+            )
+        return [_row_to_component_card(r) for r in rows]
+
     async def list_components_for_methodology(
         self, methodology_id: str
     ) -> list[ComponentCardSummary]:

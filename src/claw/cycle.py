@@ -931,26 +931,45 @@ class MicroClaw(ClawCycle):
         ctx: ClawContext,
         project_id: str,
         session_id: Optional[str] = None,
+        target_task_id: Optional[str] = None,
     ):
         super().__init__(ctx, level="micro")
         self.project_id = project_id
         self.session_id = session_id or str(uuid.uuid4())
+        # Optional pin to a specific task id — overrides priority-based grab().
+        # Used by `cam enhance --task-id` to target a particular pending task.
+        self.target_task_id: Optional[str] = target_task_id
         self._current_task: Optional[Task] = None
         self._current_context_brief: Optional[ContextBrief] = None
         self._current_outcome: Optional[TaskOutcome] = None
         self._current_verification: Optional[VerificationResult] = None
         self._ablation_label: Optional[str] = None
         self._suppress_cag_for_control = False
-        # Path C Fix 2: maps methodology_id -> source db_path for rows
-        # that came from federation.  Outcome writes use this to route
-        # retrieval/outcome/fitness/lifecycle updates back to the source
-        # ganglion instead of the primary DB.  Cleared at the start of
-        # every task.
+        # Maps methodology_id -> source db_path for rows from federation.
+        # Cleared at start of every task in evaluate().
         self._current_source_map: dict[str, str] = {}
 
     async def grab(self) -> Optional[Task]:
-        """Get the next pending task for the project."""
-        task = await self.ctx.repository.get_next_task(self.project_id)
+        """Get the next pending task for the project.
+
+        If ``target_task_id`` was set at construction, fetches that specific
+        task (consumed once — cleared after first grab so subsequent cycles
+        fall back to priority-based pickup).
+        """
+        if self.target_task_id:
+            task = await self.ctx.repository.get_task(self.target_task_id)
+            self.target_task_id = None  # Consume — only target once
+            if task is None:
+                logger.info("Targeted task not found; no task to run")
+                return None
+            if task.status != TaskStatus.PENDING:
+                logger.info(
+                    "Targeted task %s is %s (not PENDING); skipping",
+                    task.id, task.status,
+                )
+                return None
+        else:
+            task = await self.ctx.repository.get_next_task(self.project_id)
         if task is None:
             logger.info("No pending tasks for project %s", self.project_id)
             return None
@@ -972,6 +991,8 @@ class MicroClaw(ClawCycle):
 
     async def evaluate(self, task: Task) -> TaskContext:
         """Build enriched task context with forbidden approaches and hints."""
+        # Reset federation source map for this task
+        self._current_source_map = {}
         await self.ctx.repository.update_task_status(task.id, TaskStatus.EVALUATING)
 
         # Get failed approaches for this task
@@ -1166,28 +1187,19 @@ class MicroClaw(ClawCycle):
                 for fr in fed_results:
                     if fr.methodology not in past_solutions:
                         past_solutions.append(fr.methodology)
-                        # Path C Fix 2: remember the source DB so learn()
-                        # can write outcomes back to the ganglion, not main.
-                        # ``primary_db`` is already resolved absolute above.
-                        ganglion_source: Optional[str] = None
+                        # Track source DB for federation write-back
                         if fr.source_db_path and fr.source_db_path != primary_db:
                             self._current_source_map[fr.methodology.id] = fr.source_db_path
-                            ganglion_source = fr.source_db_path
-                        # Bump retrieval_count on the *source* DB so the
-                        # row's usage history accumulates where it lives.
-                        try:
-                            await self.ctx.semantic_memory.record_retrieval(
-                                fr.methodology.id,
-                                source_db_path=ganglion_source,
-                            )
-                        except Exception as _e:
-                            logger.debug(
-                                "Federation record_retrieval failed for %s: %s",
-                                fr.methodology.id, _e,
-                            )
                         if fr.methodology.methodology_notes:
                             hints.append(
                                 f"[from {fr.source_instance}] {fr.methodology.methodology_notes}"
+                            )
+                        # Record retrieval in source DB
+                        ganglion_source = fr.source_db_path if fr.source_db_path != primary_db else None
+                        if self.ctx.semantic_memory is not None:
+                            await self.ctx.semantic_memory.record_retrieval(
+                                fr.methodology.id,
+                                source_db_path=ganglion_source,
                             )
                         logger.info(
                             "Federation: added methodology %s from sibling %s (relevance=%.3f)",
@@ -1271,6 +1283,42 @@ class MicroClaw(ClawCycle):
             except (ValueError, Exception):
                 self._ablation_label = None  # No ablation test scheduled
 
+        # CAM-SEQ: build ApplicationPackets if feature is enabled and components exist
+        built_packets: list[Any] = []
+        if getattr(self.ctx.config, "feature_flags", None) and self.ctx.config.feature_flags.application_packets:
+            try:
+                from claw.planning.taskome import decompose_task
+                from claw.planning.application_packet import build_application_packet
+                from claw.memory.component_ranker import rank_components_for_slot
+
+                workspace_dir = getattr(
+                    list(self.ctx.agents.values())[0] if self.ctx.agents else None,
+                    "workspace_dir", None,
+                )
+                plan = decompose_task(
+                    task.description,
+                    workspace_path=workspace_dir,
+                    target_language=getattr(task, "language", None),
+                )
+                if plan.archetype_confidence >= 0.52 and plan.slots:
+                    cards = await self.ctx.repository.list_component_cards_full(limit=500)
+                    if cards:
+                        for slot in plan.slots[:6]:
+                            ranked = rank_components_for_slot(slot, cards)
+                            if ranked and ranked[0].fit_bucket.value != "no_help":
+                                packet = build_application_packet(
+                                    plan.plan_id, plan.task_archetype, slot, ranked,
+                                )
+                                await self.ctx.repository.save_application_packet(packet)
+                                built_packets.append(packet)
+                        if built_packets:
+                            logger.info(
+                                "CAM-SEQ: built %d packets for archetype '%s' (%d slots)",
+                                len(built_packets), plan.task_archetype, len(plan.slots),
+                            )
+            except Exception as e:
+                logger.warning("CAM-SEQ packet construction failed: %s", e)
+
         task_ctx = TaskContext(
             task=task,
             forbidden_approaches=forbidden,
@@ -1287,11 +1335,12 @@ class MicroClaw(ClawCycle):
             retrieved_methodology_ids=[m.id for m in past_solutions],
             primary_methodology_id=primary_methodology_id,
             context_methodology_ids=context_methodology_ids,
+            application_packets=built_packets,
         )
 
         logger.info(
-            "Evaluated task: %d forbidden approaches, %d hints",
-            len(forbidden), len(hints),
+            "Evaluated task: %d forbidden approaches, %d hints, %d packets",
+            len(forbidden), len(hints), len(built_packets),
         )
         return task_ctx
 
@@ -1853,6 +1902,73 @@ class MicroClaw(ClawCycle):
                     )
                 except Exception:
                     pass  # Non-critical
+
+            # CAM-SEQ: record RunConnectome events if packets were used
+            if (
+                getattr(self.ctx.config, "feature_flags", None)
+                and self.ctx.config.feature_flags.connectome_seq
+                and self._current_context_brief
+                and self._current_context_brief.application_packets
+            ):
+                try:
+                    from claw.core.models import RunConnectome, RunEvent
+                    from datetime import datetime, timezone
+
+                    run_id = f"run_{uuid.uuid4().hex[:12]}"
+                    packets = self._current_context_brief.application_packets
+                    archetype = packets[0].task_archetype if packets else "unknown"
+                    connectome = RunConnectome(
+                        id=f"conn_{uuid.uuid4().hex[:12]}",
+                        run_id=run_id,
+                        task_archetype=archetype,
+                        status="completed" if verification.approved else "failed",
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    await self.ctx.repository.save_run_connectome(connectome)
+
+                    for pkt in packets:
+                        # Pair event: slot matched to component
+                        await self.ctx.repository.save_run_event(RunEvent(
+                            id=f"evt_{uuid.uuid4().hex[:12]}",
+                            run_id=run_id,
+                            slot_id=pkt.slot.slot_id,
+                            event_type="paired",
+                            payload_json=json.dumps({
+                                "packet_id": pkt.packet_id,
+                                "component_id": pkt.selected.component_id,
+                                "confidence": pkt.selected.confidence,
+                                "fit_bucket": pkt.selected.fit_bucket.value,
+                            }),
+                            created_at=datetime.now(timezone.utc),
+                        ))
+                        # Outcome event
+                        await self.ctx.repository.save_run_event(RunEvent(
+                            id=f"evt_{uuid.uuid4().hex[:12]}",
+                            run_id=run_id,
+                            slot_id=pkt.slot.slot_id,
+                            event_type="outcome",
+                            payload_json=json.dumps({
+                                "packet_id": pkt.packet_id,
+                                "success": verification.approved,
+                                "quality_score": verification.quality_score,
+                            }),
+                            created_at=datetime.now(timezone.utc),
+                        ))
+                        # Build connectome edge
+                        await self.ctx.repository.save_run_connectome_edge(
+                            connectome_id=connectome.id,
+                            source_node=pkt.slot.slot_id,
+                            target_node=pkt.selected.component_id,
+                            edge_type="paired",
+                            metadata={"confidence": pkt.selected.confidence},
+                        )
+
+                    logger.info(
+                        "CAM-SEQ: recorded connectome %s with %d pair events",
+                        run_id, len(packets),
+                    )
+                except Exception as e:
+                    logger.warning("CAM-SEQ connectome recording failed: %s", e)
 
             logger.info("Learned: task %s completed by %s", task.title, agent_id)
 

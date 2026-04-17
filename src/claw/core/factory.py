@@ -96,6 +96,13 @@ class ClawContext:
 
     async def close(self) -> None:
         """Cleanly shut down all components."""
+        # Close ganglion pool (releases sibling DB engines)
+        if self.ganglion_pool is not None:
+            try:
+                await self.ganglion_pool.close_all()
+            except Exception as e:
+                logger.debug("GanglionRepositoryPool close error (non-fatal): %s", e)
+
         # Close embedding engine (releases Gemini httpx transport → prevents CLOSE_WAIT)
         try:
             self.embeddings.close()
@@ -602,14 +609,20 @@ class ClawFactory:
             except Exception as e:
                 logger.warning("GapAnalyzer creation failed (non-fatal): %s", e)
 
-        # ── Ganglion repository pool (Path C Fix 2) ────────────────
+        # -- Ganglion repository pool (Path C Fix 2) ----------------
         # Federation returns methodologies from sibling ganglion DBs,
         # but outcomes need to be written back to the *source* ganglion
         # so those rows can mature organically.  The pool caches one
         # write-mode engine per ganglion for the lifetime of this ctx.
-        from claw.memory.ganglion_pool import GanglionRepositoryPool
-        primary_db_abs = str(Path(config.database.db_path).resolve())
-        ganglion_pool = GanglionRepositoryPool(primary_db_path=primary_db_abs)
+        ganglion_pool = None
+        if config.instances.enabled:
+            from claw.memory.ganglion_pool import GanglionRepositoryPool
+            primary_db_abs = str(Path(config.database.db_path).resolve())
+            ganglion_pool = GanglionRepositoryPool(primary_db_path=primary_db_abs)
+            # Inject into SemanticMemory so record_outcome routes to correct DB
+            if hasattr(search.semantic_memory, "set_ganglion_pool"):
+                search.semantic_memory.set_ganglion_pool(ganglion_pool)
+            logger.info("GanglionRepositoryPool created for federation write-back")
 
         # ── Assemble context ───────────────────────────────────────
         ctx = ClawContext(

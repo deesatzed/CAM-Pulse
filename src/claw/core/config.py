@@ -269,12 +269,20 @@ class MiningRecoveryConfig(BaseModel):
     min_context_headroom_pct: float = 0.20
 
 
+class DomainBrainConfig(BaseModel):
+    """Configuration for an application-domain ganglion (medical, finance, etc.)."""
+    ganglion_name: str = ""
+    keywords: list[str] = []
+    min_cluster_size: int = 5  # Minimum repos to auto-provision a ganglion
+
+
 class MiningConfig(BaseModel):
     """Mining and serialization configuration."""
     extra_code_extensions: list[str] = []  # e.g. [".cpp", ".rb", ".swift"]
     extra_skip_dirs: list[str] = []        # e.g. ["migrations", "vendor"]
     brains: dict[str, BrainConfig] = Field(default_factory=_default_brains)
     recovery: MiningRecoveryConfig = Field(default_factory=MiningRecoveryConfig)
+    domain_brains: dict[str, DomainBrainConfig] = Field(default_factory=dict)
 
 
 class GovernanceConfig(BaseModel):

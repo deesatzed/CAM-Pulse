@@ -396,7 +396,7 @@ class TestMicroClaw:
             def __init__(self, repository):
                 self.repository = repository
 
-            async def record_outcome(self, methodology_id, success, retrieval_relevance=0.5, **kwargs):
+            async def record_outcome(self, methodology_id, success, retrieval_relevance=0.5, source_db_path=None):
                 await self.repository.update_methodology_outcome(methodology_id, success)
 
         ctx.semantic_memory = SemanticStub(ctx.repository)
@@ -451,7 +451,7 @@ class TestMicroClaw:
             def __init__(self, repository):
                 self.repository = repository
 
-            async def record_outcome(self, methodology_id, success, retrieval_relevance=0.5, **kwargs):
+            async def record_outcome(self, methodology_id, success, retrieval_relevance=0.5, source_db_path=None):
                 await self.repository.update_methodology_outcome(methodology_id, success)
 
         ctx.semantic_memory = SemanticStub(ctx.repository)

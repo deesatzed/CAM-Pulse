@@ -260,7 +260,7 @@ What it does:
 Syntax:
 
 ```bash
-cam enhance <repo> [--mode attended|supervised|autonomous] [--max-tasks N] [--battery] [--dry-run]
+cam enhance <repo> [--mode attended|supervised|autonomous] [--max-tasks N] [--battery] [--dry-run] [--task-id <uuid>]
 ```
 
 Key options:
@@ -268,12 +268,19 @@ Key options:
 - `--max-tasks`: cap the number of tasks processed
 - `--battery`: use the full evaluation battery first
 - `--dry-run`: preview tasks without executing changes
+- `--task-id <uuid>`: target a specific pending task id instead of the highest-priority task. Skips the evaluate/plan phases and runs exactly one cycle against that task. The task must already exist in `pending` state (created by `cam ab-test start`, manual seeding, or a prior evaluate run).
 
 Example use case:
 You want CAM to propose and then execute a bounded improvement pass on an app.
 
 ```bash
 cam enhance /Users/o2satz/projects/my-app --mode attended --max-tasks 3
+```
+
+Targeted example: execute one specific pending task you seeded earlier:
+
+```bash
+cam enhance /Users/o2satz/projects/my-app --task-id 3f1e4b2c-9a21-4e5d-8c77-baf012345678
 ```
 
 ## `cam fleet-enhance`

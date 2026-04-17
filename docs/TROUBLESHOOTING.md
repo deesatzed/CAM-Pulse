@@ -267,6 +267,59 @@ Known pre-existing issues that do not affect core functionality:
 
 ---
 
+## A/B Testing
+
+### A/B sample counts stay at 0 after running tasks
+
+**Cause**: The `prompt_variants` table has no `knowledge_ablation` rows, so `cycle.py` sets `self._ablation_label = None` and never writes to `ab_quality_samples`.
+
+**Fix**: Seed the variants once per instance:
+
+```bash
+.venv/bin/cam ab-test start
+.venv/bin/cam ab-test status    # should show control + variant at 0 samples
+```
+
+After this, any task run through `MicroClaw` (including `cam enhance`) will pick a variant and record a quality sample on completion.
+
+**Verify**:
+
+```bash
+sqlite3 data/claw.db "SELECT variant_name, sample_count FROM prompt_variants WHERE evolution_target='knowledge_ablation';"
+```
+
+---
+
+## Lifecycle / Governance
+
+### "Never applied" methodologies never demote
+
+**Symptom**: `cam learn proof` shows methodologies with retrieved ≥ 5 and applied = 0, but `cam govern sweep` never transitions them out of `viable`.
+
+**Cause (legacy)**: The old `viable → declining` rule required `failure_count > success_count AND retrieval_count >= 3`. Zombies have `failure_count == 0` (they were never applied, so they never failed), so the rule could not fire.
+
+**Fix**: The zombie demotion rule (added in [Unreleased]) uses the attribution log directly. Run a sweep:
+
+```bash
+.venv/bin/cam govern sweep
+```
+
+**Note on seed methodologies**: `origin:seed` methodologies are **always protected** from the zombie rule — they are curated archetypes meant to persist even when unused. If every "never applied" methodology in your proof report is seeded, this is expected behaviour, not a bug. See `docs/GOVERNANCE_TUNING.md` § *Zombie Demotion Rule* for the full logic.
+
+### `cam govern sweep` crashes with `AttributeError: 'GovernanceReport' object has no attribute 'lifecycle_swept'`
+
+**Cause**: Pre-0.8.2 CLI referenced a field that never existed on `GovernanceReport`. The actual field is `lifecycle_transitions` (dict).
+
+**Fix**: Fixed in [Unreleased]. Pull latest and reinstall:
+
+```bash
+git pull
+.venv/bin/pip install -e .
+.venv/bin/cam govern sweep
+```
+
+---
+
 ## Database
 
 ### "Database is locked"

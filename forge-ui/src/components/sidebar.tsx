@@ -36,6 +36,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/knowledge", label: "Knowledge", icon: "K" },
       { href: "/knowledge/components", label: "Components", icon: "C" },
       { href: "/knowledge/gaps", label: "Gap Heatmap", icon: "G" },
+      { href: "/knowledge/attribution", label: "Attribution", icon: "A" },
       { href: "/federation", label: "Federation", icon: "F" },
     ],
   },

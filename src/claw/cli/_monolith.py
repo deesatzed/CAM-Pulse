@@ -191,10 +191,10 @@ def _required_api_keys_for_command(config: Any, command_name: str) -> list[tuple
     command = command_name.strip().lower()
     requirements: list[tuple[str, str]] = []
 
-    if command in {"mine", "mine-workspace", "mine-self", "ideate"}:
+    if command in {"mine", "mine-workspace", "mine-self", "mine-all", "ideate"}:
         requirements.append(("OPENROUTER_API_KEY", "OpenRouter LLM access"))
 
-    if command in {"mine", "mine-workspace", "mine-self"} and _uses_remote_gemini_embeddings(config):
+    if command in {"mine", "mine-workspace", "mine-self", "mine-all"} and _uses_remote_gemini_embeddings(config):
         key_name = getattr(config.embeddings, "api_key_env", "") or "GOOGLE_API_KEY"
         requirements.append((str(key_name), "Gemini embeddings for methodology persistence"))
 
@@ -210,7 +210,7 @@ def _required_api_keys_for_command(config: Any, command_name: str) -> list[tuple
 
 def _select_live_llm_model(config: Any, command_name: str) -> str:
     command = command_name.strip().lower()
-    if command in {"mine", "mine-workspace", "mine-self"}:
+    if command in {"mine", "mine-workspace", "mine-self", "mine-all"}:
         for agent_name in ("claude", "gemini", "codex", "grok"):
             agent_cfg = config.agents.get(agent_name)
             if agent_cfg and agent_cfg.enabled and agent_cfg.model:
@@ -290,7 +290,7 @@ async def _run_live_key_checks(config: Any, command_name: str) -> list[dict[str,
         finally:
             await llm_client.close()
 
-    if command in {"mine", "mine-workspace", "mine-self"} and _uses_remote_gemini_embeddings(config):
+    if command in {"mine", "mine-workspace", "mine-self", "mine-all"} and _uses_remote_gemini_embeddings(config):
         try:
             engine = EmbeddingEngine(config.embeddings)
             vector = engine.encode("cam keycheck live probe")
@@ -3445,11 +3445,18 @@ def enhance(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview planned tasks without writing tasks or executing agents"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+    task_id: Optional[str] = typer.Option(
+        None,
+        "--task-id",
+        help="Target a specific pending task id instead of the highest-priority task. "
+             "Skips evaluate/plan phases and runs exactly one cycle against that task.",
+    ),
 ) -> None:
     """Enhance a repository: evaluate, plan, dispatch, verify, learn.
 
     Runs the full MesoClaw pipeline on the target repo.
     Use --battery to run the full 18-prompt evaluation battery.
+    Use --task-id <uuid> to execute one specific pending task.
     """
     _setup_logging(verbose)
 
@@ -3465,7 +3472,7 @@ def enhance(
     if battery:
         asyncio.run(_enhance_battery_async(repo_path, config, mode, max_tasks, dry_run))
     else:
-        asyncio.run(_enhance_async(repo_path, config, mode, max_tasks, dry_run))
+        asyncio.run(_enhance_async(repo_path, config, mode, max_tasks, dry_run, task_id=task_id))
 
 
 async def _enhance_async(
@@ -3474,6 +3481,7 @@ async def _enhance_async(
     mode: str,
     max_tasks: int,
     dry_run: bool = False,
+    task_id: Optional[str] = None,
 ) -> None:
     from claw.core.factory import ClawFactory
     from claw.core.models import Project
@@ -3503,6 +3511,32 @@ async def _enhance_async(
             console.print("[red]No agents available. Enable at least one agent in claw.toml.[/red]")
             return
         if not dry_run and not _print_workspace_execution_preflight(ctx, "Enhancement"):
+            return
+
+        # Targeted-task fast path: skip evaluate/plan, run one cycle against task_id.
+        if task_id:
+            targeted = await ctx.repository.get_task(task_id)
+            if targeted is None:
+                console.print(f"[red]Task id not found: {task_id}[/red]")
+                return
+            from claw.core.models import TaskStatus as _TS
+            if targeted.status != _TS.PENDING:
+                console.print(
+                    f"[red]Task {task_id} has status {targeted.status.value} (expected PENDING).[/red]"
+                )
+                return
+            console.print(f"\n[cyan]Targeted task mode[/cyan] — running one cycle against: {targeted.title[:80]}")
+            if dry_run:
+                console.print("[yellow]Dry run enabled: no agents executed.[/yellow]")
+                return
+            micro = MicroClaw(ctx=ctx, project_id=project.id, target_task_id=task_id)
+            cycle_result = await micro.run_cycle()
+            if cycle_result.success:
+                duration = cycle_result.duration_seconds or 0
+                console.print(f"[green]completed[/green] ({duration:.1f}s)")
+            else:
+                console.print("[yellow]failed[/yellow]")
+            _display_task_result(cycle_result)
             return
 
         # Phase 1: Evaluate
@@ -6502,6 +6536,251 @@ def mine_workspace(
         raise typer.Exit(124)
 
 
+@app.command(name="mine-all")
+def mine_all(
+    directory: str = typer.Argument(..., help="Root directory containing repos to mine"),
+    batch_size: int = typer.Option(10, "--batch-size", "-b", help="Repos per mining batch"),
+    depth: int = typer.Option(8, "--depth", "-d", help="Max directory depth for repo discovery"),
+    skip_known: bool = typer.Option(True, "--skip-known/--no-skip-known", help="Skip repos already mined when unchanged"),
+    force_rescan: bool = typer.Option(False, "--force-rescan", help="Ignore mining ledger and rescan all repos"),
+    max_repos: int = typer.Option(200, "--max-repos", help="Maximum total repos to mine"),
+    max_minutes: int = typer.Option(60, "--max-minutes", help="Wall-clock time guardrail"),
+    live_keycheck: bool = typer.Option(True, "--live-keycheck/--no-live-keycheck", help="Validate required provider keys"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Smart bulk mining with 5-phase pipeline: scan -> preview -> schema -> mine -> report.
+
+    Phase 1 SCAN: discover repos, classify by domain, check ledger (free, no tokens)
+    Phase 2 PREVIEW: Rich table with stats, user gate (free)
+    Phase 3 SCHEMA: suggest domain ganglia for clusters >= 5 repos (free)
+    Phase 4 MINE: batched mining with live progress, checkpointing (tokens spent)
+    Phase 5 REPORT: before/after coverage delta, top discoveries, cost summary
+
+    Examples:
+        cam mine-all /Volumes/WS4TB/repo412sn --batch-size 10 -v
+        cam mine-all ~/projects --max-repos 50 --depth 4
+    """
+    _setup_logging(verbose)
+
+    dir_path = _resolve_operator_path(directory)
+    if not dir_path.exists() or not dir_path.is_dir():
+        console.print(f"[red]Directory does not exist: {dir_path}[/red]")
+        raise typer.Exit(1)
+
+    from claw.core.config import load_config
+
+    cfg = load_config(Path(config) if config else None)
+    _fail_if_missing_api_keys(cfg, "mine-all")
+    if live_keycheck:
+        _fail_if_live_key_checks_fail(cfg, "mine-all")
+
+    try:
+        asyncio.run(asyncio.wait_for(
+            _mine_all_async(
+                dir_path, batch_size, depth, skip_known, force_rescan,
+                max_repos, config,
+            ),
+            timeout=max_minutes * 60,
+        ))
+    except TimeoutError:
+        console.print(f"[red]Mining timed out after {max_minutes} minute(s)[/red]")
+        raise typer.Exit(124)
+
+
+async def _mine_all_async(
+    base_dir: Path,
+    batch_size: int,
+    max_depth: int,
+    skip_known: bool,
+    force_rescan: bool,
+    max_repos: int,
+    config_path: Optional[str],
+) -> None:
+    """5-phase bulk mining pipeline."""
+    from claw.core.factory import ClawFactory
+    from claw.miner import (
+        RepoScanLedger,
+        _discover_repos,
+        classify_repo_domain,
+        RepoProfile,
+    )
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        ledger_path = Path(ctx.config.database.db_path).parent / "mining_ledger.json"
+        ledger = RepoScanLedger(ledger_path)
+
+        # ── PHASE 1: SCAN ─────────────────────────────────────────
+        console.print("\n[bold]Phase 1: SCAN[/bold] — Discovering repos...")
+        candidates = _discover_repos(base_dir, max_depth=max_depth, config=ctx.config)
+        console.print(f"  Found [cyan]{len(candidates)}[/cyan] repos under {base_dir}")
+
+        # Classify + profile each candidate
+        profiles: list[RepoProfile] = []
+        for cand in candidates:
+            should_mine, reason = ledger.should_mine(
+                cand, skip_known=skip_known, force_rescan=force_rescan,
+            )
+
+            # Read README for domain classification
+            readme_text = ""
+            for readme_name in ("README.md", "readme.md", "README.rst", "README"):
+                readme_path = cand.path / readme_name
+                if readme_path.exists():
+                    try:
+                        readme_text = readme_path.read_text(encoding="utf-8", errors="ignore")[:4000]
+                    except (OSError, UnicodeDecodeError):
+                        pass
+                    break
+
+            domain = classify_repo_domain(cand.path, readme_text)
+
+            # Simple yield score: file count * recency * gap bonus
+            recency_bonus = 1.0 if cand.last_commit_ts > (_time.time() - 365 * 86400) else 0.5
+            yield_score = min(1.0, (cand.file_count / 100) * recency_bonus)
+
+            profile = RepoProfile(
+                candidate=cand,
+                application_domain=domain,
+                yield_score=yield_score,
+                ledger_status="unchanged" if not should_mine else reason,
+            )
+            profiles.append(profile)
+
+        # Filter to mineable repos
+        mineable = [p for p in profiles if p.ledger_status not in ("unchanged", "content-duplicate")]
+        mineable.sort(key=lambda p: p.yield_score, reverse=True)
+        mineable = mineable[:max_repos]
+
+        console.print(
+            f"  Mineable: [green]{len(mineable)}[/green]  |  "
+            f"Skipped (unchanged): [yellow]{len(profiles) - len(mineable)}[/yellow]"
+        )
+
+        if not mineable:
+            console.print("\n[yellow]No new or changed repos to mine.[/yellow]")
+            return
+
+        # ── PHASE 2: PREVIEW ───────────────────────────────────────
+        console.print("\n[bold]Phase 2: PREVIEW[/bold]")
+        table = Table(show_lines=True, title="Repos to Mine")
+        table.add_column("#", width=3, justify="right")
+        table.add_column("Repo", style="cyan", max_width=40)
+        table.add_column("Domain", width=14)
+        table.add_column("Files", justify="right", width=6)
+        table.add_column("Size", justify="right", width=8)
+        table.add_column("Yield", justify="right", width=6)
+        table.add_column("Status", width=10)
+
+        for i, p in enumerate(mineable[:50], 1):
+            size = f"{p.candidate.total_bytes / 1024:.0f}KB" if p.candidate.total_bytes < 1024 * 1024 else f"{p.candidate.total_bytes / (1024 * 1024):.1f}MB"
+            table.add_row(
+                str(i),
+                p.candidate.name,
+                p.application_domain,
+                str(p.candidate.file_count),
+                size,
+                f"{p.yield_score:.2f}",
+                p.ledger_status,
+            )
+
+        console.print(table)
+
+        # ── PHASE 3: SCHEMA ────────────────────────────────────────
+        console.print("\n[bold]Phase 3: SCHEMA[/bold] — Domain ganglion suggestions")
+        domain_counts: dict[str, int] = {}
+        for p in mineable:
+            domain_counts[p.application_domain] = domain_counts.get(p.application_domain, 0) + 1
+
+        suggested_ganglia: list[str] = []
+        for domain, count in sorted(domain_counts.items(), key=lambda x: -x[1]):
+            marker = ""
+            if count >= 5 and domain != "general":
+                suggested_ganglia.append(domain)
+                marker = " [green](ganglion suggested)[/green]"
+            console.print(f"  {domain}: {count} repos{marker}")
+
+        # ── PHASE 4: MINE ──────────────────────────────────────────
+        console.print(f"\n[bold]Phase 4: MINE[/bold] — Mining {len(mineable)} repos in batches of {batch_size}")
+
+        total_findings = 0
+        total_tokens = 0
+        total_cost = 0.0
+        mined_count = 0
+        errors: list[str] = []
+
+        for batch_start in range(0, len(mineable), batch_size):
+            batch = mineable[batch_start:batch_start + batch_size]
+            batch_end = batch_start + len(batch)
+            console.print(
+                f"\n  [bold]Batch {batch_start // batch_size + 1}[/bold] "
+                f"(repos {batch_start + 1}-{batch_end} of {len(mineable)})"
+            )
+
+            for p in batch:
+                cand = p.candidate
+                try:
+                    console.print(f"    Mining {cand.name}...", end=" ")
+
+                    # Use brain hint for domain if a domain ganglion exists
+                    brain_hint = None
+                    if p.application_domain in suggested_ganglia:
+                        brain_hint = f"domain-{p.application_domain}"
+
+                    result = await ctx.miner.mine_repo(
+                        repo_path=str(cand.path),
+                        repo_name=cand.name,
+                        target_project_id=None,
+                        brain=brain_hint,
+                    )
+
+                    findings = result.findings_count if hasattr(result, "findings_count") else len(getattr(result, "findings", []))
+                    tokens = result.total_tokens if hasattr(result, "total_tokens") else 0
+                    cost = result.cost_usd if hasattr(result, "cost_usd") else 0.0
+
+                    total_findings += findings
+                    total_tokens += tokens
+                    total_cost += cost
+                    mined_count += 1
+
+                    # Record in ledger
+                    ledger.record_result(cand, result)
+
+                    console.print(f"[green]{findings} findings[/green] ({tokens:,} tokens)")
+
+                except Exception as e:
+                    error_msg = f"{cand.name}: {e}"
+                    errors.append(error_msg)
+                    console.print(f"[red]FAILED: {e}[/red]")
+                    logger.warning("Mining failed for %s: %s", cand.name, e)
+
+        # ── PHASE 5: REPORT ────────────────────────────────────────
+        console.print(f"\n[bold]Phase 5: REPORT[/bold]")
+        console.print(f"  Repos mined: [green]{mined_count}[/green] / {len(mineable)}")
+        console.print(f"  Total findings: [cyan]{total_findings}[/cyan]")
+        console.print(f"  Total tokens: [yellow]{total_tokens:,}[/yellow]")
+        if total_cost > 0:
+            console.print(f"  Estimated cost: ${total_cost:.4f}")
+
+        if errors:
+            console.print(f"\n  [red]Errors ({len(errors)}):[/red]")
+            for err in errors[:10]:
+                console.print(f"    - {err}")
+
+        if suggested_ganglia:
+            console.print(f"\n  Domain ganglia suggested: {', '.join(suggested_ganglia)}")
+
+        # Post-mining methodology count
+        total_methodologies = await ctx.repository.count_methodologies()
+        console.print(f"\n  Total knowledge base: [bold]{total_methodologies}[/bold] methodologies")
+
+    finally:
+        await ctx.close()
+
+
 def _mine_workspace_scan_only(
     dir_paths: list[Path],
     depth: int,
@@ -7390,7 +7669,12 @@ async def _govern_async(action: str, config_path: Optional[str]) -> None:
             console.print(f"  Dead collected:    {report.dead_collected}")
             console.print(f"  Quota culled:      {report.quota_culled}")
             console.print(f"  Episodes pruned:   {report.episodes_pruned}")
-            console.print(f"  Lifecycle swept:   {report.lifecycle_swept}")
+            transitions = report.lifecycle_transitions or {}
+            if transitions:
+                for key, count in transitions.items():
+                    console.print(f"  Lifecycle {key}: {count}")
+            else:
+                console.print("  Lifecycle transitions: none")
             console.print("[green]Sweep complete.[/green]")
 
         elif action == "gc":
@@ -8523,6 +8807,162 @@ async def _learn_backfill_components_async(
                 console.print(
                     f"  - {item.get('methodology_id', '?')[:8]}: {item.get('reason', 'unknown')}"
                 )
+    finally:
+        await ctx.close()
+
+
+@learn_app.command(name="proof")
+def learn_proof(
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum methodologies to show"),
+    json_output: bool = typer.Option(False, "--json", help="Output as machine-readable JSON"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable debug logging"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to claw.toml"),
+) -> None:
+    """Show system-wide attribution proof: retrieved -> applied -> succeeded funnel."""
+    _setup_logging(verbose)
+    asyncio.run(_learn_proof_async(limit, json_output, config))
+
+
+async def _learn_proof_async(
+    limit: int, json_output: bool, config_path: Optional[str]
+) -> None:
+    import json as json_mod
+
+    from claw.core.factory import ClawFactory
+
+    config_p = Path(config_path) if config_path else None
+    ctx = await ClawFactory.create(config_path=config_p)
+
+    try:
+        usage_stats = await ctx.repository.get_methodology_usage_stats()
+        methods = await ctx.repository.list_methodologies(limit=5000, include_dead=True)
+        method_map = {m.id: m for m in methods}
+
+        # Aggregate the system-wide funnel
+        total_retrieved = 0
+        total_applied = 0
+        total_success = 0
+        total_failure = 0
+        never_applied: list[dict] = []
+        per_methodology: list[dict] = []
+
+        for meth_id, stats in usage_stats.items():
+            retrieved = int(stats.get("retrieved_count", 0))
+            applied = int(stats.get("used_count", 0))
+            success = int(stats.get("attributed_success_count", 0))
+            failure = int(stats.get("attributed_failure_count", 0))
+
+            total_retrieved += retrieved
+            total_applied += applied
+            total_success += success
+            total_failure += failure
+
+            meth = method_map.get(meth_id)
+            title = meth.problem_description[:80].replace("\n", " ").replace("\r", "") if meth else meth_id[:8]
+            lifecycle = meth.lifecycle_state if meth else "unknown"
+            source_tag = "-"
+            if meth:
+                source_tag = next(
+                    (t.split(":", 1)[1] for t in (meth.tags or []) if t.startswith("source:")),
+                    "-",
+                )
+
+            entry = {
+                "methodology_id": meth_id,
+                "title": title,
+                "lifecycle": lifecycle,
+                "source": source_tag,
+                "retrieved": retrieved,
+                "applied": applied,
+                "success": success,
+                "failure": failure,
+                "applied_rate": applied / retrieved if retrieved > 0 else 0.0,
+                "success_rate": success / applied if applied > 0 else 0.0,
+                "avg_quality": stats.get("avg_quality_score"),
+                "avg_relevance": stats.get("avg_relevance_score"),
+            }
+            per_methodology.append(entry)
+
+            if retrieved > 0 and applied == 0:
+                never_applied.append(entry)
+
+        # Sort by total usage (retrieved desc)
+        per_methodology.sort(key=lambda e: e["retrieved"], reverse=True)
+
+        applied_rate = total_applied / total_retrieved if total_retrieved > 0 else 0.0
+        success_rate = total_success / total_applied if total_applied > 0 else 0.0
+        overall_conversion = total_success / total_retrieved if total_retrieved > 0 else 0.0
+
+        proof_data = {
+            "funnel": {
+                "total_retrieved": total_retrieved,
+                "total_applied": total_applied,
+                "total_success": total_success,
+                "total_failure": total_failure,
+                "applied_rate": round(applied_rate, 4),
+                "success_rate": round(success_rate, 4),
+                "overall_conversion": round(overall_conversion, 4),
+            },
+            "methodology_count": len(usage_stats),
+            "never_applied_count": len(never_applied),
+            "per_methodology": per_methodology[:limit],
+            "never_applied": never_applied[:limit],
+        }
+
+        if json_output:
+            print(json_mod.dumps(proof_data, indent=2, default=str))
+            return
+
+        # Rich table output
+        console.print("\n[bold]CAM Attribution Proof — System-Wide Funnel[/bold]")
+        console.print(
+            f"\n  Methodologies tracked: [bold]{len(usage_stats)}[/bold]"
+        )
+        console.print(
+            f"  Retrieved: [cyan]{total_retrieved}[/cyan]  →  "
+            f"Applied: [yellow]{total_applied}[/yellow] ({applied_rate:.1%})  →  "
+            f"Success: [green]{total_success}[/green] ({success_rate:.1%})"
+        )
+        if total_failure > 0:
+            console.print(f"  Failures: [red]{total_failure}[/red]")
+        console.print(
+            f"  Overall conversion (retrieved → success): [bold]{overall_conversion:.1%}[/bold]"
+        )
+
+        if per_methodology:
+            console.print(f"\n[bold]Top {min(limit, len(per_methodology))} Methodologies by Usage[/bold]")
+            table = Table(show_lines=True)
+            table.add_column("Methodology", style="cyan", max_width=48)
+            table.add_column("ID", width=8)
+            table.add_column("State", width=10)
+            table.add_column("Retrieved", justify="right")
+            table.add_column("Applied", justify="right")
+            table.add_column("Success", justify="right")
+            table.add_column("Apply%", justify="right")
+            table.add_column("Succ%", justify="right")
+
+            for entry in per_methodology[:limit]:
+                a_rate = f"{entry['applied_rate']:.0%}" if entry["retrieved"] > 0 else "-"
+                s_rate = f"{entry['success_rate']:.0%}" if entry["applied"] > 0 else "-"
+                table.add_row(
+                    entry["title"][:48],
+                    entry["methodology_id"][:8],
+                    entry["lifecycle"],
+                    str(entry["retrieved"]),
+                    str(entry["applied"]),
+                    str(entry["success"]),
+                    a_rate,
+                    s_rate,
+                )
+
+            console.print()
+            console.print(table)
+
+        if never_applied:
+            console.print(f"\n[yellow]Never Applied ({len(never_applied)} methodologies retrieved but never used):[/yellow]")
+            for entry in never_applied[:10]:
+                console.print(f"  - {entry['title'][:60]}  (retrieved {entry['retrieved']}x)")
+
     finally:
         await ctx.close()
 

@@ -1409,6 +1409,32 @@ class AgentInterface(ABC):
                     )
                     parts.extend(knowledge_parts)
 
+        # CAM-SEQ: inject ApplicationPacket guidance when available
+        _packets = getattr(context, "application_packets", []) if context else []
+        if _packets:
+            parts.append("\n## Structured Component Guidance (CAM-SEQ Packets)")
+            parts.append(
+                "The following pre-analyzed components have been matched to task slots. "
+                "Use these as structured implementation guidance."
+            )
+            for pkt in _packets[:4]:
+                pkt_lines = [
+                    f"### Slot: {pkt.slot.name} (job: {pkt.slot.abstract_job})",
+                    f"Selected component: {pkt.selected.component_id} "
+                    f"(confidence: {pkt.selected.confidence:.2f}, fit: {pkt.selected.fit_bucket.value})",
+                ]
+                if pkt.selected.why_fit:
+                    pkt_lines.append(f"Why selected: {'; '.join(pkt.selected.why_fit[:3])}")
+                for step in pkt.adaptation_plan[:3]:
+                    pkt_lines.append(f"  Adaptation: {step.title} {'[BLOCKING]' if step.blocking else ''}")
+                for gate in pkt.proof_plan[:3]:
+                    pkt_lines.append(f"  Proof gate: {gate.gate_type} {'(required)' if gate.required else ''}")
+                if pkt.negative_memory:
+                    pkt_lines.append(f"  Avoid: {'; '.join(pkt.negative_memory[:2])}")
+                if pkt.risk_notes:
+                    pkt_lines.append(f"  Risk: {'; '.join(pkt.risk_notes[:2])}")
+                parts.append("\n".join(pkt_lines))
+
         if self.can_use_internal_workspace_executor():
             # Include workspace file contents so the model knows what exists
             ws = self._resolve_workspace(task)

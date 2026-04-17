@@ -6,6 +6,21 @@ All notable changes to CAM-PULSE are documented here.
 
 ## [Unreleased]
 
+### Added — Targeted task execution
+- **`cam enhance --task-id <uuid>`** (`src/claw/cli/_monolith.py`, `src/claw/cycle.py`): run exactly one cycle against a specific pending task id instead of the highest-priority task. Skips the evaluate/plan phases entirely. Used when you want to exercise a pre-seeded task (for example, an A/B test task) without CAM re-ranking the queue.
+- `MicroClaw.__init__` accepts `target_task_id: Optional[str] = None`. The first call to `grab()` consumes it (fetches that task by id, resets to `None`); subsequent calls fall back to `get_next_task()`.
+
+### Added — Zombie lifecycle rule
+- **Zombie demotion** (`src/claw/memory/lifecycle.py`): `viable` methodologies that have been retrieved ≥ `ZOMBIE_RETRIEVED_MINIMUM` (default 5) but have `used_count == 0` and `attributed_count == 0` transition to `declining`. They clog retrieval slots without earning their keep. Uses the attribution log (`methodology_usage_log`), independent of legacy `success_count`/`failure_count` bandit columns.
+- **`origin:seed` protection preserved**: seeded archetype methodologies are never demoted by the zombie rule, consistent with existing seed protection.
+- 8 new tests in `tests/test_lifecycle_zombie.py` covering all branches (viable zombie, below threshold, seed protection, thriving, declining, dead, attributed>0, healthy usage).
+
+### Fixed — Governance sweep output crash
+- **`cam govern sweep`** (`src/claw/cli/_monolith.py`): was crashing with `AttributeError: 'GovernanceReport' object has no attribute 'lifecycle_swept'`. The actual field is `lifecycle_transitions` (dict keyed by `"old->new"`). CLI now iterates the dict and prints each transition count, or `"Lifecycle transitions: none"` when empty.
+
+### Documented — A/B knowledge ablation prerequisite
+- Operator docs now call out that `cam ab-test start` must be run once to seed the `prompt_variants` table with `knowledge_ablation` control/variant rows. Without those rows, `cycle.py` sets `self._ablation_label = None` and no rows are written to `ab_quality_samples`. See `docs/AB_KNOWLEDGE_ABLATION_SHOWPIECE.md` and `docs/TROUBLESHOOTING.md`.
+
 ---
 
 ## [0.8.1] - 2026-03-31

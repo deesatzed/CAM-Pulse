@@ -1012,6 +1012,44 @@ export function getGapsTrend(): Promise<{ summary: string; snapshots: GapTrendSn
 }
 
 // ---------------------------------------------------------------------------
+// Attribution
+// ---------------------------------------------------------------------------
+
+export interface AttributionMethodologyEntry {
+  methodology_id: string;
+  title: string;
+  lifecycle: string;
+  retrieved: number;
+  applied: number;
+  success: number;
+  failure: number;
+  applied_rate: number;
+  success_rate: number;
+  avg_quality: number | null;
+  avg_relevance: number | null;
+}
+
+export interface AttributionProof {
+  funnel: {
+    total_retrieved: number;
+    total_applied: number;
+    total_success: number;
+    total_failure: number;
+    applied_rate: number;
+    success_rate: number;
+    overall_conversion: number;
+  };
+  methodology_count: number;
+  never_applied_count: number;
+  per_methodology: AttributionMethodologyEntry[];
+  never_applied: AttributionMethodologyEntry[];
+}
+
+export function getAttributionProof(): Promise<AttributionProof> {
+  return fetchAPI("/api/attribution/proof");
+}
+
+// ---------------------------------------------------------------------------
 // Evolution
 // ---------------------------------------------------------------------------
 

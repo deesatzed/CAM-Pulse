@@ -127,6 +127,23 @@ What this means: CAG (Cache-Augmented Generation) pre-computes your knowledge ba
 
 What this means: CAM uses everything it has learned to improve your project — it analyzes code, suggests changes, and applies improvements based on patterns mined from other repos.
 
+To target one specific pending task by id (skips evaluate/plan):
+
+```bash
+.venv/bin/cam enhance /path/to/your-project --task-id <pending-task-uuid>
+```
+
+### Optional: seed the A/B knowledge ablation experiment
+
+If you want CAM to record whether knowledge injection actually helps on your workload:
+
+```bash
+.venv/bin/cam ab-test start     # seed control + variant rows (one-time)
+.venv/bin/cam ab-test status    # confirm both variants exist
+```
+
+After this, every `cam enhance` cycle writes a row to `ab_quality_samples` with the variant it used. See [docs/AB_KNOWLEDGE_ABLATION_SHOWPIECE.md](AB_KNOWLEDGE_ABLATION_SHOWPIECE.md).
+
 ---
 
 ## What's Next?

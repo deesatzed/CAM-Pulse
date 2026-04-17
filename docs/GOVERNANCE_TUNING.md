@@ -141,6 +141,61 @@ When over quota, governance culls in this order:
 
 ---
 
+## Zombie Demotion Rule
+
+**Added in [Unreleased].** A methodology is a "zombie" when the retriever keeps surfacing it but no agent ever applies it. These take up retrieval slots without earning their keep — they need to be demoted so healthier methodologies can compete for those slots.
+
+### Rule
+
+A `viable` methodology transitions to `declining` when **all** of the following hold:
+
+| Condition | Threshold |
+|---|---|
+| `retrieved_count` (from `methodology_usage_log`) | ≥ `ZOMBIE_RETRIEVED_MINIMUM` (default 5) |
+| `used_count` | `== 0` |
+| `attributed_count` | `== 0` |
+| `origin:seed` tag | **absent** (seed archetypes are always protected) |
+| current state | `viable` only (thriving/declining/dormant/dead handled by other rules) |
+
+### Why a separate rule
+
+The existing `viable → declining` path requires `failure_count > success_count AND retrieval_count >= 3`, which relies on the legacy bandit columns on the methodology row. Zombies have `failure_count == 0` (they were never applied, so they never failed), so that rule cannot fire. The zombie rule uses the **attribution log** (`methodology_usage_log`) directly, which is the source of truth for retrieve/use/attribute stages.
+
+### Tuning
+
+The threshold is a module constant in `src/claw/memory/lifecycle.py`:
+
+```python
+ZOMBIE_RETRIEVED_MINIMUM = 5
+```
+
+Raise it if your retriever surfaces methodologies very frequently and you want more runway before demotion. Lower it if you want aggressive pruning.
+
+### Verifying
+
+Check how many methodologies are currently zombies (candidates for the next sweep):
+
+```bash
+sqlite3 data/claw.db "
+  SELECT m.id, m.problem_description
+  FROM methodologies m
+  JOIN (
+    SELECT methodology_id,
+           SUM(CASE WHEN stage='retrieved_presented' THEN 1 ELSE 0 END) AS r,
+           SUM(CASE WHEN stage='used_in_outcome'     THEN 1 ELSE 0 END) AS u,
+           SUM(CASE WHEN stage='outcome_attributed'  THEN 1 ELSE 0 END) AS a
+    FROM methodology_usage_log
+    GROUP BY methodology_id
+  ) s ON s.methodology_id = m.id
+  WHERE m.lifecycle_state='viable'
+    AND s.r >= 5 AND s.u = 0 AND s.a = 0
+    AND (m.tags NOT LIKE '%origin:seed%' OR m.tags IS NULL);"
+```
+
+Run `cam govern sweep` to apply transitions.
+
+---
+
 ## Other Governance Settings
 
 ```toml

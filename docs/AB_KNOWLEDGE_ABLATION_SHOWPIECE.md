@@ -24,6 +24,23 @@ A blind A/B test measured whether CAM's 3,044-methodology knowledge base improve
 
 50/50 Bayesian allocation via `prompt_evolver.select_variant_for_invocation("knowledge_ablation")`. Neither the agent nor the orchestrator knows which arm a task is assigned to until after execution.
 
+> **Prerequisite — seed the variants once**
+>
+> Before any A/B samples can be collected, the `prompt_variants` table must contain `knowledge_ablation` rows (one control, one variant). Seed them with:
+>
+> ```bash
+> cam ab-test start
+> cam ab-test status    # should show two variants at 0 samples
+> ```
+>
+> Without these rows, `cycle.py` sets `self._ablation_label = None` and **no rows are written to `ab_quality_samples`**. This is a one-time setup per instance — the variants persist across cycles.
+>
+> To run one specific pending task against the A/B routing (rather than letting the priority queue pick), use:
+>
+> ```bash
+> cam enhance <repo> --task-id <pending-task-uuid>
+> ```
+
 ### Quality Measurement
 
 6-Dimensional SWE Quality Metric (weighted geometric mean):

@@ -2691,6 +2691,80 @@ async def api_gaps_trend() -> JSONResponse:
         return JSONResponse({"summary": "No coverage snapshots available", "snapshots": []})
 
 
+@app.get("/api/attribution/proof")
+async def api_attribution_proof() -> JSONResponse:
+    """System-wide attribution funnel: retrieved -> applied -> succeeded."""
+    st = await _ensure_state(app)
+    repo = st["repository"]
+    try:
+        usage_stats = await repo.get_methodology_usage_stats()
+        methods = await repo.list_methodologies(limit=5000, include_dead=True)
+        method_map = {m.id: m for m in methods}
+
+        total_retrieved = 0
+        total_applied = 0
+        total_success = 0
+        total_failure = 0
+        never_applied = []
+        per_methodology = []
+
+        for meth_id, stats in usage_stats.items():
+            retrieved = int(stats.get("retrieved_count", 0))
+            applied = int(stats.get("used_count", 0))
+            success = int(stats.get("attributed_success_count", 0))
+            failure = int(stats.get("attributed_failure_count", 0))
+
+            total_retrieved += retrieved
+            total_applied += applied
+            total_success += success
+            total_failure += failure
+
+            meth = method_map.get(meth_id)
+            title = meth.problem_description[:80].replace("\n", " ").replace("\r", "") if meth else meth_id[:8]
+            lifecycle = meth.lifecycle_state if meth else "unknown"
+
+            entry = {
+                "methodology_id": meth_id,
+                "title": title,
+                "lifecycle": lifecycle,
+                "retrieved": retrieved,
+                "applied": applied,
+                "success": success,
+                "failure": failure,
+                "applied_rate": round(applied / retrieved, 4) if retrieved > 0 else 0.0,
+                "success_rate": round(success / applied, 4) if applied > 0 else 0.0,
+                "avg_quality": stats.get("avg_quality_score"),
+                "avg_relevance": stats.get("avg_relevance_score"),
+            }
+            per_methodology.append(entry)
+            if retrieved > 0 and applied == 0:
+                never_applied.append(entry)
+
+        per_methodology.sort(key=lambda e: e["retrieved"], reverse=True)
+
+        applied_rate = total_applied / total_retrieved if total_retrieved > 0 else 0.0
+        success_rate = total_success / total_applied if total_applied > 0 else 0.0
+        overall_conversion = total_success / total_retrieved if total_retrieved > 0 else 0.0
+
+        return JSONResponse({
+            "funnel": {
+                "total_retrieved": total_retrieved,
+                "total_applied": total_applied,
+                "total_success": total_success,
+                "total_failure": total_failure,
+                "applied_rate": round(applied_rate, 4),
+                "success_rate": round(success_rate, 4),
+                "overall_conversion": round(overall_conversion, 4),
+            },
+            "methodology_count": len(usage_stats),
+            "never_applied_count": len(never_applied),
+            "per_methodology": per_methodology[:50],
+            "never_applied": never_applied[:20],
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.get("/api/evolution/ab-tests")
 async def api_evolution_ab_tests() -> JSONResponse:
     """List A/B tests from prompt_variants."""

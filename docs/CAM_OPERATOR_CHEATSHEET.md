@@ -313,6 +313,16 @@ Use this when:
 .venv/bin/cam enhance /path/to/repo --dry-run
 ```
 
+### Run one specific pending task (skip evaluate/plan)
+
+```bash
+.venv/bin/cam enhance /path/to/repo --task-id <pending-task-uuid>
+```
+
+Use this when:
+- you pre-seeded tasks (for example, `cam ab-test start` produced A/B tasks) and want to exercise a specific one
+- you want to bypass CAM's priority ranking and target a known task id
+
 ### Evidence audit after learning or execution
 
 ```bash
