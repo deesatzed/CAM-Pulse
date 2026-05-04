@@ -158,6 +158,15 @@ HARDCODED_CREDS_DIFF = """\
 +api_key = "sk-live-abc123def456"
 """
 
+FIM_TOKEN_DIFF = """\
+--- a/src/module.py
++++ b/src/module.py
+@@ -1,3 +1,5 @@
++def hello():
++    <fim-middle>return "world"
++    <endoftext>
+"""
+
 TODO_DIFF = """\
 --- a/src/feature.py
 +++ b/src/feature.py
@@ -316,6 +325,17 @@ class TestChaosCheck:
         cred_violations = [v for v in violations if "credential" in v["detail"].lower()]
         assert len(cred_violations) == 1
         assert cred_violations[0]["check"] == "chaos_check"
+
+    async def test_fim_token_leakage_detected(self):
+        """Leaked FIM/special tokens in diff trigger a violation."""
+        verifier = _make_verifier()
+        violations, recommendations = await verifier._check_chaos(FIM_TOKEN_DIFF)
+
+        assert len(violations) >= 1
+        fim_violations = [v for v in violations if "token" in v["detail"].lower()]
+        assert len(fim_violations) == 1
+        assert fim_violations[0]["check"] == "chaos_check"
+        assert "fim-middle" in fim_violations[0]["detail"].lower() or "endoftext" in fim_violations[0]["detail"].lower()
 
 
 # ===========================================================================
@@ -1314,3 +1334,82 @@ class TestRunTestsEnvironmentRecovery:
             assert passed is True
             assert "skipped" in output.lower()
             assert count == 0
+
+
+class TestDetectTestCommand:
+    """_detect_test_command should find pytest for common Python project layouts."""
+
+    def test_detects_pyproject_toml(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest]\n")
+        cmd, args = Verifier._detect_test_command(tmp_path)
+        assert cmd == "pytest"
+
+    def test_detects_tests_dir_with_test_files_no_config(self, tmp_path):
+        """Fallback: tests/ with test_*.py files but no pyproject.toml."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text("def test_one(): pass\n")
+        # No pyproject.toml, no setup.py, no requirements.txt
+        cmd, args = Verifier._detect_test_command(tmp_path)
+        assert cmd == "pytest"
+
+    def test_skips_empty_tests_dir(self, tmp_path):
+        """tests/ dir without test_*.py files → no runner."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "conftest.py").write_text("# just conftest\n")
+        cmd, args = Verifier._detect_test_command(tmp_path)
+        assert cmd is None
+
+    def test_skips_no_tests_at_all(self, tmp_path):
+        (tmp_path / "README.md").write_text("# Hello")
+        cmd, args = Verifier._detect_test_command(tmp_path)
+        assert cmd is None
+
+
+class TestSWEDimensionsD1:
+    """D1 (functional correctness) should catch environment_setup violations."""
+
+    def test_d1_zero_for_test_execution_violation(self):
+        verifier = _make_verifier()
+        vr = VerificationResult(
+            approved=False,
+            violations=[{"check": "test_execution", "detail": "Tests failed"}],
+            quality_score=0.5,
+            tests_after=3,
+        )
+        dims = verifier.compute_swe_dimensions(vr)
+        assert dims.functional_correctness == 0.0
+
+    def test_d1_zero_for_environment_setup_violation(self):
+        """environment_setup violations must also set D1=0.0."""
+        verifier = _make_verifier()
+        vr = VerificationResult(
+            approved=False,
+            violations=[{"check": "environment_setup", "detail": "ModuleNotFoundError"}],
+            quality_score=0.5,
+            tests_after=3,
+        )
+        dims = verifier.compute_swe_dimensions(vr)
+        assert dims.functional_correctness == 0.0
+
+    def test_d1_one_when_tests_pass(self):
+        verifier = _make_verifier()
+        vr = VerificationResult(
+            approved=True,
+            violations=[],
+            quality_score=1.0,
+            tests_after=5,
+        )
+        dims = verifier.compute_swe_dimensions(vr)
+        assert dims.functional_correctness == 1.0
+
+    def test_d1_half_when_no_tests_ran(self):
+        verifier = _make_verifier()
+        vr = VerificationResult(
+            approved=True,
+            violations=[],
+            quality_score=1.0,
+        )
+        dims = verifier.compute_swe_dimensions(vr)
+        assert dims.functional_correctness == 0.5

@@ -46,6 +46,61 @@ from claw.logging_config import set_context, clear_context
 
 logger = logging.getLogger("claw.cycle")
 
+# LLM special tokens that should never appear in generated source files.
+# Models (especially fill-in-the-middle models like Grok) sometimes leak these.
+_LLM_SPECIAL_TOKENS = re.compile(
+    r"</?(?:fim-(?:prefix|middle|suffix)|fim_(?:prefix|middle|suffix)|"
+    r"\|fim_(?:prefix|middle|suffix)\|"
+    r"|endoftext|pad|unk|mask|sep|cls|bos|eos)>",
+    re.IGNORECASE,
+)
+
+
+def _strip_llm_tokens(content: str) -> str:
+    """Remove leaked LLM special tokens from generated file content."""
+    return _LLM_SPECIAL_TOKENS.sub("", content)
+
+
+def _resolve_workspace_dir(
+    agents: dict[str, Any],
+    agent_id: str,
+    task_ctx: Any = None,
+) -> Optional[str]:
+    """Resolve workspace_dir with fallback chain.
+
+    Priority:
+    1. Agent's workspace_dir attribute
+    2. Task's repo_path (from task context)
+    3. Project's repo_path (from task context)
+
+    Returns None only if all three are unavailable.
+    """
+    # Try agent attribute first
+    agent = agents.get(agent_id)
+    ws = getattr(agent, "workspace_dir", None) if agent else None
+    if ws:
+        return ws
+
+    # Fallback: task's repo_path
+    if task_ctx is not None:
+        task = getattr(task_ctx, "task", None)
+        if task is not None:
+            task_repo = getattr(task, "repo_path", None)
+            if task_repo:
+                return str(task_repo)
+        # Fallback: project's repo_path (stored on task_ctx or task)
+        project = getattr(task_ctx, "project", None)
+        if project is not None:
+            proj_repo = getattr(project, "repo_path", None)
+            if proj_repo:
+                return str(proj_repo)
+
+    logger.warning(
+        "workspace_dir could not be resolved for agent '%s' — tests will be skipped",
+        agent_id,
+    )
+    return None
+
 
 def _snapshot_workspace(workspace_dir: Optional[str]) -> dict[str, str]:
     snapshot: dict[str, str] = {}
@@ -790,6 +845,7 @@ def _apply_structured_file_operations(
                         break
             if not isinstance(content, str):
                 return False, f"content_missing:{rel_path}"
+            content = _strip_llm_tokens(content)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         elif action == "append":
@@ -802,6 +858,7 @@ def _apply_structured_file_operations(
                         break
             if not isinstance(content, str):
                 return False, f"content_missing:{rel_path}"
+            content = _strip_llm_tokens(content)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("a", encoding="utf-8") as f:
                 f.write(content)
@@ -948,6 +1005,12 @@ class MicroClaw(ClawCycle):
         # Maps methodology_id -> source db_path for rows from federation.
         # Cleared at start of every task in evaluate().
         self._current_source_map: dict[str, str] = {}
+        # Failure learning system: lazy-initialized on first use
+        self._auto_fix_engine: Any = None
+        self._rl_escalation: Any = None
+        self._last_auto_fixes: list[str] = []
+        # Escalation-driven agent rotation state
+        self._last_escalation_decision: Any = None
 
     async def grab(self) -> Optional[Task]:
         """Get the next pending task for the project.
@@ -1010,6 +1073,21 @@ class MicroClaw(ClawCycle):
                 logger.warning(
                     "Error KB enrichment failed for task %s: %s", task.id, e
                 )
+
+        # B4: Surface failure knowledge as preventive hints
+        try:
+            fk_entries = await self.ctx.repository.get_failure_knowledge_for_context(
+                task_type=task.task_type,
+                project_id=self.project_id,
+                limit=5,
+            )
+            for fk in fk_entries:
+                forbidden.append(
+                    f"[PREVENTIVE] Avoid: {fk.get('error_signature', 'unknown')} — "
+                    f"{fk.get('prevention_hint', '')[:200]}"
+                )
+        except Exception as e:
+            logger.debug("Failure knowledge lookup failed: %s", e)
 
         # Query semantic memory for similar past solutions as hints
         hints: list[str] = []
@@ -1512,7 +1590,7 @@ class MicroClaw(ClawCycle):
             verification = await self.ctx.verifier.verify(
                 outcome=outcome,
                 task_context=task_ctx,
-                workspace_dir=getattr(self.ctx.agents.get(agent_id), "workspace_dir", None),
+                workspace_dir=_resolve_workspace_dir(self.ctx.agents, agent_id, task_ctx),
             )
         else:
             # Fallback: basic checks if verifier unavailable or execution failed
@@ -1562,7 +1640,7 @@ class MicroClaw(ClawCycle):
                 on_step(name, detail)
 
         # Snapshot workspace CONTENT before first attempt for restoration
-        workspace_dir = getattr(self.ctx.agents.get(agent_id), "workspace_dir", None)
+        workspace_dir = _resolve_workspace_dir(self.ctx.agents, agent_id, task_ctx)
         content_snapshot = _snapshot_workspace_content(workspace_dir)
 
         last_verification: Optional[VerificationResult] = None
@@ -1590,7 +1668,21 @@ class MicroClaw(ClawCycle):
                     _restore_workspace(workspace_dir, content_snapshot)
                     logger.info("Workspace restored for correction attempt %d", attempt + 1)
 
+                # Query ErrorKB for a known resolution hint
+                known_fix_hint: str | None = None
+                if self.ctx.error_kb is not None:
+                    error_sig = last_result[2].failure_reason if last_result else None
+                    if error_sig:
+                        try:
+                            known_fix_hint = await self.ctx.error_kb.get_resolution_for_error(
+                                error_sig, self.project_id,
+                            )
+                        except Exception as e:
+                            logger.debug("ErrorKB resolution lookup failed: %s", e)
+
                 # Build correction feedback from the previous failure
+                auto_fixes = self._last_auto_fixes.copy()
+                self._last_auto_fixes = []  # Reset for next attempt
                 feedback = CorrectionFeedback(
                     attempt_number=attempt,
                     violations=last_verification.violations if last_verification else [],
@@ -1601,6 +1693,8 @@ class MicroClaw(ClawCycle):
                     quality_score=last_verification.quality_score or 0.0 if last_verification else 0.0,
                     failure_reason=last_result[2].failure_reason if last_result else None,
                     failure_detail=last_result[2].failure_detail if last_result else None,
+                    known_fix_hint=known_fix_hint,
+                    auto_fixes_applied=auto_fixes,
                 )
 
                 # Inject into task context and context brief for prompt builder
@@ -1637,6 +1731,30 @@ class MicroClaw(ClawCycle):
                         len(repaired), ", ".join(repaired),
                     )
 
+            # --- Proactive auto-fix: apply deterministic fixes BEFORE first verification ---
+            # This catches missing imports, FIM tokens, etc. before the sentinel runs tests,
+            # preventing false approvals when workspace_dir is valid but code has fixable errors.
+            if (
+                attempt == 0
+                and workspace_dir
+                and getattr(self.ctx.config.orchestrator, "auto_fix_enabled", True)
+            ):
+                if self._auto_fix_engine is None:
+                    from claw.memory.auto_fix import build_default_engine
+                    self._auto_fix_engine = build_default_engine()
+
+                # Run a proactive scan — bypass error_pattern matching so all rules
+                # are tried against file content (catches FIM tokens, missing imports, etc.)
+                proactive_result = self._auto_fix_engine.try_auto_fix(
+                    workspace_dir, "", None, proactive=True,
+                )
+                if proactive_result.fixes_applied:
+                    logger.info(
+                        "Proactive auto-fix applied %d fixes before verification: %s",
+                        len(proactive_result.fixes_applied),
+                        "; ".join(proactive_result.fixes_applied),
+                    )
+
             _step("verify", "Running verification checks...")
             verification_tuple = await self.verify(result)
             agent_id_v, task_ctx_v, outcome_v, verification = verification_tuple
@@ -1661,6 +1779,62 @@ class MicroClaw(ClawCycle):
                         cycle_level="micro",
                     )
                 return verification_tuple
+
+            # --- Auto-fix: try deterministic fixes before consuming a correction attempt ---
+            if (
+                workspace_dir
+                and getattr(self.ctx.config.orchestrator, "auto_fix_enabled", True)
+                and _is_correctable_failure(outcome_v, verification)
+            ):
+                if self._auto_fix_engine is None:
+                    from claw.memory.auto_fix import build_default_engine
+                    self._auto_fix_engine = build_default_engine()
+
+                error_text = verification.test_output or ""
+                if outcome_v.failure_detail:
+                    error_text += "\n" + outcome_v.failure_detail
+                auto_result = self._auto_fix_engine.try_auto_fix(
+                    workspace_dir, error_text, verification.violations,
+                )
+
+                if auto_result.fixes_applied:
+                    logger.info(
+                        "Auto-fix applied %d fixes for task %s: %s",
+                        len(auto_result.fixes_applied),
+                        task_ctx.task.id,
+                        "; ".join(auto_result.fixes_applied),
+                    )
+                    # Re-verify without consuming a correction attempt
+                    re_verify_tuple = await self.verify(result)
+                    _, _, _, re_verification = re_verify_tuple
+                    if re_verification.approved:
+                        logger.info(
+                            "Auto-fix resolved task %s (fixes: %s)",
+                            task_ctx.task.id,
+                            ", ".join(auto_result.fixes_applied),
+                        )
+                        await self.ctx.repository.log_episode(
+                            session_id=self.session_id,
+                            event_type="auto_fix_succeeded",
+                            event_data={
+                                "task_id": task_ctx.task.id,
+                                "fixes": auto_result.fixes_applied,
+                                "files_modified": auto_result.files_modified,
+                            },
+                            project_id=self.project_id,
+                            task_id=task_ctx.task.id,
+                            cycle_level="micro",
+                        )
+                        return re_verify_tuple
+                    else:
+                        # Auto-fix didn't fully resolve — record what was applied
+                        # so the correction prompt can reference it
+                        logger.info(
+                            "Auto-fix partial for task %s — falling through to correction",
+                            task_ctx.task.id,
+                        )
+                        # Store applied fixes for the next correction feedback
+                        self._last_auto_fixes = auto_result.fixes_applied
 
             # Check if the failure is correctable
             if not _is_correctable_failure(outcome_v, verification):
@@ -1698,17 +1872,24 @@ class MicroClaw(ClawCycle):
         return (agent_id, task_ctx, last_result[2] if last_result else TaskOutcome(), last_verification or VerificationResult())
 
     async def run_cycle(self, on_step=None) -> CycleResult:
-        """Execute one complete cycle with inner correction loop.
+        """Execute one complete cycle with inner correction loop and escalation retry.
 
         Overrides the base ClawCycle.run_cycle() to use _act_with_correction()
         instead of separate act() + verify() calls. This allows the agent to
         self-correct when verification finds fixable issues.
+
+        Escalation retry: if learn() sets _last_escalation_decision to ROTATE_AGENT,
+        the cycle loops back to grab→evaluate→decide→act with the failing agent
+        excluded. Up to 3 escalation retries (matching max_rotations + 1).
         """
+        MAX_ESCALATION_RETRIES = 3
+
         def _step(name: str, detail: str = "") -> None:
             if on_step is not None:
                 on_step(name, detail)
 
         start = time.monotonic()
+        escalation_retries = 0
         try:
             set_context(session_id=self.session_id, cycle_level=self.level)
 
@@ -1720,19 +1901,46 @@ class MicroClaw(ClawCycle):
 
             set_context(task_id=getattr(target, "id", None), project_id=self.project_id)
 
-            _step("evaluate", f"Analyzing: {target.title[:60]}")
-            evaluation = await self.evaluate(target)
+            # Escalation retry loop — re-enters from evaluate on ROTATE_AGENT
+            while True:
+                self._last_escalation_decision = None
 
-            _step("decide", "Selecting best agent...")
-            decision = await self.decide(evaluation)
-            agent_id = decision[0] if isinstance(decision, tuple) else "unknown"
-            set_context(agent_id=agent_id)
+                _step("evaluate", f"Analyzing: {target.title[:60]}")
+                evaluation = await self.evaluate(target)
 
-            # Inner correction loop: act + verify, with retries on correctable failures
-            verification = await self._act_with_correction(decision, on_step=on_step)
+                _step("decide", "Selecting best agent...")
+                decision = await self.decide(evaluation)
+                agent_id = decision[0] if isinstance(decision, tuple) else "unknown"
+                set_context(agent_id=agent_id)
 
-            _step("learn", "Recording outcome...")
-            await self.learn(verification)
+                # Inner correction loop: act + verify, with retries on correctable failures
+                verification = await self._act_with_correction(decision, on_step=on_step)
+
+                _step("learn", "Recording outcome...")
+                await self.learn(verification)
+
+                # Check if escalation decided to rotate agent
+                if (
+                    self._last_escalation_decision is not None
+                    and escalation_retries < MAX_ESCALATION_RETRIES
+                ):
+                    from claw.evolution.rl_escalation import EscalationAction
+                    if self._last_escalation_decision.action == EscalationAction.ROTATE_AGENT:
+                        escalation_retries += 1
+                        logger.info(
+                            "Escalation retry %d/%d for task %s: rotating away from '%s'",
+                            escalation_retries, MAX_ESCALATION_RETRIES,
+                            target.id, agent_id,
+                        )
+                        # Re-fetch the task from DB (status was reset to PENDING in learn)
+                        refreshed = await self.ctx.repository.get_task(target.id)
+                        if refreshed is not None:
+                            target = refreshed
+                            self._current_task = target
+                        continue  # Loop back to evaluate→decide→act
+
+                # No escalation retry — break out
+                break
 
             duration = time.monotonic() - start
             v_agent_id = verification[0] if isinstance(verification, tuple) else None
@@ -1791,6 +1999,43 @@ class MicroClaw(ClawCycle):
                 model_used=outcome.model_used,
                 agent_id=agent_id,
             ))
+
+            # Record error→fix pair if this success came after a correction
+            if task_ctx.correction_feedback is not None:
+                try:
+                    # Find the latest FAILURE hypothesis for this task
+                    failed_entries = await self.ctx.repository.get_failed_approaches(task.id)
+                    if failed_entries:
+                        latest_fail = failed_entries[-1]
+                        if latest_fail.error_signature:
+                            # Log a SUCCESS hypothesis WITH the same error_signature
+                            # so PatternLearner can discover the error→fix pair
+                            fix_attempt = await self.ctx.repository.get_next_hypothesis_attempt(task.id)
+                            await self.ctx.repository.log_hypothesis(HypothesisEntry(
+                                task_id=task.id,
+                                attempt_number=fix_attempt,
+                                approach_summary=f"[CORRECTION_FIX] {outcome.approach_summary[:450]}",
+                                outcome=HypothesisOutcome.SUCCESS,
+                                error_signature=latest_fail.error_signature,
+                                files_changed=outcome.files_changed,
+                                duration_seconds=outcome.duration_seconds,
+                                model_used=outcome.model_used,
+                                agent_id=agent_id,
+                            ))
+                            logger.info(
+                                "Recorded correction fix pair for error '%s' on task %s",
+                                latest_fail.error_signature[:80], task.id,
+                            )
+                            # B5: Mark failure knowledge resolved
+                            try:
+                                await self.ctx.repository.mark_failure_knowledge_resolved(
+                                    latest_fail.error_signature,
+                                    resolution_approach=outcome.approach_summary[:300],
+                                )
+                            except Exception:
+                                pass  # Non-critical
+                except Exception as e:
+                    logger.debug("Failed to record correction fix pair: %s", e)
 
             # Update agent score
             await self.ctx.repository.update_agent_score(
@@ -2035,6 +2280,78 @@ class MicroClaw(ClawCycle):
                     "Recorded failure in hypothesis log for task %s (error: %s)",
                     task.id, error_sig,
                 )
+
+            # RL Escalation: diagnose persistent failures and decide next action
+            try:
+                if self._rl_escalation is None:
+                    from claw.evolution.rl_escalation import RLEscalationStrategy
+                    self._rl_escalation = RLEscalationStrategy()
+                available_agents = list(self.ctx.agents.keys()) if self.ctx.agents else []
+                escalation_decision = self._rl_escalation.diagnose_and_decide(
+                    task_id=task.id,
+                    error_signature=error_sig,
+                    error_full=outcome.failure_detail,
+                    current_agent_id=agent_id,
+                    available_agents=available_agents,
+                )
+                task_ctx.previous_escalation_diagnosis = escalation_decision.diagnosis
+                # Store for run_cycle() escalation retry loop
+                self._last_escalation_decision = escalation_decision
+
+                await self.ctx.repository.log_episode(
+                    session_id=self.session_id,
+                    event_type="rl_escalation_diagnosis",
+                    event_data={
+                        "task_id": task.id,
+                        "tier": escalation_decision.tier,
+                        "action": escalation_decision.action.value,
+                        "category": escalation_decision.error_category,
+                        "diagnosis": escalation_decision.diagnosis[:500],
+                    },
+                    project_id=self.project_id,
+                    task_id=task.id,
+                    cycle_level="micro",
+                )
+                logger.info(
+                    "RL escalation for task %s: tier=%d action=%s category=%s",
+                    task.id, escalation_decision.tier,
+                    escalation_decision.action.value, escalation_decision.error_category,
+                )
+
+                # A5: If ROTATE_AGENT, update task.excluded_agents with current agent
+                from claw.evolution.rl_escalation import EscalationAction
+                if escalation_decision.action == EscalationAction.ROTATE_AGENT:
+                    if agent_id not in task.excluded_agents:
+                        task.excluded_agents.append(agent_id)
+                    await self.ctx.repository.update_task_excluded_agents(
+                        task.id, task.excluded_agents,
+                    )
+                    logger.info(
+                        "Agent '%s' added to excluded_agents for task %s: %s",
+                        agent_id, task.id, task.excluded_agents,
+                    )
+
+                # B3: Record failure knowledge for cross-task prevention
+                try:
+                    prevention_hint = (
+                        f"[{escalation_decision.error_category}] "
+                        f"{escalation_decision.diagnosis[:300]}"
+                    )
+                    await self.ctx.repository.record_failure_knowledge(
+                        error_signature=error_sig,
+                        error_category=escalation_decision.error_category,
+                        diagnosis=escalation_decision.diagnosis[:500],
+                        prevention_hint=prevention_hint,
+                        agent_id=agent_id,
+                        task_type=task.task_type,
+                        project_id=self.project_id,
+                        source_task_id=task.id,
+                    )
+                except Exception as fk_err:
+                    logger.debug("Failed to record failure knowledge: %s", fk_err)
+
+            except Exception as e:
+                logger.debug("RL escalation diagnosis failed: %s", e)
 
             # Reset to PENDING for retry
             await self.ctx.repository.update_task_status(task.id, TaskStatus.PENDING)

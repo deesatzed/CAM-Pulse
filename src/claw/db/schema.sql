@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     context_snapshot_id TEXT,
     attempt_count INTEGER DEFAULT 0,
     escalation_count INTEGER DEFAULT 0,
+    excluded_agents TEXT NOT NULL DEFAULT '[]',
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     completed_at TEXT
@@ -819,3 +820,25 @@ CREATE INDEX IF NOT EXISTS idx_governance_policies_family ON governance_policies
 CREATE INDEX IF NOT EXISTS idx_governance_policies_status ON governance_policies(status);
 CREATE INDEX IF NOT EXISTS idx_mining_missions_run ON mining_missions(run_id);
 CREATE INDEX IF NOT EXISTS idx_mining_missions_status ON mining_missions(status);
+
+-- 41. FAILURE_KNOWLEDGE (cross-task preventive failure patterns)
+CREATE TABLE IF NOT EXISTS failure_knowledge (
+    id TEXT PRIMARY KEY,
+    error_signature TEXT NOT NULL,
+    error_category TEXT NOT NULL,
+    diagnosis TEXT NOT NULL,
+    prevention_hint TEXT NOT NULL,
+    agent_id TEXT,
+    task_type TEXT,
+    project_id TEXT,
+    source_task_id TEXT,
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    resolution_approach TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_failure_knowledge_sig ON failure_knowledge(error_signature);
+CREATE INDEX IF NOT EXISTS idx_failure_knowledge_category ON failure_knowledge(error_category);
+CREATE INDEX IF NOT EXISTS idx_failure_knowledge_task_type ON failure_knowledge(task_type);
+CREATE INDEX IF NOT EXISTS idx_failure_knowledge_resolved ON failure_knowledge(resolved);

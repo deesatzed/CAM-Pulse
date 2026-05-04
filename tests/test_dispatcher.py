@@ -201,6 +201,66 @@ class TestDispatcherRecommendedAgent:
         assert agent == "claude"
 
 
+class TestDispatcherExcludedAgents:
+    """Task excluded_agents filtering in routing."""
+
+    async def test_excluded_agent_skipped_in_static_routing(self):
+        """When static route agent is excluded, fall through to another."""
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=0.0)
+        task = _make_task(task_type="analysis")  # static -> claude
+        task.excluded_agents = ["claude"]
+        agent = await dispatcher.route_task(task)
+        # claude excluded -> should NOT get claude
+        assert agent != "claude"
+
+    async def test_excluded_recommended_agent_skipped(self):
+        """Excluded recommended_agent is not used."""
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=0.0)
+        task = _make_task(task_type="analysis", recommended_agent="grok")
+        task.excluded_agents = ["grok"]
+        agent = await dispatcher.route_task(task)
+        assert agent != "grok"
+
+    async def test_all_excluded_clears_and_falls_back(self):
+        """When all agents are excluded, exclusions are cleared for fallback."""
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=0.0)
+        task = _make_task(task_type="analysis")
+        task.excluded_agents = list(AGENTS_FULL.keys())  # exclude all
+        agent = await dispatcher.route_task(task)
+        # Should still route somewhere (cleared exclusions)
+        assert agent in AGENTS_FULL
+
+    async def test_excluded_empty_list_routes_normally(self):
+        """Empty excluded_agents has no effect."""
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=0.0)
+        task = _make_task(task_type="analysis")
+        task.excluded_agents = []
+        agent = await dispatcher.route_task(task)
+        assert agent == "claude"  # normal static route
+
+    async def test_excluded_agent_in_exploration(self):
+        """Excluded agents are skipped even during exploration."""
+        random.seed(42)
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=1.0)
+        task = _make_task(task_type="analysis")
+        task.excluded_agents = ["claude", "codex", "gemini", "local"]
+        # Only grok is available
+        results = set()
+        for _ in range(20):
+            agent = await dispatcher.route_task(task)
+            results.add(agent)
+        assert results == {"grok"}
+
+    async def test_excluded_agent_fallback_respects_exclusion(self):
+        """Fallback routing skips excluded agents."""
+        dispatcher = Dispatcher(AGENTS_FULL, exploration_rate=0.0)
+        task = _make_task(task_type="totally_unknown_type")
+        task.excluded_agents = ["claude"]  # exclude DEFAULT_AGENT
+        agent = await dispatcher.route_task(task)
+        assert agent != "claude"
+        assert agent in AGENTS_FULL
+
+
 class TestDispatcherErrorCases:
     """Error handling and edge cases."""
 

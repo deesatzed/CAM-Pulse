@@ -66,6 +66,7 @@ class OrchestratorConfig(BaseModel):
     loop_guard_max_repeats: int = 2
     pipeline_adaptation_enabled: bool = True
     max_correction_attempts: int = 3
+    auto_fix_enabled: bool = True
 
 
 class SentinelConfig(BaseModel):

@@ -41,11 +41,15 @@ class EscalationDecision(BaseModel):
 
 
 # Error categories that suggest agent-specific issues (Tier 1: rotate)
+# Includes test_failure and syntax_error: different models often produce
+# different algorithms/syntax, so rotation gives a fresh attempt.
 _AGENT_SPECIFIC_CATEGORIES = frozenset({
     "import_error",
     "api_error",
     "async_error",
     "connection_error",
+    "test_failure",
+    "syntax_error",
 })
 
 # Error categories that suggest task complexity issues (Tier 2: decompose)

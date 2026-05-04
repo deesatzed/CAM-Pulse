@@ -387,6 +387,79 @@ class ErrorKB:
 
         return cross_agent_patterns
 
+    async def get_resolution_for_error(
+        self,
+        error_signature: str,
+        project_id: str,
+    ) -> Optional[str]:
+        """Find a known resolution for a given error signature.
+
+        Queries hypothesis_log for tasks where the same error_signature
+        had a FAILURE followed by a later SUCCESS. Returns the SUCCESS
+        approach_summary as the known fix hint.
+
+        Args:
+            error_signature: Normalized error signature to look up.
+            project_id: Scope the search to this project.
+
+        Returns:
+            The approach_summary from a successful resolution, or None.
+        """
+        if not error_signature:
+            return None
+
+        # Find SUCCESS hypotheses that share an error_signature with
+        # a prior FAILURE in the same project.  The error_signature on
+        # a SUCCESS entry is set when it was a correction fix (Phase 3
+        # records these with a [CORRECTION_FIX] prefix).
+        rows = await self.repository.engine.fetch_all(
+            """SELECT DISTINCT h_success.approach_summary
+               FROM hypothesis_log h_success
+               JOIN tasks t ON h_success.task_id = t.id
+               WHERE t.project_id = ?
+                 AND h_success.outcome = 'SUCCESS'
+                 AND h_success.error_signature = ?
+               ORDER BY h_success.attempt_number DESC
+               LIMIT 1""",
+            [project_id, error_signature],
+        )
+
+        if rows:
+            approach = str(rows[0]["approach_summary"])
+            logger.info(
+                "Found known resolution for error '%s': %s",
+                error_signature[:80], approach[:120],
+            )
+            return approach
+
+        # Fallback: look for any task in this project that had this error
+        # as a FAILURE and was later marked DONE (implicit resolution).
+        rows2 = await self.repository.engine.fetch_all(
+            """SELECT h_ok.approach_summary
+               FROM hypothesis_log h_ok
+               JOIN hypothesis_log h_fail
+                 ON h_ok.task_id = h_fail.task_id
+               JOIN tasks t ON h_ok.task_id = t.id
+               WHERE t.project_id = ?
+                 AND h_fail.outcome = 'FAILURE'
+                 AND h_fail.error_signature = ?
+                 AND h_ok.outcome = 'SUCCESS'
+                 AND h_ok.attempt_number > h_fail.attempt_number
+               ORDER BY h_ok.attempt_number DESC
+               LIMIT 1""",
+            [project_id, error_signature],
+        )
+
+        if rows2:
+            approach = str(rows2[0]["approach_summary"])
+            logger.info(
+                "Found implicit resolution for error '%s': %s",
+                error_signature[:80], approach[:120],
+            )
+            return approach
+
+        return None
+
 
 def _categorize_error(error_signature: str) -> str:
     """Categorize an error by its signature.

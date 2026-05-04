@@ -612,3 +612,67 @@ class TestMicroClaw:
         assert updated_template is not None
         assert updated_template.success_count == 1
         assert updated_template.confidence > 0.5
+
+
+class TestResolveWorkspaceDir:
+    """Tests for _resolve_workspace_dir fallback chain."""
+
+    def test_returns_agent_workspace_dir(self):
+        from claw.cycle import _resolve_workspace_dir
+
+        class FakeAgent:
+            workspace_dir = "/tmp/agent_ws"
+
+        agents = {"claude": FakeAgent()}
+        result = _resolve_workspace_dir(agents, "claude")
+        assert result == "/tmp/agent_ws"
+
+    def test_falls_back_to_task_repo_path(self):
+        from claw.cycle import _resolve_workspace_dir
+
+        class FakeAgent:
+            workspace_dir = None
+
+        class FakeTask:
+            repo_path = "/tmp/task_repo"
+
+        class FakeTaskCtx:
+            task = FakeTask()
+            project = None
+
+        agents = {"claude": FakeAgent()}
+        result = _resolve_workspace_dir(agents, "claude", FakeTaskCtx())
+        assert result == "/tmp/task_repo"
+
+    def test_falls_back_to_project_repo_path(self):
+        from claw.cycle import _resolve_workspace_dir
+
+        class FakeAgent:
+            workspace_dir = None
+
+        class FakeTask:
+            repo_path = None
+
+        class FakeProject:
+            repo_path = "/tmp/project_repo"
+
+        class FakeTaskCtx:
+            task = FakeTask()
+            project = FakeProject()
+
+        agents = {"claude": FakeAgent()}
+        result = _resolve_workspace_dir(agents, "claude", FakeTaskCtx())
+        assert result == "/tmp/project_repo"
+
+    def test_returns_none_when_all_fallbacks_empty(self):
+        from claw.cycle import _resolve_workspace_dir
+
+        result = _resolve_workspace_dir({}, "nonexistent")
+        assert result is None
+
+    def test_returns_none_for_missing_agent(self):
+        from claw.cycle import _resolve_workspace_dir
+
+        agents = {"claude": object()}  # No workspace_dir attribute
+        result = _resolve_workspace_dir(agents, "claude")
+        assert result is None

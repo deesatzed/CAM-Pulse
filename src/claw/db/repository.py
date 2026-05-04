@@ -157,8 +157,8 @@ class Repository:
         await self.engine.execute(
             """INSERT INTO tasks (id, project_id, title, description, status, priority,
                task_type, recommended_agent, assigned_agent, action_template_id,
-               execution_steps, acceptance_checks)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               execution_steps, acceptance_checks, excluded_agents)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 task.id,
                 task.project_id,
@@ -172,6 +172,7 @@ class Repository:
                 task.action_template_id,
                 json.dumps(task.execution_steps),
                 json.dumps(task.acceptance_checks),
+                json.dumps(task.excluded_agents),
             ],
         )
         return task
@@ -222,6 +223,98 @@ class Repository:
         await self.engine.execute(
             "UPDATE tasks SET escalation_count = escalation_count + 1, updated_at = ? WHERE id = ?",
             [now, task_id],
+        )
+
+    async def update_task_excluded_agents(self, task_id: str, excluded: list[str]) -> None:
+        """Persist excluded_agents list for a task (agent rotation bookkeeping)."""
+        now = datetime.now(UTC).isoformat()
+        await self.engine.execute(
+            "UPDATE tasks SET excluded_agents = ?, updated_at = ? WHERE id = ?",
+            [json.dumps(excluded), now, task_id],
+        )
+
+    # ------------------------------------------------------------------
+    # Failure Knowledge — cross-task preventive patterns
+    # ------------------------------------------------------------------
+
+    async def record_failure_knowledge(
+        self,
+        error_signature: str,
+        error_category: str,
+        diagnosis: str,
+        prevention_hint: str,
+        agent_id: str | None = None,
+        task_type: str | None = None,
+        project_id: str | None = None,
+        source_task_id: str | None = None,
+    ) -> None:
+        """Upsert a failure knowledge entry.
+
+        If an entry with the same error_signature already exists, increment
+        occurrence_count and update diagnosis/prevention_hint. Otherwise insert.
+        """
+        existing = await self.engine.fetch_one(
+            "SELECT id, occurrence_count FROM failure_knowledge WHERE error_signature = ?",
+            [error_signature],
+        )
+        now = datetime.now(UTC).isoformat()
+        if existing:
+            await self.engine.execute(
+                """UPDATE failure_knowledge
+                   SET occurrence_count = occurrence_count + 1,
+                       diagnosis = ?, prevention_hint = ?, updated_at = ?
+                   WHERE id = ?""",
+                [diagnosis, prevention_hint, now, existing["id"]],
+            )
+        else:
+            import uuid as _uuid
+            fk_id = str(_uuid.uuid4())
+            await self.engine.execute(
+                """INSERT INTO failure_knowledge
+                   (id, error_signature, error_category, diagnosis, prevention_hint,
+                    agent_id, task_type, project_id, source_task_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [fk_id, error_signature, error_category, diagnosis, prevention_hint,
+                 agent_id, task_type, project_id, source_task_id],
+            )
+
+    async def get_failure_knowledge_for_context(
+        self,
+        task_type: str | None = None,
+        project_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Retrieve unresolved failure knowledge entries for enrichment.
+
+        Filters by task_type and/or project_id if provided. Returns the most
+        frequently occurring patterns first.
+        """
+        conditions = ["resolved = 0"]
+        params: list = []
+        if task_type:
+            conditions.append("(task_type = ? OR task_type IS NULL)")
+            params.append(task_type)
+        if project_id:
+            conditions.append("(project_id = ? OR project_id IS NULL)")
+            params.append(project_id)
+        where_clause = " AND ".join(conditions)
+        params.append(limit)
+        rows = await self.engine.fetch_all(
+            f"SELECT * FROM failure_knowledge WHERE {where_clause} ORDER BY occurrence_count DESC LIMIT ?",
+            params,
+        )
+        return rows
+
+    async def mark_failure_knowledge_resolved(
+        self, error_signature: str, resolution_approach: str
+    ) -> None:
+        """Mark a failure knowledge entry as resolved."""
+        now = datetime.now(UTC).isoformat()
+        await self.engine.execute(
+            """UPDATE failure_knowledge
+               SET resolved = 1, resolution_approach = ?, updated_at = ?
+               WHERE error_signature = ? AND resolved = 0""",
+            [resolution_approach, now, error_signature],
         )
 
     async def get_tasks_by_status(self, project_id: str, status: TaskStatus) -> list[Task]:
@@ -3127,6 +3220,10 @@ def _row_to_task(row: dict[str, Any]) -> Task:
     if isinstance(acceptance_checks, str):
         acceptance_checks = json.loads(acceptance_checks)
 
+    excluded_agents = row.get("excluded_agents", "[]")
+    if isinstance(excluded_agents, str):
+        excluded_agents = json.loads(excluded_agents)
+
     return Task(
         id=row["id"],
         project_id=row["project_id"],
@@ -3143,6 +3240,7 @@ def _row_to_task(row: dict[str, Any]) -> Task:
         context_snapshot_id=row.get("context_snapshot_id"),
         attempt_count=row.get("attempt_count", 0),
         escalation_count=row.get("escalation_count", 0),
+        excluded_agents=excluded_agents,
         created_at=_parse_dt(row.get("created_at")),
         updated_at=_parse_dt(row.get("updated_at")),
         completed_at=_parse_dt(row.get("completed_at")),
