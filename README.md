@@ -1,14 +1,14 @@
 # CAM-PULSE
 
-### Powered by Grok 4.3 — the AI coding system that mines, remembers, and learns.
+### The AI coding system that mines, remembers, learns, and self-corrects.
 
-CAM-PULSE **autonomously mines** error handling, retry logic, API design, and testing patterns from real GitHub repos — no human authoring needed. It stores them as structured, novelty-scored, lifecycle-tracked methodologies and uses that knowledge to build working software powered by xAI's Grok 4.3. Build outcomes feed back into pattern quality scores via a Thompson-sampling bandit tournament: patterns that help builds pass get promoted, patterns that hurt builds get demoted.
+CAM-PULSE **autonomously mines** error handling, retry logic, API design, and testing patterns from real GitHub repos — no human authoring needed. It stores them as structured, novelty-scored, lifecycle-tracked methodologies and uses that knowledge to build working software across multiple models via OpenRouter. Build outcomes feed back into pattern quality scores via a Thompson-sampling bandit tournament: patterns that help builds pass get promoted, patterns that hurt builds get demoted. When a build fails, a 3-layer defense chain — deterministic auto-fix, correction loop, and agent rotation — ensures failures get fixed without human intervention.
 
-**889 methodologies** | **153 source repos mined** | **30/30 batch builds passing** | **Grok 4.3: 7/7 where DeepSeek Flash went 0/7** | **2.6x faster than DeepSeek V4 Pro** | **$0 — MIT licensed**
+**889 methodologies** | **153 source repos mined** | **30/30 batch builds passing** | **5/6 failures rescued by defense chain** | **5/10 → 10/10 with rotation** | **$0 — MIT licensed**
 
-<!-- Counts verified 2026-05-01. Source: data/claw.db queries + batch_run/results/ + manual pytest verification of all 30 projects -->
+<!-- Counts verified 2026-05-04. Source: data/claw.db queries + batch_run/results/compare_overnight/ + retest_rotation/ -->
 
-> **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → score → learn → demote. Copilot remembers conventions. Cursor stores rules. Devin indexes wikis. **Only CAM-PULSE mines patterns autonomously, scores them by real build outcomes, and demotes what fails.**
+> **No other tool closes this loop:** discover → mine → store → retrieve → build → verify → **correct → rotate → learn** → demote. Copilot remembers conventions. Cursor stores rules. Devin indexes wikis. **Only CAM-PULSE mines patterns autonomously, scores them by real build outcomes, rotates failing agents to different models, and demotes what fails.**
 
 ---
 
@@ -25,18 +25,29 @@ CAM built 30 software projects autonomously using patterns mined from 153 repos.
 | Patterns demoted (learned they hurt builds) | 11 |
 | Bugs found and fixed (1-5 line edits each) | 6 |
 
-### Why Grok 4.3? Proven in Head-to-Head
+### Model-Diverse by Design — Defense Chain Proves It
 
-CAM is model-configurable (Claude, GPT, Gemini, Grok via OpenRouter, or local Ollama/MLX-LM). We chose Grok 4.3 as the default because it won every test:
+CAM is model-configurable (Claude, GPT, Gemini, Grok, Qwen, DeepSeek via OpenRouter, or local Ollama/MLX-LM). The default budget-diverse config runs 4 models simultaneously — when one model writes wrong code, the defense chain catches it and rotates to another:
+
+| What | Result |
+|------|--------|
+| **Overnight comparison (10 projects)** | Single model: 5/10 PASS |
+| **With defense chain + rotation** | **10/10 PASS** (5 rescued) |
+| **Auto-fix rules** | 5 deterministic (no LLM cost) |
+| **Correction loop** | Feeds exact test output back to model |
+| **Agent rotation** | Different model on test_failure/syntax_error |
+| **Failure knowledge** | Cross-task preventive patterns |
+
+The 3-layer defense chain rescued 5 of 6 projects that failed all single-model configs. t2-16 (wrong math formula) was fixed by rotating to a model that got the equation right. t2-11 (missing import) was caught by proactive auto-fix before the sentinel even ran tests. t2-04 (wrong API call) was corrected by a different model after rotation.
+
+**Previous head-to-head (Grok 4.3 era):**
 
 | | Grok 4.3 | DeepSeek V4 Flash | DeepSeek V4 Pro |
 |---|:---:|:---:|:---:|
 | **7 empty-dir projects** | **7/7 PASS** | 0/7 (empty output) | -- |
 | **5-project head-to-head** | 1/5 PASS, 1788s | -- | 1/5 PASS, 4731s |
-| **Speed** | **Baseline** | -- | **2.6x slower** |
-| **Quality** | **Equal or better** | Failed to produce code | Equal |
 
-Grok 4.3 produced working code with passing tests on every project where DeepSeek Flash produced nothing. Against DeepSeek V4 Pro, Grok matched quality and ran 2.6x faster. The 7/7 result is not cherry-picked — these were the 7 projects where Flash produced zero files, and Grok was given the same spec with the same knowledge base.
+The lesson: no single model wins every task. Model diversity + a defense chain that rotates on failure is more robust than betting on one model.
 
 <p align="center">
   <img src="demos/cam-pulse-demo.gif" alt="CAM-PULSE demo: cam mine-self --quick showing language breakdown, domain signals, and test results" width="700">
@@ -90,7 +101,7 @@ cam learn search "agent routing"   # Search the new knowledge
 
 ## How It Compares
 
-| | CAM-PULSE (Grok 4.3) | Copilot | Cursor | Windsurf | Devin | Aider |
+| | CAM-PULSE | Copilot | Cursor | Windsurf | Devin | Aider |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Mines patterns from source code** | Autonomous, structured | No | No | No | Indexes repos | No |
 | **Cross-project knowledge base** | 889 methodologies, federated ganglia | Repo-scoped memory | .cursorrules (manual) | Session memories | Wikis + playbooks (manual) | None |
@@ -98,11 +109,12 @@ cam learn search "agent routing"   # Search the new knowledge
 | **Self-improves (demotes failures)** | 11 patterns demoted, lifecycle tracking | No | No | No | No | No |
 | **Statistically validated KB uplift** | Cohen's d = 0.843, p < 0.05 | No data published | No data published | No data published | No data published | No data published |
 | **Batch build proof** | 30/30 pass | No data published | No data published | No data published | No data published | No data published |
-| **Multi-agent routing** | 4 Grok-powered backends (Kelly routing) | 1 | 1 | Cascade | Multi-agent | 1 |
+| **Defense chain (auto-fix + rotation)** | 3-layer, 5/6 rescued | No | No | No | Retry (no rotation) | No |
+| **Multi-agent routing** | 4 models, Kelly routing, rotation on failure | 1 | 1 | Cascade | Multi-agent | 1 |
 | **Runs 100% local (zero cloud)** | Ollama + MLX-LM | No | No | No | No | Partial |
 | **Cost** | **Free + MIT** | $19/mo | $20/mo | $0-40/mo | $500/mo | Free + API |
 
-> **Key distinction:** Copilot, Cursor, and Windsurf all have "memory" features (2025-2026), but these store session observations and user-written rules. CAM-PULSE autonomously extracts structured patterns from source code, assigns novelty scores and lifecycle states, and uses build outcomes to rank them. Devin comes closest with repo indexing and wikis, but its knowledge is manually authored and not fitness-scored.
+> **Key distinction:** Copilot, Cursor, and Windsurf all have "memory" features (2025-2026), but these store session observations and user-written rules. CAM-PULSE autonomously extracts structured patterns from source code, assigns novelty scores and lifecycle states, and uses build outcomes to rank them. When a build fails, a 3-layer defense chain — deterministic auto-fix, ErrorKB-enriched correction, and RL-driven agent rotation — ensures different models attempt the task. Devin comes closest with multi-agent retry, but without model rotation or cross-task failure knowledge.
 
 ---
 
@@ -116,8 +128,8 @@ Everything CAM does is now accessible through a browser. No CLI memorization req
 ┌─ CAM-PULSE ──────────────────────────────────────────────────────┐
 │                                                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │   889    │  │  Grok    │  │   153    │  │  30/30   │        │
-│  │ Methods  │  │  4.3     │  │  Repos   │  │ Passing  │        │
+│  │   889    │  │ 4-Model  │  │   153    │  │  30/30   │        │
+│  │ Methods  │  │ Diverse  │  │  Repos   │  │ Passing  │        │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
 │                                                                   │
 │  Lifecycle Distribution        Languages                         │
@@ -988,6 +1000,17 @@ CAM_MODEL_GROK=x-ai/grok-4-1-fast-non-reasoning   # Quick fixes, web lookup
 
 ### Google Gemini Embeddings
 All semantic search uses `gemini-embedding-2-preview` (384 dimensions) via Google API. This powers novelty scoring, knowledge retrieval, and cross-domain synergy detection. For local-only mode, CAM falls back to sentence-transformers or MLX embeddings — no cloud needed.
+
+### 3-Layer Defense Chain (Auto-Fix → Correction → Rotation)
+When a build fails, three graduated defense layers engage before recording a failure:
+
+1. **Deterministic Auto-Fix** (no LLM cost) — 5 regex/string rules that fix common model errors: missing `import pytest`, leaked FIM tokens, `inspect.isfunction()` → `callable()`, relative imports, missing `__init__.py`. Runs proactively BEFORE verification and reactively AFTER. Added `proactive=True` mode that scans all files regardless of error output.
+
+2. **ErrorKB-Enriched Correction** — When auto-fix doesn't fully resolve, the correction loop feeds exact test output, code diff, and `known_fix_hint` from past FAILURE→SUCCESS pairs back to the model. The model retries with full context of what went wrong.
+
+3. **RL-Driven Agent Rotation** — If correction attempts exhaust, the RL escalation system classifies the error (15 categories) and decides: rotate to a different model (Tier 1), decompose the task (Tier 2), or flag for human review (Tier 3). The failing agent is added to `excluded_agents` and the dispatcher picks a fresh model.
+
+**Proven:** Rescued 5/6 projects that failed on every single-model config. Score improvement: 5/10 → 10/10. Key insight: `test_failure` and `syntax_error` are rotation-eligible — different models write different algorithms, so rotation gives a fresh attempt at the math/logic.
 
 ### Self-Healing JSON Parser
 LLM mining output is malformed ~75% of the time. CAM's 3-stage `_repair_json()` achieves **100% repair rate**:

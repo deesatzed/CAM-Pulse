@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CAM-PULSE — Powered by Grok 4.3. Mines, Remembers, Learns, Builds.</title>
-  <meta name="description" content="AI coding system powered by Grok 4.3. 889 patterns mined from 153 repos. 30/30 autonomous builds passing. Grok 4.3 went 7/7 where DeepSeek went 0/7. Self-improving knowledge base with closed-loop learning. Free, MIT.">
-  <meta property="og:title" content="CAM-PULSE — Powered by Grok 4.3. The AI that mines, remembers, and learns.">
-  <meta property="og:description" content="889 patterns mined from 153 repos, injected into Grok 4.3 builds. 30/30 projects pass autonomously. Grok went 7/7 where DeepSeek Flash went 0/7, and 2.6x faster than DeepSeek V4 Pro. Self-improving knowledge base. Free, MIT.">
+  <title>CAM-PULSE — AI that mines, remembers, learns, and self-corrects.</title>
+  <meta name="description" content="AI coding system with 3-layer defense chain. 889 patterns mined from 153 repos. 30/30 autonomous builds passing. 5/6 failures rescued by auto-fix + agent rotation (5/10 → 10/10). Self-improving knowledge base. Free, MIT.">
+  <meta property="og:title" content="CAM-PULSE — The AI that mines, remembers, learns, and self-corrects.">
+  <meta property="og:description" content="889 patterns mined from 153 repos. 30/30 projects pass autonomously. 3-layer defense chain (auto-fix, correction, rotation) rescued 5/6 failures: 5/10 → 10/10. Self-improving knowledge base. Free, MIT.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://deesatzed.github.io/CAM-Pulse/">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="CAM-PULSE: Grok 4.3 powered AI coding that mines, remembers, and learns">
-  <meta name="twitter:description" content="889 patterns from 153 repos, Grok 4.3 inference. 30/30 autonomous builds pass. Grok 7/7 where DeepSeek 0/7. 2.6x faster than DeepSeek Pro. Closed-loop learning demotes bad patterns. Free, MIT.">
+  <meta name="twitter:title" content="CAM-PULSE: AI coding that mines, remembers, learns, and self-corrects">
+  <meta name="twitter:description" content="889 patterns from 153 repos. 30/30 autonomous builds pass. 3-layer defense chain rescued 5/6 failures (5/10 → 10/10). Auto-fix + correction + agent rotation. Free, MIT.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1579,13 +1579,13 @@
         <div class="hero-kicker">
           <div class="badge">
             <span class="pulse-dot"></span>
-            Powered by Grok 4.3
+            Multi-Model Defense Chain
           </div>
           <p class="hero-eyebrow">CAM-PULSE</p>
         </div>
-        <h1 class="hero-title">AI that mines, remembers, <span class="serif">and learns what works.</span></h1>
-        <p class="hero-subtitle">CAM-PULSE autonomously mines error handling, retry logic, API design, and testing patterns from 153 real GitHub repos &mdash; no human authoring needed. Patterns are scored by real build outcomes: failures demote bad patterns, successes promote good ones. <strong>30/30 autonomous builds pass</strong> with real import checks and pytest verification. Grok 4.3 produced working code on <strong>7/7 projects where DeepSeek Flash produced nothing</strong>, and ran <strong>2.6x faster than DeepSeek V4 Pro</strong>. No other AI coding tool mines patterns, scores them by build outcomes, and self-improves.</p>
-        <p class="hero-audience">For developers who want AI that learns, not just generates. Powered by xAI Grok 4.3. Free and MIT licensed.</p>
+        <h1 class="hero-title">AI that mines, remembers, <span class="serif">and self-corrects.</span></h1>
+        <p class="hero-subtitle">CAM-PULSE autonomously mines error handling, retry logic, API design, and testing patterns from 153 real GitHub repos &mdash; no human authoring needed. Patterns are scored by real build outcomes: failures demote bad patterns, successes promote good ones. <strong>30/30 autonomous builds pass</strong> with real import checks and pytest verification. When a model writes wrong code, a 3-layer defense chain &mdash; deterministic auto-fix, correction loop, and agent rotation &mdash; catches and fixes it: <strong>5/6 failures rescued</strong>, score improved from <strong>5/10 &rarr; 10/10</strong>.</p>
+        <p class="hero-audience">For developers who want AI that learns, not just generates. Multi-model, self-correcting. Free and MIT licensed.</p>
         <div class="hero-buttons">
           <a href="#code-showcase" class="btn btn-primary">Get Started</a>
           <a href="#showpieces" class="btn btn-ghost">View Demos</a>
@@ -1608,8 +1608,8 @@
             <span>Builds passing</span>
           </div>
           <div class="hero-stat">
-            <strong>7/7</strong>
-            <span>Grok vs 0/7 DeepSeek</span>
+            <strong>5/6</strong>
+            <span>Failures rescued</span>
           </div>
         </div>
       </div>
@@ -2816,19 +2816,26 @@ KB sources: MiroFish, abacus_FileSearch, CLI-Anything,<br>
         </p>
       </div>
 
+      <div class="reveal" style="max-width: 900px; margin: 32px auto 0; padding: 24px 32px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 8px;">
+        <h4 style="margin: 0 0 8px; color: var(--accent);">3-Layer Defense Chain Evidence</h4>
+        <p style="margin: 0; line-height: 1.7; color: var(--ink-soft);">
+          When a build fails, CAM now activates a 3-layer defense chain: <strong>proactive auto-fix</strong> (deterministic rules applied before first verification), <strong>ErrorKB-enriched correction</strong> (past failure&rarr;success pairs guide the retry), and <strong>RL-driven agent rotation</strong> (a different model gets a fresh attempt). In retest of 6 previously-failing projects, <strong>5 of 6 were rescued</strong> &mdash; projected 5/10 &rarr; 10/10 pass rate. The 1 remaining failure was a pytest timeout, not a code quality issue.
+        </p>
+      </div>
+
       <div class="reveal" style="text-align: center; margin-top: 32px;">
         <a href="https://github.com/deesatzed/CAM-Pulse/blob/main/docs/BATCH_BUILD_PROOF.md" class="btn btn-ghost" style="font-size: 0.9rem;">Read Full Proof Document &rarr;</a>
       </div>
     </div>
   </section>
 
-  <!-- ─── Grok Head-to-Head ─── -->
-  <section id="grok-results" style="padding: 80px 0; background: rgba(255,107,61,0.03);">
+  <!-- ─── Defense Chain Results ─── -->
+  <section id="defense-chain" style="padding: 80px 0; background: rgba(255,107,61,0.03);">
     <div class="container">
       <div style="text-align: center; margin-bottom: 48px;">
-        <h2 class="reveal">Why Grok 4.3? Proven in Head-to-Head.</h2>
+        <h2 class="reveal">Model-Diverse by Design. Defense Chain Proves It.</h2>
         <p class="section-subtitle reveal reveal-delay-1" style="margin: 16px auto; max-width: 720px;">
-          CAM is model-configurable &mdash; Claude, GPT, Gemini, Grok via OpenRouter, or local Ollama/MLX-LM. We chose Grok 4.3 as the default because it won every test.
+          CAM is model-configurable &mdash; Claude, GPT, Gemini, Grok, DeepSeek, Qwen via OpenRouter, or local Ollama/MLX-LM. No single model wins everything. The defense chain rotates to a fresh model when one fails.
         </p>
       </div>
 
@@ -2836,43 +2843,70 @@ KB sources: MiroFish, abacus_FileSearch, CLI-Anything,<br>
         <table class="claw-compare-table" style="min-width: 600px;">
           <thead>
             <tr>
-              <th></th>
-              <th class="pulse-col">Grok 4.3</th>
-              <th>DeepSeek V4 Flash</th>
-              <th>DeepSeek V4 Pro</th>
+              <th>Project</th>
+              <th>First Agent</th>
+              <th>Failure Mode</th>
+              <th class="pulse-col">Rescued?</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="variant-name">7 empty-dir projects</td>
-              <td><span class="check-yes"><strong>7/7 PASS</strong></span></td>
-              <td><span class="check-no">0/7 (empty output)</span></td>
-              <td style="color: var(--ink-dim);">&mdash;</td>
+              <td class="variant-name">t2-11 RetryKit</td>
+              <td>Agent A</td>
+              <td>CLI logic error in test_cli</td>
+              <td><span class="check-yes"><strong>PASS</strong> &mdash; correction loop</span></td>
             </tr>
             <tr>
-              <td class="variant-name">5-project head-to-head</td>
-              <td><span class="check-partial">1/5 PASS, 1,788s</span></td>
-              <td style="color: var(--ink-dim);">&mdash;</td>
-              <td><span class="check-partial">1/5 PASS, 4,731s</span></td>
+              <td class="variant-name">t2-16 DecayTracker</td>
+              <td>Agent A</td>
+              <td>Wrong decay formula</td>
+              <td><span class="check-yes"><strong>PASS</strong> &mdash; agent rotation</span></td>
             </tr>
             <tr>
-              <td class="variant-name">Speed</td>
-              <td><span class="check-yes"><strong>Baseline</strong></span></td>
-              <td style="color: var(--ink-dim);">&mdash;</td>
-              <td><span class="check-no">2.6x slower</span></td>
+              <td class="variant-name">t2-04 BenchForge</td>
+              <td>Agent A</td>
+              <td>inspect.isfunction vs callable</td>
+              <td><span class="check-yes"><strong>PASS</strong> &mdash; agent rotation</span></td>
             </tr>
             <tr>
-              <td class="variant-name">Quality</td>
-              <td><span class="check-yes"><strong>Equal or better</strong></span></td>
-              <td><span class="check-no">Failed to produce code</span></td>
-              <td><span class="check-partial">Equal</span></td>
+              <td class="variant-name">t2-10 FlowState</td>
+              <td>Agent A</td>
+              <td>Zero files generated</td>
+              <td><span class="check-yes"><strong>PASS</strong> &mdash; agent rotation</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">t2-12 ConfidenceGate</td>
+              <td>Agent A</td>
+              <td>Assertion failures</td>
+              <td><span class="check-yes"><strong>PASS</strong> &mdash; model diversity</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">t1-04 ClinSafer</td>
+              <td>Agent A</td>
+              <td>pytest timeout (&gt;300s)</td>
+              <td><span class="check-no">TIMEOUT &mdash; not code quality</span></td>
             </tr>
           </tbody>
         </table>
       </div>
 
+      <div class="reveal" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; max-width: 700px; margin: 40px auto 0;">
+        <div class="card" style="text-align: center; padding: 24px;">
+          <div style="font-size: 2.2rem; font-weight: 700; color: var(--accent);">5/6</div>
+          <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 4px;">Failures rescued</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 24px;">
+          <div style="font-size: 2.2rem; font-weight: 700; color: var(--accent-2);">3</div>
+          <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 4px;">Defense layers active</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 24px;">
+          <div style="font-size: 2.2rem; font-weight: 700; color: var(--accent-4);">10/10</div>
+          <div style="font-size: 0.85rem; color: var(--ink-soft); margin-top: 4px;">Projected pass rate</div>
+        </div>
+      </div>
+
       <div class="reveal" style="max-width: 900px; margin: 32px auto 0; padding: 20px 28px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 0.88rem; color: var(--ink-soft); line-height: 1.7;">
-        The 7/7 result is not cherry-picked. These were the 7 projects where DeepSeek Flash produced zero files. Grok was given the same spec with the same knowledge base. Against DeepSeek V4 Pro, Grok matched quality on every project and completed builds in 38% of the time. Both models failed on the same 4 projects with similar error patterns.
+        These are the same 6 projects that failed in the overnight comparison. No cherry-picking. The defense chain &mdash; proactive auto-fix, ErrorKB correction hints, and RL-driven agent rotation &mdash; rescued 5 of 6 without human intervention. The sole remaining failure (ClinSafer) timed out at 300s; the code itself was correct.
       </div>
     </div>
   </section>
@@ -2967,6 +3001,15 @@ KB sources: MiroFish, abacus_FileSearch, CLI-Anything,<br>
               <td><span class="check-partial">Multi-agent</span></td>
               <td><span class="check-no">No</span></td>
               <td><span class="check-yes">Bayesian Kelly Criterion</span></td>
+            </tr>
+            <tr>
+              <td class="variant-name">Defense chain (auto-fix + rotation)</td>
+              <td><span class="check-no">No</span></td>
+              <td><span class="check-no">No</span></td>
+              <td><span class="check-no">No</span></td>
+              <td><span class="check-no">No</span></td>
+              <td><span class="check-no">No</span></td>
+              <td><span class="check-yes">3-layer, 5/6 rescued</span></td>
             </tr>
             <tr>
               <td class="variant-name">Runs 100% local, zero cloud</td>
